@@ -1,4 +1,4 @@
-# 志愿规划 Agent 后端 PRD
+# 问津 Agent 后端 PRD
 
 版本：v0.2  
 日期：2026-06-28  
@@ -45,7 +45,7 @@ v0.2 相对 v0.1 的核心变更：
 
 ```mermaid
 flowchart TD
-  FE["Next.js Web / H5"] --> BFF["Next.js BFF<br/>Route Handler / 轻量鉴权 / 数据预取"]
+  FE["问津 Agent<br/>Next.js Web"] --> BFF["Next.js BFF<br/>Route Handler / 轻量鉴权 / 数据预取"]
   BFF --> API["FastAPI API Layer"]
   API --> AUTH["Auth / Session"]
   API --> PROFILE["Profile Service"]
