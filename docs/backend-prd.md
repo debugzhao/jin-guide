@@ -6,16 +6,14 @@
 数据底座：PostgreSQL + pgvector + Redis  
 当前版本策略：所有功能免费开放，不做收费、套餐、订单、支付和付费解锁
 
-v0.2 相对 v0.1 的核心变更：
-- 架构图补充 BFF 层和异步任务层
-- Agent 工作流改为两阶段并行执行，降低报告生成延迟
-- 明确 Human Review 是 LangGraph interrupt 节点，不是 Agent
-- 新增 LangGraph State Schema
-- 新增 Agent 工具规格表
-- 数据模型补充 candidate_sets、evidence_citations 表，完善 agent_runs
-- 新增错误处理与降级策略
-- 新增成本控制与限流设计
-- 补充数据管道 ETL 流程
+---
+
+## Changelog
+
+| 版本 | 日期 | 主要变更 |
+| ---- | ---------- | -------- |
+| v0.2 | 2026-06-28 | 产品改名为问津 Agent；架构图补充 BFF 层和异步任务层；Agent 工作流改为两阶段并行；明确 Human Review 为 interrupt 节点；新增 LangGraph State Schema 和工具规格表；数据模型补充 candidate_sets、evidence_citations；新增错误处理与降级策略、成本控制与限流、数据管道 ETL |
+| v0.1 | 2026-06-28 | 初版，总体架构、模块职责、API 设计、数据模型、规则引擎、RAG 设计、Agent 角色、人工复核、安全合规、评测指标 |
 
 ---
 
