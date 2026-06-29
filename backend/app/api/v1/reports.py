@@ -1,0 +1,102 @@
+from typing import Optional
+from uuid import uuid4
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database import get_db
+from app.models.agent_run import AgentRun
+from app.models.report import Report
+
+router = APIRouter()
+
+
+class GenerateReportIn(BaseModel):
+    profile_id: str
+    user_id: Optional[str] = None
+    thread_id: Optional[str] = None
+
+
+class GenerateReportOut(BaseModel):
+    run_id: str
+    status: str
+    stream_url: str
+
+
+class ReportOut(BaseModel):
+    id: str
+    profile_id: Optional[str]
+    run_id: Optional[str]
+    status: str
+    risk_level: Optional[str]
+    risk_score: Optional[float]
+    plan_json: Optional[dict]
+    evidence_json: Optional[list]
+    dataset_version: Optional[str]
+    created_at: str
+
+
+@router.post("/generate", response_model=GenerateReportOut, status_code=201)
+async def generate_report(
+    body: GenerateReportIn,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Semantic entry point for report generation.
+    Internally equivalent to POST /agent/runs with task_type=generate_report.
+    See PRD 5.1 for the semantic description.
+    """
+    thread_id = body.thread_id or str(uuid4())
+    run_id = str(uuid4())
+
+    run = AgentRun(
+        id=run_id,
+        thread_id=thread_id,
+        user_id=body.user_id,
+        profile_id=body.profile_id,
+        task_type="generate_report",
+        status="queued",
+    )
+    db.add(run)
+    await db.commit()
+
+    # Enqueue to ARQ worker
+    arq_pool = getattr(request.app.state, "arq_pool", None)
+    if arq_pool:
+        await arq_pool.enqueue_job("run_agent", run_id)
+
+    return GenerateReportOut(
+        run_id=run_id,
+        status="queued",
+        stream_url=f"/api/v1/agent/runs/{run_id}/events",
+    )
+
+
+@router.get("/{report_id}", response_model=ReportOut)
+async def get_report(
+    report_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Fetch a completed Report by ID."""
+    result = await db.execute(
+        select(Report).where(Report.id == report_id, Report.deleted_at.is_(None))
+    )
+    report = result.scalar_one_or_none()
+    if not report:
+        raise HTTPException(status_code=404, detail="report not found")
+
+    return ReportOut(
+        id=report.id,
+        profile_id=report.profile_id,
+        run_id=report.run_id,
+        status=report.status,
+        risk_level=report.risk_level,
+        risk_score=report.risk_score,
+        plan_json=report.plan_json,
+        evidence_json=report.evidence_json,
+        dataset_version=report.dataset_version,
+        created_at=report.created_at.isoformat(),
+    )
