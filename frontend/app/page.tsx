@@ -12,13 +12,13 @@ export default function HomePage() {
   const [loginOpen, setLoginOpen] = useState(false)
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC]">
+    <div className="wj-shell min-h-screen bg-[#F8FAFC]">
       {/* Header */}
-      <header className="bg-white border-b border-[#E2E8F0] px-4 py-4">
-        <div className="max-w-screen-md mx-auto flex items-center justify-between">
+      <header className="wj-header bg-white border-b border-[#E2E8F0] px-4 py-4">
+        <div className="wj-header-inner max-w-screen-md mx-auto flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-bold text-[#1E40AF]">问津 Agent</h1>
-            <p className="text-xs text-[#64748B] mt-0.5">AI 志愿决策助理，帮你稳上心仪大学</p>
+            <h1 className="wj-title text-xl font-bold text-[#1E40AF]">问津 Agent</h1>
+            <p className="wj-subtitle text-xs text-[#64748B] mt-0.5">AI 志愿决策助理，帮你稳上心仪大学</p>
           </div>
           <Button variant="ghost" size="sm" onClick={() => setLoginOpen(true)}>
             登录
@@ -27,8 +27,8 @@ export default function HomePage() {
       </header>
 
       {/* Entry cards */}
-      <main className="max-w-screen-md mx-auto px-4 py-6 space-y-4">
-        <p className="text-sm text-[#64748B] mb-2">请选择你的需求，开始志愿分析</p>
+      <main className="wj-main max-w-screen-md mx-auto px-4 py-6 space-y-4">
+        <p className="wj-kicker text-sm text-[#64748B] mb-2">请选择你的需求，开始志愿分析</p>
 
         <EntryCard
           icon={Compass}

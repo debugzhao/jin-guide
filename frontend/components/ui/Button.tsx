@@ -15,6 +15,9 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         ref={ref}
         disabled={disabled}
         className={cn(
+          'wj-button',
+          `wj-button-${variant}`,
+          `wj-button-${size}`,
           'inline-flex items-center justify-center font-medium transition-colors rounded-btn',
           'focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2',
           disabled && 'opacity-50 cursor-not-allowed',
