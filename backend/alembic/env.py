@@ -9,10 +9,14 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 # Import all models so Alembic can detect them via Base.metadata
 from app.models import Base  # noqa: F401 - side-effect import registers all models
 from app.models.base import Base as ModelBase
+from app.config import settings
 
 # this is the Alembic Config object, which provides access to
 # the values within the .ini file in use.
 config = context.config
+
+# Override sqlalchemy.url with the value from app settings (reads DATABASE_URL env var)
+config.set_main_option("sqlalchemy.url", settings.database_url)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.

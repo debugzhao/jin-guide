@@ -98,14 +98,14 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
-    command: python -m app.worker
+    command: arq app.worker.WorkerSettings
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
     ports:
-      - "3000:3000"
+      - "3001:3000"
     environment:
       NEXT_PUBLIC_API_URL: http://localhost:8000
     depends_on:
