@@ -113,16 +113,18 @@
 ✅ 报告历史页可展示过往报告列表
 ```
 
-### Day 4：数据 + 规则引擎
+### Day 4：数据 + 规则引擎 + 工具可靠性基础
 
-**目标**：种好真实数据，规则引擎可测试。
+**目标**：种好真实数据，规则引擎可测试；同步建立工具层可靠性基础（ToolResponse + CircuitBreaker）。
 
 | 任务 | 类型 | 参考 |
 |------|------|------|
 | 河南省 seed data（50+ 所学校，3 年投档线，一分一段表，选科要求） | data | backend-prd Section 7 |
 | `GET /api/v1/data/availability`：省份数据可用性检查 | backend | backend-prd Section 5.2 |
-| Rule Engine：`check_subject_req` / `check_medical_restriction` / `check_batch_eligibility` / `check_budget` | backend | backend-prd Section 8.2 |
-| Rule Engine 单元测试（至少 10 个 case，覆盖 pass/fail/partial） | test | backend-prd Section 15.3 |
+| **新建 `backend/app/agent/tool_response.py`**：ToolResponse 三态（SUCCESS/PARTIAL/ERROR），含 `to_dict`/`from_dict` | backend | backend-prd Section 10.8 |
+| **新建 `backend/app/agent/circuit_breaker.py`**：CircuitBreaker（failure_threshold=3, recovery_timeout=300s），保护 Cohere/LiteLLM/pgvector | backend | backend-prd Section 10.8 |
+| Rule Engine：`check_subject_req` / `check_medical_restriction` / `check_batch_eligibility` / `check_budget`，**返回值改为 `ToolResponse`** | backend | backend-prd Section 8.2, 10.8 |
+| Rule Engine 单元测试（至少 10 个 case，覆盖 pass/fail/partial；**新增 PARTIAL 降级 case**） | test | backend-prd Section 15.3 |
 | `POST /api/v1/risk/preview`：同步风险画像（< 2s） | backend | backend-prd Section 5.1 |
 | 前端快速测算页接入真实 `risk/preview` API，展示真实风险画像 | frontend | frontend-prd Section 8.2 |
 
@@ -170,11 +172,12 @@
 | 任务 | 类型 | 参考 |
 |------|------|------|
 | Data Resolver 节点：锁定 dataset_version，校验 published 状态 | backend | backend-prd Section 10.1 |
-| Retrieval Agent 节点（LLM）：query rewrite + vector_search + rerank + evidence pack | backend | backend-prd Section 10.1, 10.4 |
-| Policy Rule Agent 节点（确定性）：调用 Rule Engine 4 个工具 | backend | backend-prd Section 10.1 |
+| Retrieval Agent 节点（LLM）：**参考 HelloAgents ReActAgent tool-calling sub-loop**；query rewrite → vector_search → rerank → evidence pack；工具返回 ToolResponse，PARTIAL 时写 data_warnings | backend | backend-prd Section 10.1, 10.4, 10.8 |
+| **新建 `backend/app/agent/tool_filter.py`**：ToolFilter 按 Section 10.8 工具视野表为每个节点过滤工具 Registry | backend | backend-prd Section 10.8 |
+| Policy Rule Agent 节点（确定性）：调用 Rule Engine 4 个工具，**CircuitBreaker 保护每个工具调用** | backend | backend-prd Section 10.1 |
 | 并行执行：Retrieval Agent + Policy Rule Agent 通过 LangGraph `Send` API 并发 | backend | backend-prd Section 10.3, 10.7 |
 | Recommendation Agent 节点（确定性）：调用评分/分层/三套方案生成 | backend | backend-prd Section 10.1 |
-| Report Agent 节点（LLM）：模板渲染 + 证据引用，经 LiteLLM 调用 gpt-4o | backend | backend-prd Section 10.1, 10.4 |
+| Report Agent 节点（LLM）：模板渲染 + 证据引用，经 LiteLLM 调用；**CircuitBreaker 保护 LiteLLM 调用** | backend | backend-prd Section 10.1, 10.4, 10.8 |
 | Compliance 正则检查（禁词层，不含 LLM Judge，LLM Judge 是 M3 任务） | backend | backend-prd Section 12.1 |
 | 报告详情页接入真实数据（替换 hardcode） | frontend | frontend-prd Section 8.6 |
 | 报告历史页（`/reports`） | frontend | frontend-prd Section 8.9 |
@@ -192,7 +195,9 @@
 ### M3 DoD
 
 ```
-✅ Reflection Agent：正则禁词层 + LLM Judge 层，最多 3 轮自检，3 轮失败强制触发复核
+✅ Reflection Agent：正则禁词层 + LLM Judge 层，最多 3 轮自检，3 轮失败强制触发复核；LLM 输出 passed=true 时早退出
+✅ ToolResponse 三态：所有工具返回 ToolResponse，PARTIAL 自动写 data_warnings，CircuitBreaker 对 3 个外部调用点生效
+✅ ToolFilter：每个 Agent 节点只能看到各自权限范围内的工具（见 backend-prd Section 10.8）
 ✅ HITL 完整闭环：interrupt() → human_reviews 记录 → 复核员提交 PATCH → resume() → 报告交付
 ✅ 复核员工作台（/admin/reviews）：待复核队列 + 领取 + 提交结论
 ✅ 用户侧复核等待页：复核状态展示 + 等待提示
@@ -210,7 +215,7 @@
 | 任务 | 类型 | 参考 |
 |------|------|------|
 | Reflection Agent 节点：`check_compliance`（正则层） + `llm_judge`（语义过度承诺检测） | backend | backend-prd Section 10.1, 12.1 |
-| Reflection 循环保护：`reflection_iterations` 计数器，3 轮上限，超出触发 human_review | backend | backend-prd Section 10.6 |
+| Reflection 循环保护：`reflection_iterations` 计数器，3 轮上限；**实现"无需改进"早退出**（参考 HelloAgents ReflectionAgent，LLM 输出 `passed=true` 时立即 break，不等待剩余轮次） | backend | backend-prd Section 10.6 |
 | `human_review_node`：`render_review_draft` 生成底稿，`interrupt()` 暂停图执行 | backend | backend-prd Section 10.1, 11.2 |
 | `POST /api/v1/reviews`：创建复核任务 | backend | backend-prd Section 5.1 |
 | `PATCH /api/v1/reviews/{id}`：提交复核结论（approved/rejected），触发 run resume | backend | backend-prd Section 5.1, 11.7 |

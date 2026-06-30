@@ -12,6 +12,7 @@
 
 | 版本 | 日期       | 主要变更                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | ---- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| v1.0 | 2026-06-30 | 引入 HelloAgents 可靠性组件：新增 ToolResponse 三态协议（SUCCESS/PARTIAL/ERROR）替代裸 dict 工具返回；新增 CircuitBreaker 保护 Cohere/LiteLLM/pgvector 外部调用；新增 ToolFilter 实现 per-Agent 工具视野隔离（见 Section 10.8）；Reflection Agent 补充"无需改进"自然语言早退出机制，减少不必要轮次；新增 Section 10.8 工具可靠性设计；Section 13 降级策略与 ToolResponse.PARTIAL 对齐；Section 15.1 补充 4 条验收项 |
 | v0.9 | 2026-06-29 | 技术审查修正：BackgroundTasks 替换为 ARQ 异步任务队列；修复 State Schema 并行字段缺少 Reducer 注解；修复 admission_scores 缺 batch 字段；新增 province_thresholds 配置表；统一人工复核超时为 4h；新增 SSE 鉴权方案（Cookie + query token）；BGE/OpenAI embedding 拆为主/备而非 fallback，新增模型迁移策略；明确 BM25 实现为 pg_bm25；新增证据去重逻辑；Profile Agent 新增追问轮次上限；新增文件上传安全规范；补充标准错误响应 Schema；补充列表接口分页规范；新增复核员 API 端点；high_rush 计入方案比例 |
 | v0.8 | 2026-06-28 | 修复 5 处残留 Bug（candidate_sets/compare/evidence_citations 引用）；补充 agent_runs.status 枚举和 /reports/generate 语义说明；新增 Section 6.2 关键索引策略；修正 agent_runs checkpoint_data 混淆（LangGraph 自管理）；Section 8 补充 4 个子分计算公式、冲稳保分层阈值、三方案比例策略；Section 12.1 补充两层合规检测机制（正则规则层 + LLM Judge 层分工）                                                                                                                                             |
 | v0.7 | 2026-06-28 | 完全移除家庭协同功能：删除 family_annotations 表和 2 个 family API；Section 6.5 补充 family_annotations 到暂不建表清单；删除黄金评测集中家庭偏好冲突案例                                                                                                                                                                                                                                                                                                                                                |
@@ -94,6 +95,7 @@ flowchart TD
 | **Model Gateway**     | **LiteLLM Proxy：统一 LLM 调用入口、per-Agent 模型路由、fallback 策略、成本归因** |
 | Report Service        | 报告生成、证据链嵌入、报告交付                                                    |
 | Human Review Service  | 人工复核任务创建、复核清单、结论留痕、状态流转                                    |
+| **Tool Reliability**  | **ToolResponse 三态协议（SUCCESS/PARTIAL/ERROR）、CircuitBreaker 外部调用熔断、ToolFilter per-Agent 工具隔离** |
 | Observability         | LangSmith Trace、结构化日志、成本统计、延迟监控、工具调用成功率                   |
 
 ---
@@ -903,6 +905,26 @@ Reflection Agent 自检失败后会触发修正回退。为防止死循环：
 - 当 `reflection_iterations >= 3` 时，不再回退，直接标记 `needs_human_review = true`，附上所有 `compliance_issues`，进入 `human_review_node`。
 - 复核员看到的清单中会包含"AI 自检未通过"条目，指向具体问题。
 
+**早退出机制（参考 HelloAgents ReflectionAgent）**：
+
+Reflection Agent 在每轮迭代结束时，LLM 输出中包含结构化字段 `passed` 以及自然语言反馈。当反馈文本包含`"无需改进"` 或 `llm_judge` 输出 `{"passed": true}` 时，**无论是否达到最大轮次，立即退出循环**，避免浪费后续迭代的 token 成本：
+
+```python
+for i in range(MAX_REFLECTION_ITERATIONS):   # MAX = 3
+    feedback = await reflection_agent.run(state["report_draft"])
+    state["reflection_iterations"] += 1
+    if feedback.passed or "无需改进" in feedback.text:
+        state["compliance_passed"] = True
+        break                                # 早退出
+    state["compliance_issues"] = feedback.issues
+    state["report_draft"] = await report_agent.fix(feedback.issues)
+else:
+    # 3 次均未通过
+    state["needs_human_review"] = True
+```
+
+注意：异步流式变体（SSE 推送场景）**不实现早退出**，始终执行完整轮次后再判断，以保证 SSE 进度事件完整推送。
+
 ### 10.7 Agent 通信机制
 
 **所有 Agent 节点之间不进行直接 API 调用，唯一通信介质是 LangGraph State。**
@@ -941,6 +963,81 @@ Agent B 执行 → 读取 State 特定字段
 | Risk Agent           | `risk_items`, `overall_risk_level`                                | `scored_candidates`                                   |
 | Report Agent         | `report_draft`, `report_id`                                       | 全部上游字段                                          |
 | Reflection Agent     | `compliance_passed`, `compliance_issues`, `reflection_iterations` | `report_draft`                                        |
+
+---
+
+## 10.8 工具可靠性设计（Tool Reliability）
+
+本节规范工具层的三个核心机制，均从 [HelloAgents](https://github.com/jjyaoao/helloagents) 借鉴并适配到问津架构。实现文件位于 `backend/app/agent/`。
+
+### ToolResponse 三态协议
+
+所有工具函数统一返回 `ToolResponse`，替代裸 `dict`。三种状态：
+
+| 状态 | 含义 | 问津使用场景 |
+|------|------|------------|
+| `SUCCESS` | 结果完整可用 | 正常检索到足量证据、规则校验通过 |
+| `PARTIAL` | 结果可用但有折扣 | 2026 年数据缺失、降级用历史数据；Cohere 超时降级为向量 top-8 |
+| `ERROR` | 无有效结果 | API 不可达、DB 查询异常 |
+
+```python
+# backend/app/agent/tool_response.py
+@dataclass
+class ToolResponse:
+    status: ToolStatus          # SUCCESS / PARTIAL / ERROR
+    text: str                   # LLM/人可读的输出摘要
+    data: dict                  # 结构化负载
+    error_info: dict | None = None
+    stats: dict | None = None   # latency_ms、token 消耗等
+    context: dict | None = None # 调用参数、环境信息
+
+    @classmethod
+    def success(cls, text, data, **kw): ...
+    @classmethod
+    def partial(cls, text, data, **kw): ...
+    @classmethod
+    def error(cls, code, message, **kw): ...
+```
+
+**与 State 的对接**：节点收到 `PARTIAL` 时，将 `response.text`（降级说明）追加到 `state["data_warnings"]`，同时将节点名写入 `state["degraded_agents"]`。收到 `ERROR` 时，根据模块的阻断/降级规则（见 Section 13.3）决定是否终止。
+
+### CircuitBreaker 外部调用熔断
+
+对以下三个外部调用点启用熔断器，防止级联故障：
+
+| 熔断保护点 | 失败阈值 | 恢复超时 | 熔断后降级行为 |
+|-----------|---------|---------|--------------|
+| Cohere Rerank API | 3 次连续 ERROR | 300s | 跳过 rerank，直接使用向量 top-8 |
+| LiteLLM Proxy（LLM 调用） | 3 次连续 ERROR | 300s | 节点标记 `failed`，run 终止 |
+| pgvector 向量检索 | 3 次连续 ERROR | 300s | 降级到 SQL 精确检索 |
+
+```python
+# backend/app/agent/circuit_breaker.py
+class CircuitBreaker:
+    def __init__(self, failure_threshold=3, recovery_timeout=300): ...
+    def is_open(self, tool_name: str) -> bool: ...        # 自动 lazy 恢复
+    def record_result(self, tool_name: str, response: ToolResponse): ...
+```
+
+### ToolFilter per-Agent 工具视野隔离
+
+每个 Agent 节点只能看到自己权限范围内的工具，防止 LLM 幻觉调用越权工具（如 Report Agent 意外调用 `check_subject_req`）：
+
+| Agent 节点 | 可见工具集 |
+|-----------|----------|
+| Profile Agent | `get_profile`, `update_profile` |
+| Retrieval Agent | `search_admission_sql`, `search_historical_scores`, `vector_search`, `rerank_evidence` |
+| Policy Rule Agent | `check_subject_req`, `check_medical_restriction`, `check_single_subject`, `check_batch_eligibility` |
+| Risk Agent | `check_safety_adequacy`, `check_gradient`, `check_crowding`, `check_rejected_major` |
+| Report Agent | `render_report_template`, `format_citation` |
+| Reflection Agent | `check_compliance`, `check_evidence_coverage`, `llm_judge` |
+| human_review_node | `render_review_draft` |
+
+```python
+# 在各节点初始化时注入过滤后的工具列表
+filtered_tools = ToolFilter.for_agent("retrieval_agent", full_registry)
+retrieval_agent = ReActAgent(llm, tool_registry=filtered_tools)
+```
 
 ---
 
@@ -1148,6 +1245,8 @@ Agent run 涉及多次 LLM 调用，需要明确的成本边界：
 
 **降级节点的下游行为**：节点降级后在 State `degraded_agents` 中追加节点名称。下游节点（Report Agent）检查此字段，在报告对应段落注明"[数据受限] 以下内容基于有限数据，仅供参考"，并在 `evidence_json` 中标记受影响的 source。
 
+**与 ToolResponse 的对齐**：工具返回 `PARTIAL` 时视为可降级成功（继续流程 + 写 warning）；返回 `ERROR` 时根据 Section 13.3 的阻断/降级规则决定是否终止。CircuitBreaker 连续 3 次 `ERROR` 后自动熔断，切换降级路径（见 Section 10.8）。
+
 **幂等设计**：`POST /api/v1/agent/runs` 以 `thread_id` 为幂等键。同一 `thread_id` 在 24h 内已有 `running` 或 `completed` 状态的 run，返回 `409 Conflict` 并附带现有 `run_id`，防止用户重复点击创建多个 run。
 
 ### 13.3 降级与阻断明细
@@ -1261,6 +1360,10 @@ MVP 阶段通过 LangSmith Dashboard + FastAPI `/health` 和 `/metrics` endpoint
 - 不存在订单、支付、套餐相关接口。
 - Agent run 通过 ARQ Worker 执行，进程重启后 run 状态可从 LangGraph checkpoint 恢复。
 - State Schema 并行写入字段（`evidence_list`、`rule_results`、`hard_blocked_items`）有正确的 Reducer 注解。
+- 所有工具函数返回 `ToolResponse`，不返回裸 `dict`；`PARTIAL` 状态自动触发 `data_warnings` 写入。
+- CircuitBreaker 对 Cohere Rerank、LiteLLM、pgvector 三个外部调用点启用，连续 3 次 ERROR 后熔断并走降级路径。
+- ToolFilter 确保每个 Agent 节点只能看到自己权限范围内的工具（见 Section 10.8 工具视野表）。
+- Reflection Agent 实现"无需改进"早退出：LLM 输出 `passed=true` 时立即退出，不等待剩余轮次。
 - `admission_scores` 表包含 `batch` 字段，本科批/专科批投档线可分别查询。
 - `province_thresholds` 表存在且已预置河南/山东默认值。
 - SSE 端点使用 Cookie 鉴权，不在 query string 中传递长期 token。
