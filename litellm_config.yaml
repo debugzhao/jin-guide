@@ -1,0 +1,55 @@
+model_list:
+  # 轻量模型：Profile Agent、Retrieval Agent（query rewrite）
+  - model_name: profile-agent
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: retrieval-agent
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  # 主力模型：Report Agent、Reflection Agent、人工复核底稿
+  - model_name: report-agent
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: reflection-agent
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: review-draft-agent
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+  # Embedding（经 LiteLLM 统一调用，方便后续切换 BGE）
+  - model_name: text-embedding-3-small
+    litellm_params:
+      model: openai/text-embedding-3-small
+      api_key: os.environ/OPENAI_API_KEY
+
+router_settings:
+  routing_strategy: simple-shuffle
+  # fallback 策略：主力模型不可用时降级到同类型备用
+  fallbacks:
+    - report-agent: [reflection-agent]
+    - reflection-agent: [report-agent]
+    - profile-agent: [retrieval-agent]
+    - retrieval-agent: [profile-agent]
+
+litellm_settings:
+  # 自动推送 token 消耗到 LangSmith
+  success_callback: ["langsmith"]
+  failure_callback: ["langsmith"]
+  # 每日成本上限（USD），超出后返回 429
+  max_budget: 20.0
+  budget_duration: "1d"
+  # 不同厂商 API 参数差异自动忽略
+  drop_params: true
+  set_verbose: false
+  # 请求超时
+  request_timeout: 60
