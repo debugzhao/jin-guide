@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import BottomSheet from './BottomSheet'
+import Modal from './Modal'
 import Button from './Button'
 import { api } from '@/lib/api'
 
@@ -54,38 +54,39 @@ export default function LoginSheet({ isOpen, onClose, onSuccess }: LoginSheetPro
   }
 
   return (
-    <BottomSheet isOpen={isOpen} onClose={onClose} title="登录 / 注册">
-      <div className="space-y-4">
-        <p className="text-sm text-[#64748B]">输入手机号，免费使用问津 AI 志愿助理</p>
+    <Modal isOpen={isOpen} onClose={onClose} title="登录 / 注册">
+      <div className="space-y-5">
+        <p className="text-sm leading-6 text-[#64748B]">输入手机号，免费使用问津 AI 志愿助理</p>
 
         {/* Phone */}
         <div>
-          <label className="block text-sm font-medium text-[#0F172A] mb-1.5">手机号</label>
+          <label className="mb-2 block text-sm font-medium text-[#0F172A]">手机号</label>
           <input
             type="tel"
             value={phone}
             onChange={e => setPhone(e.target.value)}
             placeholder="请输入手机号"
             maxLength={11}
-            className="w-full border border-[#E2E8F0] rounded-btn px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E40AF]/30"
+            className="h-11 w-full rounded-btn border border-[#E2E8F0] bg-white px-3 text-sm text-[#0F172A] outline-none transition focus:border-[#1E40AF] focus:ring-2 focus:ring-[#1E40AF]/20"
           />
         </div>
 
         {/* Code */}
         <div>
-          <label className="block text-sm font-medium text-[#0F172A] mb-1.5">验证码</label>
-          <div className="flex gap-2">
+          <label className="mb-2 block text-sm font-medium text-[#0F172A]">验证码</label>
+          <div className="flex gap-3">
             <input
               type="text"
               value={code}
               onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
               placeholder="6 位验证码"
-              className="flex-1 border border-[#E2E8F0] rounded-btn px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E40AF]/30"
+              className="h-11 min-w-0 flex-1 rounded-btn border border-[#E2E8F0] bg-white px-3 text-sm text-[#0F172A] outline-none transition focus:border-[#1E40AF] focus:ring-2 focus:ring-[#1E40AF]/20"
             />
             <button
+              type="button"
               onClick={sendCode}
               disabled={countdown > 0}
-              className="shrink-0 px-3 py-2.5 text-sm border border-[#E2E8F0] rounded-btn text-[#1E40AF] disabled:text-[#94A3B8] disabled:cursor-not-allowed whitespace-nowrap"
+              className="h-11 shrink-0 rounded-btn border border-[#E2E8F0] px-4 text-sm font-medium text-[#1E40AF] transition hover:bg-[#EFF6FF] disabled:cursor-not-allowed disabled:bg-white disabled:text-[#94A3B8]"
             >
               {countdown > 0 ? `${countdown}s` : '获取验证码'}
             </button>
@@ -94,7 +95,7 @@ export default function LoginSheet({ isOpen, onClose, onSuccess }: LoginSheetPro
 
         {error && <p className="text-xs text-[#DC2626]">{error}</p>}
 
-        <Button className="w-full" onClick={handleSubmit} disabled={loading}>
+        <Button className="h-11 w-full text-base" onClick={handleSubmit} disabled={loading}>
           {loading ? '登录中…' : '登录'}
         </Button>
 
@@ -102,6 +103,6 @@ export default function LoginSheet({ isOpen, onClose, onSuccess }: LoginSheetPro
           登录即同意《用户协议》和《隐私政策》
         </p>
       </div>
-    </BottomSheet>
+    </Modal>
   )
 }

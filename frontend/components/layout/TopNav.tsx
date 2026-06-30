@@ -36,24 +36,26 @@ export default function TopNav({
   return (
     <nav
       className={cn(
+        'wj-topnav',
         'sticky top-0 z-30 bg-white border-b border-[#E2E8F0]',
-        'flex items-center h-14 px-4',
         className
       )}
     >
-      {showBack && (
-        <button
-          onClick={handleBack}
-          className="mr-2 p-1 -ml-1 text-[#0F172A]"
-          aria-label="返回"
-        >
-          <ChevronLeft className="w-5 h-5" />
-        </button>
-      )}
-      <h1 className="flex-1 text-base font-semibold text-[#0F172A] truncate">
-        {title}
-      </h1>
-      {rightSlot && <div className="ml-2">{rightSlot}</div>}
+      <div className="wj-topnav-inner">
+        {showBack && (
+          <button
+            onClick={handleBack}
+            className="wj-topnav-back mr-2 p-1 -ml-1 text-[#0F172A]"
+            aria-label="返回"
+          >
+            <ChevronLeft className="w-5 h-5" />
+          </button>
+        )}
+        <h1 className="wj-topnav-title flex-1 text-base font-semibold text-[#0F172A] truncate">
+          {title}
+        </h1>
+        {rightSlot && <div className="ml-2">{rightSlot}</div>}
+      </div>
     </nav>
   )
 }

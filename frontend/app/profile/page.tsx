@@ -109,20 +109,24 @@ export default function ProfilePage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC]">
+    <div className="wj-profile-shell min-h-screen bg-[#F8FAFC]">
       <TopNav title="建档问诊" showBack onBack={() => step > 1 ? goBack() : router.back()} />
-      <ProfileStepper steps={STEPS} currentStep={step} />
 
-      <main className="max-w-screen-md mx-auto px-4 py-6">
+      <main className="wj-profile-main max-w-screen-md mx-auto px-4 py-6">
+        <aside className="wj-profile-sidebar">
+          <ProfileStepper steps={STEPS} currentStep={step} />
+        </aside>
+
+        <section className="wj-profile-panel">
 
         {/* Step 1: 基本信息 */}
         {step === 1 && (
-          <form onSubmit={handleSubmit(onStep1Submit)} className="space-y-5">
+          <form onSubmit={handleSubmit(onStep1Submit)} className="wj-profile-form space-y-5">
             <div>
-              <label className="block text-sm font-medium text-[#0F172A] mb-1.5">省份</label>
+              <label className="wj-field-label block text-sm font-medium text-[#0F172A] mb-1.5">省份</label>
               <select
                 {...register('province')}
-                className="w-full border border-[#E2E8F0] rounded-btn px-3 py-2.5 text-sm bg-white text-[#0F172A] focus:outline-none focus:ring-2 focus:ring-[#1E40AF]/30"
+                className="wj-select w-full border border-[#E2E8F0] rounded-btn px-3 py-2.5 text-sm bg-white text-[#0F172A] focus:outline-none focus:ring-2 focus:ring-[#1E40AF]/30"
               >
                 <option value="">请选择省份</option>
                 {PROVINCES.map(p => <option key={p} value={p}>{p}</option>)}
@@ -131,10 +135,10 @@ export default function ProfilePage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-[#0F172A] mb-1.5">批次</label>
-              <div className="flex gap-2">
+              <label className="wj-field-label block text-sm font-medium text-[#0F172A] mb-1.5">批次</label>
+              <div className="wj-choice-row flex gap-2">
                 {['本科一批', '本科二批', '专科批'].map(b => (
-                  <label key={b} className="flex-1 flex items-center justify-center gap-1.5 border border-[#E2E8F0] rounded-btn py-2.5 text-sm cursor-pointer has-[:checked]:border-[#1E40AF] has-[:checked]:bg-[#EFF6FF] has-[:checked]:text-[#1E40AF]">
+                  <label key={b} className="wj-choice-card flex-1 flex items-center justify-center gap-1.5 border border-[#E2E8F0] rounded-btn py-2.5 text-sm cursor-pointer has-[:checked]:border-[#1E40AF] has-[:checked]:bg-[#EFF6FF] has-[:checked]:text-[#1E40AF]">
                     <input type="radio" {...register('batch')} value={b} className="sr-only" />
                     {b}
                   </label>
@@ -144,29 +148,31 @@ export default function ProfilePage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-[#0F172A] mb-1.5">高考分数</label>
+              <label className="wj-field-label block text-sm font-medium text-[#0F172A] mb-1.5">高考分数</label>
               <input
                 type="number"
                 {...register('score', { valueAsNumber: true })}
                 placeholder="例：587"
-                className="w-full border border-[#E2E8F0] rounded-btn px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E40AF]/30"
+                className="wj-input w-full border border-[#E2E8F0] rounded-btn px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E40AF]/30"
               />
               {errors.score && <p className="text-xs text-[#DC2626] mt-1">{errors.score.message}</p>}
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-[#0F172A] mb-1.5">
-                全省位次 <span className="text-[#94A3B8] font-normal">（选填，更准确）</span>
+              <label className="wj-field-label block text-sm font-medium text-[#0F172A] mb-1.5">
+                全省位次 <span className="wj-field-help text-[#94A3B8] font-normal">（选填，更准确）</span>
               </label>
               <input
                 type="number"
                 {...register('rank', { valueAsNumber: true })}
                 placeholder="例：12345"
-                className="w-full border border-[#E2E8F0] rounded-btn px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E40AF]/30"
+                className="wj-input w-full border border-[#E2E8F0] rounded-btn px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E40AF]/30"
               />
             </div>
 
-            <Button type="submit" className="w-full mt-2">下一步</Button>
+            <div className="wj-actions">
+              <Button type="submit" className="w-full mt-2">下一步</Button>
+            </div>
           </form>
         )}
 
@@ -231,7 +237,7 @@ export default function ProfilePage() {
               </div>
             </div>
 
-            <div className="flex gap-3 pt-2">
+            <div className="wj-actions flex gap-3 pt-2">
               <Button variant="outline" className="flex-1" onClick={goBack}>上一步</Button>
               <Button className="flex-1" onClick={goNext}>下一步</Button>
             </div>
@@ -304,7 +310,7 @@ export default function ProfilePage() {
               </div>
             </div>
 
-            <div className="flex gap-3 pt-2">
+            <div className="wj-actions flex gap-3 pt-2">
               <Button variant="outline" className="flex-1" onClick={goBack}>上一步</Button>
               <Button className="flex-1" onClick={goNext}>下一步</Button>
             </div>
@@ -354,7 +360,7 @@ export default function ProfilePage() {
               </div>
             </div>
 
-            <div className="flex gap-3 pt-2">
+            <div className="wj-actions flex gap-3 pt-2">
               <Button variant="outline" className="flex-1" onClick={goBack}>上一步</Button>
               <Button className="flex-1" onClick={goNext}>下一步</Button>
             </div>
@@ -409,7 +415,7 @@ export default function ProfilePage() {
               </div>
             </div>
 
-            <div className="flex gap-3 pt-2">
+            <div className="wj-actions flex gap-3 pt-2">
               <Button variant="outline" className="flex-1" onClick={goBack}>上一步</Button>
               <Button className="flex-1" onClick={goNext}>下一步</Button>
             </div>
@@ -444,7 +450,7 @@ export default function ProfilePage() {
               确认信息无误后，点击「开始生成」，AI 将分析约 10 万条录取数据，为你生成专属志愿方案（约 15 分钟）
             </p>
 
-            <div className="flex gap-3 pt-2">
+            <div className="wj-actions flex gap-3 pt-2">
               <Button variant="outline" className="flex-1" onClick={goBack}>修改</Button>
               <Button className="flex-1" onClick={handleFinalSubmit} disabled={loading}>
                 {loading ? '提交中...' : '开始生成'}
@@ -452,6 +458,7 @@ export default function ProfilePage() {
             </div>
           </div>
         )}
+        </section>
       </main>
     </div>
   )
