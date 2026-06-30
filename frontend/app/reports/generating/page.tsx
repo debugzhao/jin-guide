@@ -6,19 +6,19 @@ import { Suspense } from 'react'
 import { CheckCircle, Loader2, XCircle, Clock } from 'lucide-react'
 import type { AgentStep, StepStatus } from '@/types'
 
+// Step IDs must match backend mock node names exactly
 const INITIAL_STEPS: AgentStep[] = [
-  { id: 'profile_agent', label: '解析考生画像', status: 'waiting' },
-  { id: 'retrieval_agent', label: '检索历年录取数据', status: 'waiting' },
-  { id: 'report_agent', label: '生成志愿方案草稿', status: 'waiting' },
-  { id: 'reflection_agent', label: '自我审查与修正', status: 'waiting' },
-  { id: 'review_draft_agent', label: '生成人工复核底稿', status: 'waiting' },
+  { id: 'data_resolver', label: '解析考生画像', status: 'waiting' },
+  { id: 'retrieval_and_rules', label: '检索历年录取数据', status: 'waiting' },
+  { id: 'recommendation', label: '生成志愿方案草稿', status: 'waiting' },
+  { id: 'risk', label: '风险体检', status: 'waiting' },
+  { id: 'report', label: '生成人工复核底稿', status: 'waiting' },
 ]
 
 function GeneratingContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const runId = searchParams.get('runId') ?? 'demo-run'
-  const reportId = searchParams.get('reportId') ?? 'demo-report'
 
   const [steps, setSteps] = useState<AgentStep[]>(INITIAL_STEPS)
   const [overallProgress, setOverallProgress] = useState(0)
@@ -26,6 +26,7 @@ function GeneratingContent() {
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
   const esRef = useRef<EventSource | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const receivedAnyEvent = useRef(false)
 
   useEffect(() => {
     timerRef.current = setInterval(() => setElapsedSeconds(s => s + 1), 1000)
@@ -37,41 +38,61 @@ function GeneratingContent() {
     )
     esRef.current = es
 
-    es.onmessage = (e) => {
+    const handleNodeStarted = (e: MessageEvent) => {
+      receivedAnyEvent.current = true
       try {
         const data = JSON.parse(e.data)
-        const { node, status: nodeStatus, progress } = data
-
-        if (progress !== undefined) setOverallProgress(progress)
-
-        if (node) {
-          setSteps(prev =>
-            prev.map(s =>
-              s.id === node ? { ...s, status: nodeStatus as StepStatus } : s
-            )
-          )
-        }
-
-        if (nodeStatus === 'completed' && node === 'review_draft_agent') {
-          setStatus('completed')
-          setOverallProgress(100)
-          es.close()
-          if (timerRef.current) clearInterval(timerRef.current)
-          setTimeout(() => router.push(`/reports/${reportId}`), 1200)
-        }
-
-        if (nodeStatus === 'failed') {
-          setStatus('failed')
-          es.close()
-          if (timerRef.current) clearInterval(timerRef.current)
-        }
+        const { node } = data
+        setSteps(prev => prev.map(s => {
+          if (s.id === node) return { ...s, status: 'running' }
+          if (s.status === 'running') return { ...s, status: 'completed' }
+          return s
+        }))
+        const idx = INITIAL_STEPS.findIndex(s => s.id === node)
+        if (idx >= 0) setOverallProgress(Math.round((idx / INITIAL_STEPS.length) * 85))
       } catch {}
     }
 
-    es.onerror = () => {
-      // Demo fallback: simulate progress if backend not available
+    const handleNodeCompleted = (e: MessageEvent) => {
+      receivedAnyEvent.current = true
+      try {
+        const data = JSON.parse(e.data)
+        setSteps(prev => prev.map(s => s.id === data.node ? { ...s, status: 'completed' } : s))
+      } catch {}
+    }
+
+    const handleCompleted = (e: MessageEvent) => {
+      receivedAnyEvent.current = true
+      try {
+        const data = JSON.parse(e.data)
+        setStatus('completed')
+        setOverallProgress(100)
+        setSteps(prev => prev.map(s => s.status === 'waiting' ? s : { ...s, status: 'completed' }))
+        es.close()
+        if (timerRef.current) clearInterval(timerRef.current)
+        const rid = data.report_id ?? 'demo-report'
+        setTimeout(() => router.push(`/reports/${rid}`), 1200)
+      } catch {}
+    }
+
+    const handleServerError = () => {
+      receivedAnyEvent.current = true
+      setStatus('failed')
       es.close()
-      simulateProgress()
+      if (timerRef.current) clearInterval(timerRef.current)
+    }
+
+    es.addEventListener('node_started', handleNodeStarted)
+    es.addEventListener('node_completed', handleNodeCompleted)
+    es.addEventListener('completed', handleCompleted)
+    es.addEventListener('error', handleServerError)
+
+    // Connection error fallback: only simulate if we never received real events
+    es.onerror = () => {
+      if (!receivedAnyEvent.current) {
+        es.close()
+        simulateProgress()
+      }
     }
 
     return () => {
@@ -79,7 +100,7 @@ function GeneratingContent() {
       if (timerRef.current) clearInterval(timerRef.current)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runId, reportId])
+  }, [runId])
 
   const simulateProgress = () => {
     let stepIdx = 0
@@ -88,7 +109,7 @@ function GeneratingContent() {
         setStatus('completed')
         setOverallProgress(100)
         if (timerRef.current) clearInterval(timerRef.current)
-        setTimeout(() => router.push(`/reports/${reportId}`), 1200)
+        setTimeout(() => router.push('/reports/demo-report'), 1200)
         return
       }
       const nodeId = INITIAL_STEPS[stepIdx].id

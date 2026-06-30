@@ -1,12 +1,15 @@
 'use client'
 
+import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Compass, ClipboardCheck, BarChart2 } from 'lucide-react'
 import EntryCard from '@/components/entry/EntryCard'
 import Button from '@/components/ui/Button'
+import LoginSheet from '@/components/ui/LoginSheet'
 
 export default function HomePage() {
   const router = useRouter()
+  const [loginOpen, setLoginOpen] = useState(false)
 
   return (
     <div className="min-h-screen bg-[#F8FAFC]">
@@ -17,7 +20,7 @@ export default function HomePage() {
             <h1 className="text-xl font-bold text-[#1E40AF]">问津 Agent</h1>
             <p className="text-xs text-[#64748B] mt-0.5">AI 志愿决策助理，帮你稳上心仪大学</p>
           </div>
-          <Button variant="ghost" size="sm">
+          <Button variant="ghost" size="sm" onClick={() => setLoginOpen(true)}>
             登录
           </Button>
         </div>
@@ -58,6 +61,11 @@ export default function HomePage() {
           disabledReason="功能开发中，敬请期待"
         />
       </main>
+
+      <LoginSheet
+        isOpen={loginOpen}
+        onClose={() => setLoginOpen(false)}
+      />
     </div>
   )
 }

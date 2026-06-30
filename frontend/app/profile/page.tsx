@@ -99,10 +99,10 @@ export default function ProfilePage() {
     try {
       const { profileId } = await api.createProfile(payload)
       setProfileId(profileId)
-      const { runId, reportId } = await api.generateReport({ profileId })
-      router.push(`/reports/generating?runId=${runId}&reportId=${reportId}`)
+      const { runId } = await api.generateReport({ profileId })
+      router.push(`/reports/generating?runId=${runId}`)
     } catch {
-      router.push(`/reports/generating?runId=demo-run&reportId=demo-report`)
+      router.push(`/reports/generating?runId=demo-run`)
     } finally {
       setLoading(false)
     }
