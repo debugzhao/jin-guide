@@ -1,14 +1,12 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { Compass, ClipboardCheck, BarChart2 } from 'lucide-react'
 import EntryCard from '@/components/entry/EntryCard'
 import Button from '@/components/ui/Button'
 import LoginSheet from '@/components/ui/LoginSheet'
 
 export default function HomePage() {
-  const router = useRouter()
   const [loginOpen, setLoginOpen] = useState(false)
 
   return (
@@ -37,7 +35,7 @@ export default function HomePage() {
           materials="省份 + 分数/位次 + 选科"
           estimatedTime="约 15 分钟"
           actionLabel="开始分析"
-          onClick={() => router.push('/assess')}
+          href="/assess"
         />
 
         <EntryCard
@@ -47,7 +45,7 @@ export default function HomePage() {
           materials="已填好的志愿草稿"
           estimatedTime="约 5 分钟"
           actionLabel="上传志愿表"
-          onClick={() => router.push('/assess')}
+          href="/assess"
         />
 
         <EntryCard

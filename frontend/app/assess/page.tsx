@@ -11,13 +11,14 @@ import Card from '@/components/ui/Card'
 import { useAppStore } from '@/lib/store'
 import { useToastStore } from '@/components/ui/Toast'
 import { cn } from '@/lib/utils'
-import { AlertTriangle, TrendingUp, FileCheck } from 'lucide-react'
+import { AlertTriangle, CheckCircle, TrendingUp, FileCheck, AlertCircle, Info } from 'lucide-react'
+import { api, type RiskPreviewResult } from '@/lib/api'
 
 const assessSchema = z.object({
   province: z.string().min(1, '请选择省份'),
   batch: z.string().min(1, '请选择批次'),
   score: z.coerce.number().min(100, '分数不低于100').max(750, '分数不超过750'),
-  rank: z.coerce.number().optional(),
+  rank: z.coerce.number().min(1).optional(),
   subjectType: z.enum(['physics', 'history'], { required_error: '请选择首选科目' }),
   electives: z.array(z.string()).optional(),
   gender: z.enum(['male', 'female'], { required_error: '请选择性别' }),
@@ -29,11 +30,34 @@ type AssessFormData = z.infer<typeof assessSchema>
 const provinces = ['河南', '山东', '广东', '北京', '上海', '江苏', '浙江', '其他']
 const electiveOptions = ['化学', '生物', '地理', '政治', '思想政治']
 
+const BATCH_LABEL: Record<string, string> = {
+  undergraduate: '本科批',
+  junior: '专科批',
+}
+
+const RISK_CONFIG: Record<string, { label: string; color: string; bg: string; icon: typeof AlertTriangle }> = {
+  low:     { label: '低风险',  color: '#059669', bg: '#ECFDF5', icon: CheckCircle },
+  medium:  { label: '中等风险', color: '#D97706', bg: '#FFFBEB', icon: AlertTriangle },
+  high:    { label: '高风险',  color: '#DC2626', bg: '#FEF2F2', icon: AlertCircle },
+  unknown: { label: '风险未知', color: '#64748B', bg: '#F8FAFC', icon: Info },
+}
+
+const ITEM_LEVEL_ICON: Record<string, typeof AlertTriangle> = {
+  error:   AlertCircle,
+  warning: AlertTriangle,
+  info:    Info,
+}
+const ITEM_LEVEL_COLOR: Record<string, string> = {
+  error:   '#DC2626',
+  warning: '#D97706',
+  info:    '#2563EB',
+}
+
 export default function AssessPage() {
   const router = useRouter()
   const { setAssessFormData } = useAppStore()
   const { addToast } = useToastStore()
-  const [submitted, setSubmitted] = useState(false)
+  const [riskResult, setRiskResult] = useState<RiskPreviewResult | null>(null)
   const [selectedElectives, setSelectedElectives] = useState<string[]>([])
 
   const {
@@ -52,6 +76,7 @@ export default function AssessPage() {
   })
 
   const hasPhysicalLimits = watch('hasPhysicalLimits')
+  const watchedBatch = watch('batch')
 
   const toggleElective = (subject: string) => {
     const updated = selectedElectives.includes(subject)
@@ -62,23 +87,47 @@ export default function AssessPage() {
   }
 
   const onSubmit = async (data: AssessFormData) => {
+    const batchLabel = BATCH_LABEL[data.batch] ?? data.batch
     try {
       setAssessFormData({
         province: data.province,
-        batch: data.batch,
+        batch: batchLabel,
         score: data.score,
         rank: data.rank,
         subjects: [data.subjectType, ...selectedElectives],
         gender: data.gender,
         hasPhysicalLimits: data.hasPhysicalLimits,
       })
-      setSubmitted(true)
+
+      const result = await api.getRiskPreview({
+        province: data.province,
+        score: data.score,
+        rank: data.rank ?? data.score * 200,  // rank fallback: crude estimate if not provided
+        batch: batchLabel,
+        subjectType: data.subjectType,
+        hasPhysicalLimits: data.hasPhysicalLimits,
+      })
+      setRiskResult(result)
     } catch {
-      addToast('error', '提交失败，请重试')
+      // API unavailable → show a stub result so UX isn't broken
+      addToast('warning', '后端暂不可用，显示模拟数据')
+      setRiskResult({
+        overallRisk: 'medium',
+        riskScore: 45,
+        scoreBand: '数据加载失败',
+        rankBand: '-',
+        eligibleBatches: [batchLabel],
+        tierCounts: { 冲: 0, 稳: 0, 保: 0 },
+        riskItems: [],
+        dataAvailable: false,
+      })
     }
   }
 
-  if (submitted) {
+  if (riskResult) {
+    const riskCfg = RISK_CONFIG[riskResult.overallRisk] ?? RISK_CONFIG.unknown
+    const RiskIcon = riskCfg.icon
+
     return (
       <div className="min-h-screen bg-[#F8FAFC]">
         <TopNav title="快速测算" showBack backHref="/" />
@@ -89,32 +138,67 @@ export default function AssessPage() {
           <Card className="p-4 space-y-4">
             <h2 className="text-base font-semibold text-[#0F172A]">风险画像</h2>
 
-            <div className="flex items-center gap-3 p-3 bg-[#FFFBEB] rounded-btn">
-              <AlertTriangle className="w-5 h-5 text-[#D97706]" />
+            {/* Overall risk */}
+            <div
+              className="flex items-center gap-3 p-3 rounded-btn"
+              style={{ background: riskCfg.bg }}
+            >
+              <RiskIcon className="w-5 h-5 flex-shrink-0" style={{ color: riskCfg.color }} />
               <div>
                 <p className="text-xs text-[#64748B]">综合安全等级</p>
-                <p className="text-sm font-semibold text-[#D97706]">中等</p>
+                <p className="text-sm font-semibold" style={{ color: riskCfg.color }}>
+                  {riskCfg.label}
+                </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-3 p-3 bg-[#EFF6FF] rounded-btn">
-              <TrendingUp className="w-5 h-5 text-[#2563EB]" />
+            {/* Score / rank band */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="p-3 bg-[#F8FAFC] rounded-btn">
+                <p className="text-xs text-[#64748B] mb-0.5">批次线位置</p>
+                <p className="text-sm font-medium text-[#0F172A]">{riskResult.scoreBand}</p>
+              </div>
+              <div className="p-3 bg-[#F8FAFC] rounded-btn">
+                <p className="text-xs text-[#64748B] mb-0.5">全省位次</p>
+                <p className="text-sm font-medium text-[#0F172A]">{riskResult.rankBand}</p>
+              </div>
+            </div>
+
+            {/* Tier counts */}
+            {riskResult.dataAvailable && (
               <div>
-                <p className="text-xs text-[#64748B]">预计可冲学校层级</p>
-                <p className="text-sm font-semibold text-[#2563EB]">211 院校</p>
+                <p className="text-xs text-[#64748B] mb-2">可选院校分档估算（基于历史数据）</p>
+                <div className="grid grid-cols-3 gap-2">
+                  {(['冲', '稳', '保'] as const).map((tier) => (
+                    <div key={tier} className="text-center p-2 bg-[#F8FAFC] rounded-btn">
+                      <p className="text-lg font-bold text-[#1E40AF]">{riskResult.tierCounts[tier]}</p>
+                      <p className="text-xs text-[#64748B]">{tier}校</p>
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
 
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-xs text-[#64748B]">档案完整度</span>
-                <span className="text-xs font-semibold text-[#0D9488]">40%</span>
+            {/* Risk items */}
+            {riskResult.riskItems.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-xs text-[#64748B]">风险提示</p>
+                {riskResult.riskItems.map((item, i) => {
+                  const ItemIcon = ITEM_LEVEL_ICON[item.level] ?? Info
+                  const color = ITEM_LEVEL_COLOR[item.level] ?? '#64748B'
+                  return (
+                    <div key={i} className="flex items-start gap-2 text-xs text-[#0F172A]">
+                      <ItemIcon className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color }} />
+                      <span>{item.message}</span>
+                    </div>
+                  )
+                })}
               </div>
-              <div className="h-2 bg-[#E2E8F0] rounded-full overflow-hidden">
-                <div className="h-full w-2/5 bg-[#0D9488] rounded-full" />
-              </div>
-              <p className="text-xs text-[#94A3B8] mt-1">补全档案可大幅提升方案准确度</p>
-            </div>
+            )}
+
+            {!riskResult.dataAvailable && (
+              <p className="text-xs text-[#94A3B8]">历史录取数据不足，结果仅供参考</p>
+            )}
           </Card>
 
           <Card className="p-4 bg-[#EFF6FF] border-[#2563EB]">
@@ -122,7 +206,9 @@ export default function AssessPage() {
               <FileCheck className="w-5 h-5 text-[#2563EB] flex-shrink-0 mt-0.5" />
               <div>
                 <p className="text-sm font-semibold text-[#0F172A] mb-1">补全档案，生成三套方案</p>
-                <p className="text-xs text-[#64748B]">填写更多信息（预算、城市偏好等），AI 将为你生成保守/均衡/进取三套完整志愿方案</p>
+                <p className="text-xs text-[#64748B]">
+                  填写更多信息（预算、城市偏好等），AI 将为你生成保守/均衡/进取三套完整志愿方案
+                </p>
               </div>
             </div>
           </Card>
@@ -175,7 +261,7 @@ export default function AssessPage() {
                   <input type="radio" {...register('batch')} value={option.value} className="sr-only" />
                   <div className={cn(
                     'border rounded-btn py-2 text-sm text-center cursor-pointer transition-colors',
-                    watch('batch') === option.value
+                    watchedBatch === option.value
                       ? 'border-[#1E40AF] bg-[#EFF6FF] text-[#1E40AF]'
                       : 'border-[#E2E8F0] text-[#64748B]'
                   )}>
@@ -309,7 +395,7 @@ export default function AssessPage() {
         </Card>
 
         <Button type="submit" variant="primary" size="lg" disabled={isSubmitting}>
-          {isSubmitting ? '分析中...' : '查看风险画像'}
+          {isSubmitting ? '分析中…' : '查看风险画像'}
         </Button>
       </form>
     </div>

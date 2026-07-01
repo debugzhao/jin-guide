@@ -14,6 +14,7 @@ interface EntryCardProps {
   actionLabel: string
   disabled?: boolean
   disabledReason?: string
+  href?: string
   onClick?: () => void
   className?: string
 }
@@ -27,6 +28,7 @@ export default function EntryCard({
   actionLabel,
   disabled = false,
   disabledReason,
+  href,
   onClick,
   className,
 }: EntryCardProps) {
@@ -56,7 +58,7 @@ export default function EntryCard({
           <span className="text-sm text-[#94A3B8]">{disabledReason ?? actionLabel}</span>
         </div>
       ) : (
-        <Button variant="primary" size="lg" onClick={onClick}>
+        <Button variant="primary" size="lg" href={href} onClick={onClick}>
           {actionLabel}
         </Button>
       )}

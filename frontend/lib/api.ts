@@ -10,6 +10,23 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json()
 }
 
+export interface RiskItem {
+  type: string
+  level: 'error' | 'warning' | 'info'
+  message: string
+}
+
+export interface RiskPreviewResult {
+  overallRisk: 'low' | 'medium' | 'high' | 'unknown'
+  riskScore: number
+  scoreBand: string
+  rankBand: string
+  eligibleBatches: string[]
+  tierCounts: { 冲: number; 稳: number; 保: number }
+  riskItems: RiskItem[]
+  dataAvailable: boolean
+}
+
 export const api = {
   createSession: async () => {
     const res = await apiFetch<{ session_id: string; token: string; expires_at: string }>(
@@ -35,4 +52,45 @@ export const api = {
   },
   getReport: (id: string) => apiFetch<unknown>(`/api/v1/reports/${id}`),
   getRunStatus: (id: string) => apiFetch<unknown>(`/api/v1/agent/runs/${id}`),
+  getRiskPreview: async (params: {
+    province: string
+    score: number
+    rank: number
+    batch: string
+    subjectType: 'physics' | 'history'
+    hasPhysicalLimits: boolean
+    familyBudgetPerYear?: number
+  }): Promise<RiskPreviewResult> => {
+    const res = await apiFetch<{
+      overall_risk: string
+      risk_score: number
+      score_band: string
+      rank_band: string
+      eligible_batches: string[]
+      tier_counts: Record<string, number>
+      risk_items: { type: string; level: string; message: string }[]
+      data_available: boolean
+    }>('/api/v1/risk/preview', {
+      method: 'POST',
+      body: JSON.stringify({
+        province: params.province,
+        score: params.score,
+        rank: params.rank,
+        batch: params.batch,
+        subject_type: params.subjectType,
+        has_physical_limits: params.hasPhysicalLimits,
+        family_budget_per_year: params.familyBudgetPerYear ?? null,
+      }),
+    })
+    return {
+      overallRisk: res.overall_risk as RiskPreviewResult['overallRisk'],
+      riskScore: res.risk_score,
+      scoreBand: res.score_band,
+      rankBand: res.rank_band,
+      eligibleBatches: res.eligible_batches,
+      tierCounts: res.tier_counts as RiskPreviewResult['tierCounts'],
+      riskItems: res.risk_items as RiskItem[],
+      dataAvailable: res.data_available,
+    }
+  },
 }
