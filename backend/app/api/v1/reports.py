@@ -1,7 +1,7 @@
 from typing import Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,6 +34,16 @@ class ReportOut(BaseModel):
     risk_score: Optional[float]
     plan_json: Optional[dict]
     evidence_json: Optional[list]
+    dataset_version: Optional[str]
+    created_at: str
+
+
+class ReportListItem(BaseModel):
+    id: str
+    profile_id: Optional[str]
+    status: str
+    risk_level: Optional[str]
+    risk_score: Optional[float]
     dataset_version: Optional[str]
     created_at: str
 
@@ -73,6 +83,39 @@ async def generate_report(
         status="queued",
         stream_url=f"/api/v1/agent/runs/{run_id}/events",
     )
+
+
+@router.get("", response_model=list[ReportListItem])
+async def list_reports(
+    profile_id: Optional[str] = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    """List reports, optionally filtered by profile_id. Ordered by created_at desc."""
+    stmt = (
+        select(Report)
+        .where(Report.deleted_at.is_(None))
+        .order_by(Report.created_at.desc())
+        .limit(limit)
+    )
+    if profile_id:
+        stmt = stmt.where(Report.profile_id == profile_id)
+
+    result = await db.execute(stmt)
+    reports = result.scalars().all()
+
+    return [
+        ReportListItem(
+            id=r.id,
+            profile_id=r.profile_id,
+            status=r.status,
+            risk_level=r.risk_level,
+            risk_score=r.risk_score,
+            dataset_version=r.dataset_version,
+            created_at=r.created_at.isoformat(),
+        )
+        for r in reports
+    ]
 
 
 @router.get("/{report_id}", response_model=ReportOut)
