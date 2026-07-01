@@ -93,4 +93,65 @@ export const api = {
       dataAvailable: res.data_available,
     }
   },
+
+  checkVolunteer: async (params: {
+    volunteers: {
+      universityName: string
+      majorName: string
+      majorCategory?: string
+      tier: 'high_rush' | 'rush' | 'target' | 'safe'
+      rankGap?: number
+      overallScore?: number
+    }[]
+    rejectedMajors?: string[]
+  }): Promise<VolunteerCheckResult> => {
+    const res = await apiFetch<{
+      overall_risk: string
+      risk_score: number
+      risk_items: { risk_type: string; severity: string; message: string; targets: string[] }[]
+      tier_distribution: Record<string, number>
+      safe_count: number
+      total: number
+    }>('/api/v1/volunteer/check', {
+      method: 'POST',
+      body: JSON.stringify({
+        volunteers: params.volunteers.map((v) => ({
+          university_name: v.universityName,
+          major_name: v.majorName,
+          major_category: v.majorCategory ?? '',
+          tier: v.tier,
+          rank_gap: v.rankGap ?? 0,
+          overall_score: v.overallScore ?? 0,
+        })),
+        rejected_majors: params.rejectedMajors ?? [],
+      }),
+    })
+    return {
+      overallRisk: res.overall_risk as VolunteerCheckResult['overallRisk'],
+      riskScore: res.risk_score,
+      riskItems: res.risk_items.map((i) => ({
+        riskType: i.risk_type,
+        severity: i.severity as 'high' | 'medium' | 'low',
+        message: i.message,
+        targets: i.targets,
+      })),
+      tierDistribution: res.tier_distribution,
+      safeCount: res.safe_count,
+      total: res.total,
+    }
+  },
+}
+
+export interface VolunteerCheckResult {
+  overallRisk: 'low' | 'medium' | 'high'
+  riskScore: number
+  riskItems: {
+    riskType: string
+    severity: 'high' | 'medium' | 'low'
+    message: string
+    targets: string[]
+  }[]
+  tierDistribution: Record<string, number>
+  safeCount: number
+  total: number
 }
