@@ -49,12 +49,7 @@ class VolunteerPlanState(TypedDict):
     # ── 合规自检 ──
     compliance_passed: bool
     compliance_issues: list[str]
-    reflection_iterations: int  # Max 3; exceeding triggers forced human review
-
-    # ── 人工复核 ──
-    needs_human_review: bool
-    review_reasons: list[str]
-    review_task_id: Optional[str]
+    reflection_iterations: int  # Max 3; after that best-effort result is returned
 
     # ── 多轮对话消息 ──
     messages: Annotated[list[BaseMessage], add_messages]

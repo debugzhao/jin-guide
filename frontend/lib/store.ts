@@ -21,10 +21,6 @@ interface AppStore {
   setWizardStep: (step: number) => void
   assessFormData: AssessFormData
   setAssessFormData: (data: AssessFormData) => void
-  // 复核员工作台身份标识：MVP 阶段暂无独立的复核员账号体系，
-  // 用本地持久化的名字代替，仅用于 claim/提交结论时标注 reviewer_id
-  reviewerId: string | null
-  setReviewerId: (id: string | null) => void
 }
 
 export const useAppStore = create<AppStore>()(
@@ -38,8 +34,6 @@ export const useAppStore = create<AppStore>()(
       setWizardStep: (step) => set({ wizardStep: step }),
       assessFormData: {},
       setAssessFormData: (data) => set({ assessFormData: data }),
-      reviewerId: null,
-      setReviewerId: (id) => set({ reviewerId: id }),
     }),
     {
       name: 'wenjin-store',

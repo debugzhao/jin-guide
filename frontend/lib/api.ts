@@ -28,13 +28,23 @@ export interface RiskPreviewResult {
 }
 
 export const api = {
-  createSession: async () => {
-    const res = await apiFetch<{ session_id: string; token: string; expires_at: string }>(
-      '/api/v1/auth/session',
-      { method: 'POST', body: '{}' }
-    )
-    return { sessionId: res.session_id, token: res.token }
-  },
+  sendCode: (email: string) =>
+    apiFetch<{ message: string }>('/api/v1/auth/send-code', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    }),
+  register: (data: { email: string; code: string; password: string }) =>
+    apiFetch<{ user_id: string; email: string; session_id: string }>('/api/v1/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  login: (data: { email: string; password: string }) =>
+    apiFetch<{ user_id: string; email: string; session_id: string }>('/api/v1/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  logout: () => apiFetch<{ message: string }>('/api/v1/auth/logout', { method: 'POST' }),
+  me: () => apiFetch<{ user_id: string; email: string; role: string; email_verified: boolean }>('/api/v1/auth/me'),
   createProfile: async (data: unknown) => {
     const res = await apiFetch<{ id: string }>('/api/v1/profile', {
       method: 'POST',
@@ -142,100 +152,6 @@ export const api = {
   },
 }
 
-// ── Review API ──────────────────────────────────────────────────────────────
-
-export interface ReviewChecklistItem {
-  id: string
-  item: string
-  required: boolean
-}
-
-export interface ReviewChecklistJson {
-  summary: string
-  trigger_reasons: string[]
-  risk_items: { risk_type: string; severity: string; targets: string[]; message: string }[]
-  compliance_issues: string[]
-  data_warnings: string[]
-  reviewer_checklist: ReviewChecklistItem[]
-}
-
-export interface ReviewOut {
-  id: string
-  report_id: string | null
-  run_id: string | null
-  reviewer_id: string | null
-  status: string
-  checklist_json: ReviewChecklistJson | null
-  conclusion: string | null
-  reviewer_notes: string | null
-  created_at: string
-  completed_at: string | null
-  timeout_at: string | null
-}
-
-export interface ReviewListItem {
-  id: string
-  report_id: string | null
-  run_id: string | null
-  status: string
-  conclusion: string | null
-  created_at: string
-  timeout_at: string | null
-}
-
-export const reviewApi = {
-  // 复核员工作台：按状态列出复核任务
-  list: (status?: string) =>
-    apiFetch<ReviewListItem[]>(
-      `/api/v1/reviews${status ? `?status=${status}` : '?limit=50'}`
-    ),
-
-  // 查单条复核（含 checklist_json）
-  get: (id: string) => apiFetch<ReviewOut>(`/api/v1/reviews/${id}`),
-
-  // 按 run_id 查所属复核（用户侧进入复核页）
-  getByRunId: (runId: string) =>
-    apiFetch<ReviewListItem[]>(`/api/v1/reviews?run_id=${runId}&limit=1`),
-
-  // 按 report_id 查所属复核（报告页 HITL 入口 / 用户侧复核页）
-  // 后端按 created_at asc 排序，取最后一条即最新记录
-  getByReportId: async (reportId: string): Promise<ReviewListItem | null> => {
-    const list = await apiFetch<ReviewListItem[]>(
-      `/api/v1/reviews?report_id=${reportId}&limit=20`
-    )
-    return list.length > 0 ? list[list.length - 1] : null
-  },
-
-  // 用户主动申请人工复核（幂等：已有未关闭的复核则直接返回该条）
-  create: (reportId: string, reason?: string) =>
-    apiFetch<ReviewOut>('/api/v1/reviews', {
-      method: 'POST',
-      body: JSON.stringify({ report_id: reportId, reason: reason ?? null }),
-    }),
-
-  // 复核员领取任务（→ status: in_review）
-  claim: (id: string, reviewerId: string) =>
-    apiFetch<ReviewOut>(`/api/v1/reviews/${id}/claim`, {
-      method: 'PATCH',
-      body: JSON.stringify({ reviewer_id: reviewerId }),
-    }),
-
-  // 提交复核结论
-  submitConclusion: (
-    id: string,
-    payload: {
-      conclusion: 'approved' | 'rejected' | 'need_more_info'
-      reviewer_id?: string
-      reviewer_notes?: string
-      override_risk_level?: string
-      checklist_results?: { id: string; verdict: 'pass' | 'flag' }[]
-    }
-  ) =>
-    apiFetch<ReviewOut>(`/api/v1/reviews/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify(payload),
-    }),
-}
 
 export interface VolunteerCheckResult {
   overallRisk: 'low' | 'medium' | 'high'

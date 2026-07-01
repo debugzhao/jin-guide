@@ -3,18 +3,16 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Suspense } from 'react'
-import { CheckCircle, Loader2, XCircle, Clock, AlertTriangle } from 'lucide-react'
+import { CheckCircle, Loader2, XCircle, Clock } from 'lucide-react'
 import type { AgentStep, StepStatus } from '@/types'
 
-// M3 步骤定义，顺序与 LangGraph 节点一致
-// retrieval_agent / policy_rule_agent 并行，合并展示为一步
 const INITIAL_STEPS: AgentStep[] = [
-  { id: 'data_resolver',   label: '档案检查',   status: 'waiting' },
+  { id: 'data_resolver',   label: '档案检查',         status: 'waiting' },
   { id: 'retrieval_agent', label: '数据检索与规则校验', status: 'waiting' },
-  { id: 'recommendation',  label: '生成候选方案', status: 'waiting' },
-  { id: 'risk',            label: '风险体检',   status: 'waiting' },
-  { id: 'report',          label: '生成报告',   status: 'waiting' },
-  { id: 'reflection',      label: '合规自检',   status: 'waiting' },
+  { id: 'recommendation',  label: '生成候选方案',       status: 'waiting' },
+  { id: 'risk',            label: '风险体检',           status: 'waiting' },
+  { id: 'report',          label: '生成报告',           status: 'waiting' },
+  { id: 'reflection',      label: '合规自检',           status: 'waiting' },
 ]
 
 // policy_rule_agent 事件映射到同一步骤（并行节点）
@@ -22,15 +20,7 @@ const NODE_STEP_MAP: Record<string, string> = {
   policy_rule_agent: 'retrieval_agent',
 }
 
-type PageStatus = 'running' | 'completed' | 'failed' | 'interrupted'
-
-interface HumanInterruptData {
-  review_task_id: string
-  report_id: string
-  message: string
-  sla_hours: number
-  trigger_reasons: string[]
-}
+type PageStatus = 'running' | 'completed' | 'failed'
 
 function GeneratingContent() {
   const router = useRouter()
@@ -41,7 +31,6 @@ function GeneratingContent() {
   const [overallProgress, setOverallProgress] = useState(0)
   const [pageStatus, setPageStatus] = useState<PageStatus>('running')
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
-  const [interruptData, setInterruptData] = useState<HumanInterruptData | null>(null)
 
   const esRef = useRef<EventSource | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -95,22 +84,6 @@ function GeneratingContent() {
       } catch {}
     })
 
-    // 高风险或 Reflection 多轮失败时触发人工复核
-    es.addEventListener('human_interrupt', (e: MessageEvent) => {
-      receivedAnyEvent.current = true
-      try {
-        const data: HumanInterruptData = JSON.parse(e.data)
-        setInterruptData(data)
-        setPageStatus('interrupted')
-        setOverallProgress(90)
-        setSteps(prev => prev.map(s =>
-          s.status === 'running' ? { ...s, status: 'completed' } : s
-        ))
-        es.close()
-        clearTimer()
-      } catch {}
-    })
-
     es.addEventListener('error', () => {
       receivedAnyEvent.current = true
       setPageStatus('failed')
@@ -121,7 +94,6 @@ function GeneratingContent() {
       clearTimer()
     })
 
-    // 连接级错误：自动重连（最多3次），超限后降级到模拟
     es.onerror = () => {
       if (!receivedAnyEvent.current) {
         es.close()
@@ -184,64 +156,6 @@ function GeneratingContent() {
       case 'failed':    return <XCircle className="w-5 h-5 text-[#DC2626]" />
       default:          return <Clock className="w-5 h-5 text-[#94A3B8]" />
     }
-  }
-
-  // ── 复核等待状态 ────────────────────────────────────────────────────────────
-  if (pageStatus === 'interrupted' && interruptData) {
-    return (
-      <div className="min-h-screen bg-[#F8FAFC] flex flex-col">
-        <header className="bg-white border-b border-[#E2E8F0] px-4 py-4">
-          <div className="max-w-screen-md mx-auto">
-            <h1 className="text-base font-semibold text-[#0F172A]">等待人工复核</h1>
-            <p className="text-xs text-[#64748B] mt-0.5">报告已生成，正在等待复核员审阅</p>
-          </div>
-        </header>
-
-        <main className="flex-1 max-w-screen-md mx-auto w-full px-4 py-6 space-y-4">
-          {/* SLA 提示卡 */}
-          <div className="bg-[#FFFBEB] border border-[#D97706] rounded-card p-4">
-            <div className="flex items-start gap-3">
-              <AlertTriangle className="w-5 h-5 text-[#D97706] flex-shrink-0 mt-0.5" />
-              <div>
-                <p className="text-sm font-semibold text-[#92400E]">报告需要人工复核</p>
-                <p className="text-xs text-[#B45309] mt-1">
-                  {interruptData.message}（预计 {interruptData.sla_hours} 小时内完成）
-                </p>
-                {interruptData.trigger_reasons.length > 0 && (
-                  <p className="text-xs text-[#B45309] mt-1">
-                    触发原因：{interruptData.trigger_reasons.join('、')}
-                  </p>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* 已完成步骤 */}
-          <div className="bg-white rounded-card border border-[#E2E8F0] divide-y divide-[#E2E8F0]">
-            {steps.map((s) => (
-              <div key={s.id} className="flex items-center gap-3 px-4 py-3.5">
-                {stepIcon(s.status)}
-                <p className={`text-sm ${s.status === 'waiting' ? 'text-[#94A3B8]' : 'text-[#0F172A]'}`}>
-                  {s.label}
-                </p>
-              </div>
-            ))}
-          </div>
-
-          {/* 进入复核页 */}
-          <button
-            onClick={() => router.push(`/reports/${interruptData.report_id}/review`)}
-            className="w-full bg-[#D97706] text-white rounded-btn py-3 text-sm font-medium"
-          >
-            查看复核详情
-          </button>
-
-          <p className="text-xs text-[#94A3B8] text-center">
-            您可以先离开页面，复核完成后将收到通知
-          </p>
-        </main>
-      </div>
-    )
   }
 
   return (
@@ -322,7 +236,7 @@ function GeneratingContent() {
           </button>
         )}
 
-        {pageStatus !== 'failed' && pageStatus !== 'interrupted' && (
+        {pageStatus !== 'failed' && (
           <div className="bg-[#EFF6FF] rounded-card p-4">
             <p className="text-xs text-[#1E40AF] font-medium mb-1">数据来源说明</p>
             <p className="text-xs text-[#2563EB]">
