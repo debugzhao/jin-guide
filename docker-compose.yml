@@ -67,6 +67,8 @@ services:
       LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
       LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-wenjin-agent-dev}
       COHERE_API_KEY: ${COHERE_API_KEY:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      EMAIL_FROM: ${EMAIL_FROM:-问津 <onboarding@resend.dev>}
       ENV: development
     depends_on:
       postgres:

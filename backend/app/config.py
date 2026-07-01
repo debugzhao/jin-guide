@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     cohere_api_key: str = ""
     env: str = "development"
+    # Resend — free tier 100 emails/day: https://resend.com
+    resend_api_key: str = ""
+    email_from: str = "问津 <onboarding@resend.dev>"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

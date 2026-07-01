@@ -11,57 +11,95 @@ Endpoints:
 import hashlib
 import hmac
 import random
+import re
 import string
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+import redis.asyncio as aioredis
+import structlog
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-import structlog
 
 from app.config import settings
 from app.database import get_db
 from app.models.user import Session, User
+from app.services.email import send_verification_code
 
 logger = structlog.get_logger()
 router = APIRouter()
 
-# In-memory code store: {email: (code, expires_at)}
-# For production replace with Redis (TTL-backed).
-_pending_codes: dict[str, tuple[str, datetime]] = {}
-
+_CODE_PREFIX = "auth:code:"
 _CODE_TTL_MINUTES = 10
+_CODE_TTL_SECONDS = _CODE_TTL_MINUTES * 60
 _SESSION_DAYS = 30
+_CODE_PATTERN = re.compile(r"^\d{6}$")
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
+def _normalize_email(email: str) -> str:
+    return email.strip().lower()
+
+
 def _hash_password(password: str) -> str:
-    """SHA-256 HMAC with SECRET_KEY as salt. For production use bcrypt/argon2."""
+    """SHA-256 with SECRET_KEY as salt. For production use bcrypt/argon2."""
     return hashlib.sha256(
         settings.secret_key.encode() + password.encode()
     ).hexdigest()
 
 
 def _verify_password(password: str, password_hash: str) -> bool:
-    return hmac.compare_digest(_hash_password(password), password_hash)  # constant-time compare
+    return hmac.compare_digest(_hash_password(password), password_hash)
 
 
 def _generate_code() -> str:
     return "".join(random.choices(string.digits, k=6))
 
 
-async def _send_email_code(email: str, code: str) -> None:
-    """
-    Send verification code email.
-    MVP: logs the code (no SMTP configured yet).
-    Production: replace with SMTP / SendGrid / Resend.
-    """
-    logger.info("email_verification_code", email=email, code=code)
-    # TODO: integrate real email provider
+async def _store_code(email: str, code: str) -> None:
+    redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
+    try:
+        await redis_client.setex(f"{_CODE_PREFIX}{email}", _CODE_TTL_SECONDS, code)
+    finally:
+        await redis_client.aclose()
+
+
+async def _get_stored_code(email: str) -> str | None:
+    redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
+    try:
+        return await redis_client.get(f"{_CODE_PREFIX}{email}")
+    finally:
+        await redis_client.aclose()
+
+
+async def _delete_code(email: str) -> None:
+    redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
+    try:
+        await redis_client.delete(f"{_CODE_PREFIX}{email}")
+    finally:
+        await redis_client.aclose()
+
+
+async def _verify_code(email: str, user_code: str) -> None:
+    """Raise HTTPException if code is missing, expired, or mismatched."""
+    normalized = user_code.strip()
+    if not _CODE_PATTERN.match(normalized):
+        raise HTTPException(status_code=400, detail="验证码格式不正确，应为 6 位数字")
+
+    stored_code = await _get_stored_code(email)
+    if not stored_code:
+        raise HTTPException(status_code=400, detail="请先获取验证码，或验证码已过期")
+
+    if not hmac.compare_digest(stored_code, normalized):
+        raise HTTPException(status_code=400, detail="验证码不正确")
+
+
+async def _send_email_code(email: str, code: str) -> bool:
+    """Send verification code email via Resend. Returns whether email was actually sent."""
+    return await send_verification_code(email, code, _CODE_TTL_MINUTES)
 
 
 async def _get_current_user(
@@ -98,6 +136,14 @@ class RegisterIn(BaseModel):
     code: str
     password: str
 
+    @field_validator("code")
+    @classmethod
+    def validate_code_format(cls, v: str) -> str:
+        normalized = v.strip()
+        if not _CODE_PATTERN.match(normalized):
+            raise ValueError("验证码应为 6 位数字")
+        return normalized
+
 
 class LoginIn(BaseModel):
     email: EmailStr
@@ -121,14 +167,24 @@ class MeOut(BaseModel):
 
 @router.post("/send-code", response_model=SendCodeOut)
 async def send_code(body: SendCodeIn):
-    """
-    Send a 6-digit verification code to the given email.
-    Rate limiting and SMTP integration should be added before production.
-    """
+    """Send a 6-digit verification code to the given email."""
+    email = _normalize_email(body.email)
     code = _generate_code()
-    _pending_codes[body.email] = (code, datetime.now(UTC) + timedelta(minutes=_CODE_TTL_MINUTES))
-    await _send_email_code(body.email, code)
-    return SendCodeOut(message=f"验证码已发送至 {body.email}，{_CODE_TTL_MINUTES} 分钟内有效")
+    await _store_code(email, code)
+    try:
+        sent = await _send_email_code(email, code)
+    except RuntimeError as exc:
+        await _delete_code(email)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if sent:
+        message = f"验证码已发送至 {email}，{_CODE_TTL_MINUTES} 分钟内有效"
+    else:
+        message = (
+            f"验证码已生成（开发模式未配置邮件服务，请查看后端日志），"
+            f"{_CODE_TTL_MINUTES} 分钟内有效"
+        )
+    return SendCodeOut(message=message)
 
 
 @router.post("/register", response_model=AuthOut)
@@ -138,30 +194,20 @@ async def register(
     db: AsyncSession = Depends(get_db),
 ):
     """Register a new user with email + verification code + password."""
-    # Validate code
-    entry = _pending_codes.get(body.email)
-    if not entry:
-        raise HTTPException(status_code=400, detail="请先获取验证码")
-    code, expires_at = entry
-    if datetime.now(UTC) > expires_at:
-        _pending_codes.pop(body.email, None)
-        raise HTTPException(status_code=400, detail="验证码已过期，请重新获取")
-    if not hmac.compare_digest(code, body.code):
-        raise HTTPException(status_code=400, detail="验证码不正确")
-    _pending_codes.pop(body.email, None)
+    email = _normalize_email(body.email)
+    await _verify_code(email, body.code)
+    await _delete_code(email)
 
-    # Check duplicate email
-    existing = await db.execute(select(User).where(User.email == body.email))
+    existing = await db.execute(select(User).where(User.email == email))
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="该邮箱已注册，请直接登录")
 
-    # Password strength: at least 8 chars
     if len(body.password) < 8:
         raise HTTPException(status_code=422, detail="密码至少 8 位")
 
     user = User(
         id=str(uuid4()),
-        email=body.email,
+        email=email,
         password_hash=_hash_password(body.password),
         email_verified=True,
         role="user",
@@ -195,7 +241,8 @@ async def login(
     db: AsyncSession = Depends(get_db),
 ):
     """Login with email + password."""
-    result = await db.execute(select(User).where(User.email == body.email))
+    email = _normalize_email(body.email)
+    result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
     if not user or not user.password_hash:
         raise HTTPException(status_code=401, detail="邮箱或密码不正确")

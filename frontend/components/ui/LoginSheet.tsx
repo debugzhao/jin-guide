@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { Eye, EyeOff } from 'lucide-react'
 import Modal from './Modal'
 import Button from './Button'
 import { api } from '@/lib/api'
@@ -21,6 +22,8 @@ export default function LoginSheet({ isOpen, onClose, onSuccess }: LoginSheetPro
   const [codeSent, setCodeSent] = useState(false)
   const [countdown, setCountdown] = useState(0)
   const [loading, setLoading] = useState(false)
+  const [sendingCode, setSendingCode] = useState(false)
+  const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
 
   const resetForm = () => {
@@ -29,6 +32,7 @@ export default function LoginSheet({ isOpen, onClose, onSuccess }: LoginSheetPro
     setCode('')
     setCodeSent(false)
     setCountdown(0)
+    setShowPassword(false)
     setError('')
   }
 
@@ -43,6 +47,7 @@ export default function LoginSheet({ isOpen, onClose, onSuccess }: LoginSheetPro
       return
     }
     setError('')
+    setSendingCode(true)
     try {
       await api.sendCode(email)
       setCodeSent(true)
@@ -53,8 +58,10 @@ export default function LoginSheet({ isOpen, onClose, onSuccess }: LoginSheetPro
           return c - 1
         })
       }, 1000)
-    } catch {
-      setError('发送验证码失败，请稍后重试')
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : '发送验证码失败，请稍后重试')
+    } finally {
+      setSendingCode(false)
     }
   }
 
@@ -70,8 +77,7 @@ export default function LoginSheet({ isOpen, onClose, onSuccess }: LoginSheetPro
       onSuccess?.()
       onClose()
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : ''
-      setError(msg.includes('401') ? '邮箱或密码不正确' : '登录失败，请稍后重试')
+      setError(e instanceof Error ? e.message : '登录失败，请稍后重试')
     } finally {
       setLoading(false)
     }
@@ -82,8 +88,16 @@ export default function LoginSheet({ isOpen, onClose, onSuccess }: LoginSheetPro
       setError('请填写所有字段')
       return
     }
+    if (code.length !== 6) {
+      setError('请输入 6 位验证码')
+      return
+    }
     if (password.length < 8) {
       setError('密码至少 8 位')
+      return
+    }
+    if (!codeSent) {
+      setError('请先获取验证码')
       return
     }
     setError('')
@@ -93,10 +107,7 @@ export default function LoginSheet({ isOpen, onClose, onSuccess }: LoginSheetPro
       onSuccess?.()
       onClose()
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : ''
-      if (msg.includes('409')) setError('该邮箱已注册，请直接登录')
-      else if (msg.includes('400')) setError('验证码不正确或已过期')
-      else setError('注册失败，请稍后重试')
+      setError(e instanceof Error ? e.message : '注册失败，请稍后重试')
     } finally {
       setLoading(false)
     }
@@ -126,6 +137,7 @@ export default function LoginSheet({ isOpen, onClose, onSuccess }: LoginSheetPro
             <div className="flex gap-3">
               <input
                 type="text"
+                inputMode="numeric"
                 value={code}
                 onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                 placeholder="6 位验证码"
@@ -134,10 +146,10 @@ export default function LoginSheet({ isOpen, onClose, onSuccess }: LoginSheetPro
               <button
                 type="button"
                 onClick={handleSendCode}
-                disabled={countdown > 0}
+                disabled={countdown > 0 || sendingCode}
                 className="h-11 shrink-0 rounded-btn border border-[#E2E8F0] px-4 text-sm font-medium text-[#1E40AF] transition hover:bg-[#EFF6FF] disabled:cursor-not-allowed disabled:text-[#94A3B8]"
               >
-                {countdown > 0 ? `${countdown}s` : codeSent ? '重新发送' : '获取验证码'}
+                {sendingCode ? '发送中…' : countdown > 0 ? `${countdown}s` : codeSent ? '重新发送' : '获取验证码'}
               </button>
             </div>
           </div>
@@ -146,13 +158,23 @@ export default function LoginSheet({ isOpen, onClose, onSuccess }: LoginSheetPro
         {/* 密码 */}
         <div>
           <label className="mb-2 block text-sm font-medium text-[#0F172A]">密码</label>
-          <input
-            type="password"
-            value={password}
-            onChange={e => setPassword(e.target.value)}
-            placeholder={mode === 'register' ? '至少 8 位' : '请输入密码'}
-            className={inputCls}
-          />
+          <div className="relative">
+            <input
+              type={showPassword ? 'text' : 'password'}
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              placeholder={mode === 'register' ? '至少 8 位' : '请输入密码'}
+              className={`${inputCls} pr-10`}
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword(v => !v)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 rounded p-0.5 text-[#94A3B8] transition hover:text-[#64748B]"
+              aria-label={showPassword ? '隐藏密码' : '显示密码'}
+            >
+              {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </button>
+          </div>
         </div>
 
         {error && <p className="text-xs text-[#DC2626]">{error}</p>}

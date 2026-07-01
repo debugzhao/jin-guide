@@ -162,6 +162,9 @@ flowchart TD
 | PATCH | `/api/v1/reviews/{id}/claim`      | 复核员领取任务（status → in_review）                         |
 | POST  | `/api/v1/notifications/mark-read` | 标记站内通知为已读                                           |
 | GET   | `/api/v1/notifications`           | 获取当前用户站内通知列表（分页）                             |
+| POST  | `/api/v1/reports/{id}/chat`       | 发送一条对话消息，SSE 流式返回 ConversationAgent 回复        |
+| GET   | `/api/v1/reports/{id}/chat/history` | 获取当前报告的对话历史（游标分页，limit 默认 20）           |
+| DELETE | `/api/v1/reports/{id}/chat`      | 清空当前报告的对话历史                                       |
 
 **`/api/v1/reports/generate` 说明**：该接口是面向前端的语义化入口，内部等价于 `POST /api/v1/agent/runs`（`task_type=generate_report`），直接创建并返回 `run_id`。两者共用同一后端实现，前端统一使用 `/reports/generate`，`/agent/runs` 供内部和调试使用。
 
@@ -346,6 +349,7 @@ data: {"report_id": "report_123", "risk_level": "medium", "needs_review": false}
 | agent_runs          | id、thread_id、user_id、profile_id、task_type、status（枚举见 5.1）、cost_tokens、cost_usd、trace_url、error_msg、created_at、completed_at                                     |
 | province_thresholds | id、province、year、high_rush_rank_gap、rush_rank_gap_min、rush_rank_gap_max、target_rank_gap、safe_rank_gap（省份级冲稳保位次阈值，替代代码内硬编码；缺省时回退到全局默认值） |
 | notifications       | id、user_id、type（review_completed / run_failed 等）、payload_json、read_at、created_at                                                                                       |
+| report_conversations | id、report_id、user_id、messages_json（JSONB，最多 50 条消息，格式见 Section 10.9）、created_at、updated_at                                                                  |
 
 **关于 checkpoint 存储**：LangGraph 使用独立的内部表（`checkpoints`、`checkpoint_blobs`、`checkpoint_writes`）存储图执行状态，由 LangGraph PostgreSQL checkpointer 自动管理，**不属于业务表**，无需在此维护。`agent_runs` 表只存储业务层元数据（状态、成本、trace_url 等），通过 `thread_id` 与 LangGraph checkpoint 关联。
 
@@ -1039,6 +1043,138 @@ filtered_tools = ToolFilter.for_agent("retrieval_agent", full_registry)
 retrieval_agent = ReActAgent(llm, tool_registry=filtered_tools)
 ```
 
+### 10.9 ConversationAgent（报告问答）
+
+#### 设计目标
+
+报告交付后，用户常有结构化界面无法回答的探索性问题：
+
+- "为什么推荐郑州大学而不是河南大学？"
+- "梯度风险是什么意思，我的志愿梯度有多密？"
+- "这所学校XX专业的就业情况如何？"
+- "如果我把预算提高到 1.8 万，方案会有什么变化？"
+
+ConversationAgent 是独立于报告生成主链路之外的**轻量对话 Agent**，以已生成报告为上下文，为用户提供报告解读和知识问答服务。
+
+#### 与主链路 Agent 的关系
+
+ConversationAgent **不在** 报告生成的 LangGraph 图（VolunteerPlanState）内，是独立的对话处理路径：
+
+```
+主链路：报告生成图（VolunteerPlanState）→ 报告交付
+对话路径：用户提问 → ConversationAgent（独立调用）→ SSE 流式回复
+```
+
+两者共用：LiteLLM Proxy、pgvector 检索基础设施、`check_compliance` 合规工具。
+
+ConversationAgent **不修改** 任何报告或档案数据，只读不写。
+
+#### 输入上下文注入
+
+每次对话请求注入以下上下文：
+
+| 上下文来源 | 内容 | 注入方式 |
+| --- | --- | --- |
+| `reports.plan_json` | 三套方案完整数据（含每个候选的评分、推荐理由、风险项） | 系统 Prompt 前缀（压缩后，≤ 3K tokens） |
+| `reports.evidence_json` | 证据链（来源、年份、字段） | 按需检索，用户问及具体数据来源时才注入 |
+| `student_profiles` | 省份、位次、选科、偏好、预算 | 系统 Prompt 前缀 |
+| `report_conversations.messages_json` | 当前报告对话历史（最近 10 条） | messages 参数 |
+
+**上下文 Token 预算**：单次调用总上限 **20K tokens**（报告摘要 3K + 检索补充证据 4K + 对话历史 3K + 回复生成上限 10K），远低于主链路 150K 预算，控制单次对话成本。
+
+#### ConversationAgent 可用工具
+
+| 工具 | 说明 | 授权范围 |
+| --- | --- | --- |
+| `get_report_context` | 从 `plan_json` 精确查询某候选的完整评分理由和风险详情 | ConversationAgent 专属 |
+| `vector_search`（只读，scoped） | 补充查询学校介绍、专业就业报告（限定报告同省份/年份） | 与 Retrieval Agent 共用底层，范围限定 |
+| `check_compliance` | 对生成回复做禁词正则检测 | 与 Reflection Agent 共用 |
+
+ConversationAgent **禁止访问**的工具（通过 ToolFilter 隔离）：`update_profile`、`generate_candidates`、`render_report_template`、`check_subject_req`、`check_medical_restriction`——禁止修改任何状态，禁止触发重新评分。
+
+#### System Prompt 核心约束
+
+```
+你是问津 Agent 的报告解读助理，帮助用户理解他/她已生成的志愿规划报告。
+
+你可以做到：
+- 解读报告中的推荐结论和风险提示，引用报告内的具体数据
+- 解释冲稳保分层、梯度风险、保底充足性等专业术语
+- 补充查询学校/专业的公开信息（招生章程、就业报告）
+- 对"如果调整 X 条件，方案会如何变化"的假设问题，基于报告数据做定性分析
+
+你不能做到：
+- 给出确定性录取概率或保证（如"这所学校你稳了"、"有 90% 把握"）
+- 对报告数据进行修改或重新计算
+- 超出报告所用数据范围做推断
+- 替代人工复核员给出最终填报建议
+
+引用任何数据时，必须标明来源年份和省份（例："根据 2025 年河南省招生数据"）。
+无法确定时，明确说明"当前数据不足以判断"，不做推断性断言。
+```
+
+#### SSE 流式事件格式
+
+`POST /api/v1/reports/{id}/chat` 接受 `{"message": "...", "conversation_id": "conv_abc"}` 并返回 `text/event-stream`：
+
+```
+event: token
+data: {"token": "郑州大学被推荐"}
+
+event: token
+data: {"token": "的主要原因是..."}
+
+event: citation
+data: {"source_id": "src_001", "title": "2025年河南省本科批招生计划", "year": 2025}
+
+event: done
+data: {"conversation_id": "conv_abc", "message_id": "msg_007", "total_tokens": 1240}
+
+event: compliance_warning
+data: {"issue": "response_modified", "reason": "检测到潜在过承诺表述，已自动修正"}
+```
+
+`conversation_id` 为空时，服务端自动创建新对话并在 `done` 事件中返回新 `conversation_id`。
+
+#### 合规检查机制
+
+ConversationAgent 不走完整 Reflection 循环（避免对话延迟），改用**生成后合规修正**：
+
+1. ConversationAgent 完整生成回复（内部非流式调用，约 2-4s）。
+2. `check_compliance` 工具做禁词正则检测（< 10ms）。
+3. 检测通过 → 将回复以 `token` 事件序列流式推送给前端。
+4. 检测命中 → 自动修正违规片段后再流式推送，同时发送 `compliance_warning` 事件。
+5. 本版本不做 LLM Judge 语义检测（成本考量，仅正则禁词层）；Phase 2 引入。
+
+#### 对话历史存储
+
+| 存储层 | 策略 |
+| --- | --- |
+| **热层（Redis）** | Key: `conv:{report_id}:{user_id}`，TTL 7 天（与 LangGraph checkpoint 对齐），FIFO 截断保留最近 50 条消息 |
+| **冷层（PostgreSQL）** | `report_conversations` 表（见 Section 6.1），在首次发送和每次回复完成后异步写库，供历史查询 |
+
+每条消息结构：
+```json
+{
+  "message_id": "msg_007",
+  "role": "user" | "assistant",
+  "content": "为什么推荐郑州大学？",
+  "citations": [{"source_id": "src_001", "title": "2025年河南省招生计划", "year": 2025}],
+  "timestamp": "2026-07-01T10:00:00+08:00",
+  "compliance_modified": false
+}
+```
+
+#### Token 成本预估
+
+| 场景 | 输入 tokens | 输出 tokens | 估算成本（gpt-4o-mini） |
+| --- | --- | --- | --- |
+| 简单术语解释（"梯度风险是什么"） | ~2K | ~300 | ~$0.001 |
+| 报告内容解读（"为什么推荐这所学校"） | ~4K | ~600 | ~$0.003 |
+| 带 RAG 补充检索（"XX 专业就业如何"） | ~7K | ~800 | ~$0.005 |
+
+**限流规则**：每用户每日对话条数上限 30 条（在现有每日 10 次报告生成限流之外单独计数），Redis 计数器管理，超出返回 `429 rate_limited`。
+
 ---
 
 ## 11. 人工复核
@@ -1331,6 +1467,9 @@ MVP 阶段通过 LangSmith Dashboard + FastAPI `/health` 和 `/metrics` endpoint
 | `human_review_pending_count`  | 待复核任务积压              | > 20 条                                    |
 | `reflection_max_iter_rate`    | Reflection 达到最大轮次比例 | 5min 内 > 5%（模型或 prompt 质量下降信号） |
 | `run_timeout_rate`            | run 超时率                  | 5min 内 > 2%                               |
+| `chat_response_p95_latency_ms` | ConversationAgent P95 首字节延迟 | > 10s（首字节，含生成+合规检测） |
+| `chat_compliance_warning_rate` | 对话合规修正触发率          | 5min 内 > 2%（System Prompt 可能需要调整） |
+| `chat_daily_limit_rate`        | 用户触达每日 30 条上限比例  | > 5%（可能需要提高上限或引导用户分批提问） |
 
 ### 14.4 成本追踪
 
@@ -1372,6 +1511,11 @@ MVP 阶段通过 LangSmith Dashboard + FastAPI `/health` 和 `/metrics` endpoint
 - BM25 检索通过 `pg_bm25` 扩展实现，非原生 `tsvector`。
 - `chunks` 表有 `embedding_model` 字段，支持模型迁移过滤旧向量。
 - 人工复核超时全链路统一为 4h。
+- ConversationAgent 回复不包含禁词（`check_compliance` 正则检测覆盖对话输出，不低于 Reflection Agent 同等标准）。
+- ConversationAgent 不调用 `update_profile`、`generate_candidates`、`render_report_template` 等写状态工具（ToolFilter 隔离，可通过访问非授权工具的单元测试验证）。
+- 对话历史 Redis TTL 与 LangGraph checkpoint 对齐（7 天），过期后前端展示"对话历史已过期，可重新提问"。
+- 每用户每日对话条数限流 30 条，超出返回 `429 rate_limited`，响应头含 `Retry-After`。
+- `POST /api/v1/reports/{id}/chat` 对未完成（非 `completed` 状态）的 run 对应报告返回 `422`，防止对不完整报告问答。
 
 ### 15.2 质量指标
 
