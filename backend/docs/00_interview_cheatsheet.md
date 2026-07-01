@@ -16,10 +16,12 @@
 
 ### Q: 为什么用 LangGraph，不用 LangChain AgentExecutor / CrewAI？
 
-**核心**：三个核心需求只有 LangGraph 能同时满足：
-1. `interrupt()` + Checkpoint 支持跨进程 HITL 等待（最长 4h，期间进程可以重启）
-2. `Send` API 支持并行执行（Retrieval + Rule 并发，节省 8s 延迟）
-3. 节点可以是普通 Python 函数，不强制 LLM（确定性引擎直接复用）
+**核心**：三个核心需求 LangGraph 能较好满足：
+1. `Send` API 支持并行执行（Retrieval + Rule 并发，节省延迟）
+2. 节点可以是普通 Python 函数，不强制 LLM（确定性引擎直接复用）
+3. Checkpoint 支持进程重启后恢复（当前 MVP 用 MemorySaver；生产可换 PostgreSQL checkpointer）
+
+> **v1.1**：已移除 HITL `interrupt()` 流程，不再跨进程等待人工复核。
 
 ---
 
@@ -95,7 +97,9 @@
 
 ---
 
-### Q: HITL 中断等待 4h，进程重启怎么恢复？
+### Q: HITL 中断等待 4h，进程重启怎么恢复？（已移除，v1.1）
+
+**核心**：本项目 v1.1 起不再实现 HITL。若面试被问到，可说明曾设计 `interrupt()` + Checkpoint，但产品决策改为 Reflection best-effort 直接交付以降低复杂度。
 
 **核心**：`interrupt()` 调用时 LangGraph 自动把 State 快照存到 Checkpoint（Redis 热层 + PostgreSQL 冷层）。进程重启后，`resume()` 从 Checkpoint 恢复 State，图从 interrupt 点之后继续执行，之前完成的节点不重跑。
 
@@ -153,7 +157,7 @@
 | 单次 run token 上限 | 150K |
 | 每用户每日报告次数 | 10 次 |
 | Reflection 最大轮次 | 3 轮 |
-| 人工复核 SLA | 4h |
+| Reflection 最大轮次 | 3 轮后 best-effort 交付 |
 | 保底志愿硬下限 | 10 所 |
 | Context Pack token 预算 | 6K |
 | Reranker 候选数 → 精排数 | top-20 → top-8 |

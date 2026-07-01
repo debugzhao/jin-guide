@@ -1,0 +1,34 @@
+---
+description: 代码变更后同步更新相关文档（PRD、CLAUDE.md、backend/docs）
+alwaysApply: true
+---
+
+# 文档与代码同步
+
+修改业务逻辑、API、数据模型、Agent 图或前端路由时，**必须在同一任务内同步更新相关文档**，不得只改代码留文档过时。
+
+## 必查文档清单
+
+| 变更类型 | 需同步的文件 |
+| -------- | ------------ |
+| 后端 API / 鉴权 | `docs/backend-prd.md` Section 5、`CLAUDE.md` |
+| 数据模型 / 迁移 | `docs/backend-prd.md` Section 6、`backend/docs/03_data_model.md` |
+| Agent 图 / State | `docs/backend-prd.md` Section 10、`backend/docs/02_agent_design.md` |
+| 前端页面 / 路由 | `docs/frontend-prd.md` Section 6/8 |
+| 产品定位 / MVP 范围 | `README.md`、`docs/sprint-plan.md` |
+| 面试速查 / 架构 | `backend/docs/00_interview_cheatsheet.md`、`backend/docs/01_architecture_overview.md` |
+
+## 同步规范
+
+1. 在对应 PRD 的 **Changelog** 表新增一行，写明版本号、日期、变更摘要。
+2. 删除或废弃的功能：从 API/路由表中移除，或在章节顶部标注 **「已移除（vX.X）」**，勿留可误导的实现说明。
+3. 新增 env 变量：同步 `.env` 注释 + `docker-compose.yml` + PRD 配置说明。
+4. ORM 类名与 PRD 术语不一致时（如 `AuthSession`），文档用代码中的实际名称。
+5. 完成前自检：`grep` 文档中是否仍有已删除模块的关键词（如 `human_review`、`/reviews`、`phone` 验证码登录）。
+
+## 示例
+
+```
+❌ 只删 backend/app/api/v1/reviews.py，PRD 仍写 POST /reviews
+✅ 删代码 + 更新 backend-prd 5.1 接口表 + frontend-prd 路由表 + 移除 Section 11 或标注已移除
+```

@@ -6,7 +6,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目简介
 
-**问津 Agent** — 面向高考生和家长的 AI 志愿决策助理。核心能力：建档、规则校验、冲稳保方案生成、志愿表风险体检、人工复核（Human-in-the-loop）。PRD 文档在 `docs/` 目录，是理解业务逻辑的首要参考。
+**问津 Agent** — 面向高考生和家长的 AI 志愿决策助理。核心能力：建档、规则校验、冲稳保方案生成、志愿表风险体检。PRD 文档在 `docs/` 目录，是理解业务逻辑的首要参考。
+
+### 鉴权（当前实现）
+
+- **邮箱 + 密码**登录/注册，验证码经 **Resend** 发送（`RESEND_API_KEY`、`EMAIL_FROM=onboarding@resend.dev`）
+- API：`POST /auth/send-code`、`/auth/register`、`/auth/login`、`/auth/logout`、`GET /auth/me`
+- Session 存 `sessions` 表，ORM 类名 **`AuthSession`**（勿与 SQLAlchemy `Session` 混淆）
+- 验证码存 Redis（`auth:code:{email}`，TTL 10 分钟）
+
+### 已移除（v1.1）
+
+- 人工复核（HITL）：无 `human_review_node`、无 `/api/v1/reviews`、无 `/admin/reviews` 与 `/reports/[id]/review`
+- 手机号 + 短信验证码登录
 
 ---
 
@@ -125,13 +137,14 @@ GET /api/v1/reports?cursor=<opaque>&limit=20
 - **`province_thresholds`**：省份级冲稳保位次阈值配置表，替代代码内硬编码
 - **LangGraph checkpoint 表**（`checkpoints`/`checkpoint_blobs`/`checkpoint_writes`）：由 LangGraph 自动管理，不是业务表，不在 `alembic` 迁移中维护
 - **`agent_runs`** 通过 `thread_id` 与 LangGraph checkpoint 关联，只存业务元数据
-- 软删除字段：`documents.deleted_at`、`reports.deleted_at`
+- **`users`**：`email`（unique）、`password_hash`、`email_verified`、`openid`（预留）、`role`
+- **`sessions`**：ORM 模型类名为 `AuthSession`，表名 `sessions`
 
 ---
 
 ## 当前实现状态
 
-项目处于 Phase 1 早期。已有脚手架：
-- 前端：入口页（`/`）、快速测算（`/assess`）、建档向导（`/profile`）、报告页（`/reports/[id]`）、生成进度页（基础 UI）
-- 后端：模型定义（`backend/app/models/`）、API 路由骨架（`backend/app/api/v1/`）、Agent graph 占位（`backend/app/agent/nodes/mock_nodes.py`）
-- Agent 节点目前为 mock，真实实现待开发
+项目处于 Phase 1。已有：
+- 前端：入口页、快速测算、建档向导、报告页、生成进度页；Web 端居中 Modal 登录/注册
+- 后端：邮箱鉴权、LangGraph Agent 编排（Reflection 合规自检，无 HITL）、Resend 邮件验证码
+- Agent 节点：data_resolver → 并行 retrieval/policy_rule → recommendation → risk → report → reflection（最多 3 轮重试后直接交付）

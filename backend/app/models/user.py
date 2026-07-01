@@ -35,7 +35,7 @@ class User(Base):
     )
 
 
-class Session(Base):
+class AuthSession(Base):
     __tablename__ = "sessions"
 
     id: Mapped[str] = mapped_column(

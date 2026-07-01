@@ -1,12 +1,15 @@
 """Email delivery via Resend (https://resend.com). Free tier: 100 emails/day."""
-import httpx
+import asyncio
+
+import resend
 import structlog
 
 from app.config import settings
 
 logger = structlog.get_logger()
 
-RESEND_API_URL = "https://api.resend.com/emails"
+# Resend 测试阶段只能用此发件地址（无需验证域名）
+DEFAULT_FROM = "onboarding@resend.dev"
 
 
 def build_verification_email_html(code: str, ttl_minutes: int) -> str:
@@ -40,11 +43,33 @@ def build_verification_email_html(code: str, ttl_minutes: int) -> str:
 </html>"""
 
 
+def _resolve_from_address() -> str:
+    """Resend 测试阶段 from 必须是 onboarding@resend.dev。"""
+    configured = (settings.email_from or "").strip()
+    if not configured or "@" not in configured:
+        return DEFAULT_FROM
+    # 用户误填个人邮箱时自动纠正
+    if configured.endswith("@gmail.com") or configured.endswith("@qq.com"):
+        logger.warning("email_from_invalid_using_default", configured=configured)
+        return DEFAULT_FROM
+    return configured
+
+
+def _send_sync(to_email: str, code: str, ttl_minutes: int) -> dict:
+    resend.api_key = settings.resend_api_key
+    return resend.Emails.send({
+        "from": _resolve_from_address(),
+        "to": [to_email],
+        "subject": f"【问津】您的注册验证码是 {code}",
+        "html": build_verification_email_html(code, ttl_minutes),
+    })
+
+
 async def send_verification_code(to_email: str, code: str, ttl_minutes: int = 10) -> bool:
     """
-    Send verification code email.
+    Send verification code email via Resend SDK.
 
-    Returns True if email was sent via Resend.
+    Returns True if email was sent.
     Returns False in development when RESEND_API_KEY is not set (code logged instead).
     Raises RuntimeError when API key is configured but delivery fails.
     """
@@ -54,37 +79,16 @@ async def send_verification_code(to_email: str, code: str, ttl_minutes: int = 10
                 "email_skipped_no_api_key",
                 email=to_email,
                 code=code,
-                hint="Set RESEND_API_KEY in .env — get one free at https://resend.com",
+                hint="Set RESEND_API_KEY in .env and recreate backend container",
             )
             return False
         raise RuntimeError("邮件服务未配置")
 
-    payload = {
-        "from": settings.email_from,
-        "to": [to_email],
-        "subject": f"【问津】您的注册验证码是 {code}",
-        "html": build_verification_email_html(code, ttl_minutes),
-    }
+    try:
+        result = await asyncio.to_thread(_send_sync, to_email, code, ttl_minutes)
+    except Exception as exc:
+        logger.error("resend_send_failed", email=to_email, error=str(exc))
+        raise RuntimeError(f"验证码邮件发送失败：{exc}") from exc
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            RESEND_API_URL,
-            headers={
-                "Authorization": f"Bearer {settings.resend_api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=15.0,
-        )
-
-    if resp.status_code >= 400:
-        logger.error(
-            "resend_send_failed",
-            status=resp.status_code,
-            body=resp.text,
-            email=to_email,
-        )
-        raise RuntimeError("验证码邮件发送失败，请稍后重试")
-
-    logger.info("verification_email_sent", email=to_email)
+    logger.info("verification_email_sent", email=to_email, resend_id=result.get("id"))
     return True

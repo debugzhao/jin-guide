@@ -18,3 +18,4 @@ python-multipart==0.0.12
 httpx==0.28.1
 pgvector==0.3.6
 structlog==24.4.0
+resend==2.4.0

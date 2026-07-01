@@ -1,12 +1,14 @@
 # 核心业务流程设计
 
+> **v1.1**：已移除人工复核等待流程；鉴权改为 `POST /auth/send-code` + `/auth/register` + `/auth/login`（邮箱+密码，Resend 验证码）。
+
 ---
 
 ## 1. 核心业务全景
 
 问津 Agent 的主流程是一个**高风险决策辅助系统**，核心约束是：
 
-> 不能给出"保证录取"的结论，只能给出"基于数据的辅助决策"，并在高风险场景强制引入人工复核。
+> 不能给出"保证录取"的结论，只能给出"基于数据的辅助决策"，并在 UI 明确展示高风险说明。
 
 这个约束贯穿所有业务流程设计。
 
@@ -19,9 +21,8 @@
 ```mermaid
 flowchart TD
     START(["用户访问问津 Agent"])
-    --> ANON["自动创建匿名会话\nPOST /auth/session\n返回 session_id 存 Cookie"]
-
-    ANON --> CHECK_DATA["用户填写省份后\n立即调 GET /data/availability\n检查该省份数据是否就绪"]
+    --> LOGIN["注册/登录\nPOST /auth/send-code + /register\n或 POST /auth/login"]
+    LOGIN --> CHECK_DATA["用户填写省份后\n立即调 GET /data/availability\n检查该省份数据是否就绪"]
     CHECK_DATA -- "数据未就绪" --> WARN["提示'当前省份数据尚未就绪'\n用户可继续填档案，生成时会再次校验"]
     CHECK_DATA -- "就绪" --> PROFILE_WIZARD
 
@@ -37,14 +38,9 @@ flowchart TD
 
     SSE --> AGENT_RUNNING["Agent 执行中\n各节点依次推送 SSE 事件\nnode_started / rule_checked / candidates_ready"]
 
-    AGENT_RUNNING --> HITL_CHECK{"高风险？"}
-    HITL_CHECK -- "否" --> REPORT_READY(["报告就绪\nSSE completed 事件\n前端跳转报告详情页"])
-    HITL_CHECK -- "是" --> HITL_WAIT["SSE human_interrupt 事件\n前端切换到'复核等待'状态\n展示预计等待时间 4h"]
-
-    HITL_WAIT --> REVIEWER_SUBMIT["复核员审核并提交结论\nPATCH /reviews/{id}"]
-    REVIEWER_SUBMIT --> RESUME["图从 interrupt 点恢复\nPOST /agent/runs/{id}/resume"]
-    RESUME --> REPORT_READY
+    AGENT_RUNNING --> REPORT_READY(["报告就绪\nSSE completed 事件\n前端跳转报告详情页"])
 ```
+> v1.1 已移除 HITL 分支（原 `human_interrupt` / 复核等待 / `resume`）。
 
 ### 2.2 建档完整度与追问策略
 

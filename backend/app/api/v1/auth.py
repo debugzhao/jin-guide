@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.models.user import Session, User
+from app.models.user import AuthSession, User
 from app.services.email import send_verification_code
 
 logger = structlog.get_logger()
@@ -109,9 +109,9 @@ async def _get_current_user(
     if not session_token:
         return None
     result = await db.execute(
-        select(Session).where(
-            Session.id == session_token,
-            Session.expires_at > datetime.now(UTC),
+        select(AuthSession).where(
+            AuthSession.id == session_token,
+            AuthSession.expires_at > datetime.now(UTC),
         )
     )
     session = result.scalar_one_or_none()
@@ -213,25 +213,26 @@ async def register(
         role="user",
     )
     db.add(user)
+    await db.flush()
 
     expires_at_session = datetime.now(UTC) + timedelta(days=_SESSION_DAYS)
-    session = Session(
+    auth_session = AuthSession(
         id=str(uuid4()),
         user_id=user.id,
         expires_at=expires_at_session,
     )
-    db.add(session)
+    db.add(auth_session)
     await db.commit()
 
     response.set_cookie(
         key="session_token",
-        value=session.id,
+        value=auth_session.id,
         httponly=True,
         samesite="strict",
         expires=int(expires_at_session.timestamp()),
     )
     logger.info("user_registered", user_id=user.id, email=user.email)
-    return AuthOut(user_id=user.id, email=user.email, session_id=session.id)
+    return AuthOut(user_id=user.id, email=user.email, session_id=auth_session.id)
 
 
 @router.post("/login", response_model=AuthOut)
@@ -250,23 +251,23 @@ async def login(
         raise HTTPException(status_code=401, detail="邮箱或密码不正确")
 
     expires_at = datetime.now(UTC) + timedelta(days=_SESSION_DAYS)
-    session = Session(
+    auth_session = AuthSession(
         id=str(uuid4()),
         user_id=user.id,
         expires_at=expires_at,
     )
-    db.add(session)
+    db.add(auth_session)
     await db.commit()
 
     response.set_cookie(
         key="session_token",
-        value=session.id,
+        value=auth_session.id,
         httponly=True,
         samesite="strict",
         expires=int(expires_at.timestamp()),
     )
     logger.info("user_logged_in", user_id=user.id, email=user.email)
-    return AuthOut(user_id=user.id, email=user.email, session_id=session.id)
+    return AuthOut(user_id=user.id, email=user.email, session_id=auth_session.id)
 
 
 @router.post("/logout")

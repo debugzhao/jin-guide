@@ -1,5 +1,7 @@
 # Agent 编排设计
 
+> **v1.1（2026-07-01）**：已移除 `human_review_node` 与 HITL `interrupt()`；Reflection 超 3 轮后 best-effort 交付。当前图：`data_resolver → 并行 retrieval/policy_rule → recommendation → risk → report → reflection`。
+
 ---
 
 ## 1. 为什么选 LangGraph 而不是 LangChain Agents / CrewAI / AutoGen
