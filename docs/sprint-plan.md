@@ -1,8 +1,9 @@
 # 问津 Agent — 执行 Sprint 计划
 
-版本：v1.1  
+版本：v1.2  
 日期：2026-07-01  
 
+> **v1.2 更新**：新增 Phase 2 Sprint（P2 Day 1-3），包含两个新功能：① 报告问答 Chat Panel（ConversationAgent）② Admin Debug 控制台（LangGraph 实时拓扑图 + Debug 事件时间线）。新增 Demo 案例 #6 / #7。  
 > **v1.1 实现变更**：M3 的 HITL 复核闭环已取消；鉴权改为邮箱+密码。代码为准，本计划部分 Day 8-9 HITL 条目仅作历史参考。
 目标：**7-10 天完成三个里程碑，部署上线，可作为面试作品集展示**
 
@@ -16,11 +17,12 @@
 
 ## 里程碑总览
 
-| 里程碑                    | 时间     | 目标                      | 结束时能展示                                      |
-| ------------------------- | -------- | ------------------------- | ------------------------------------------------- |
-| **M1：骨架跑通**          | Day 1-3  | 全链路可点击，数据 mock   | 建档 → 进度页 → 报告页完整走通；LiteLLM 网关跑通  |
-| **M2：核心引擎**          | Day 4-7  | 真实业务逻辑，真实数据    | 三套方案用真实算法；RAG 证据检索；LangSmith trace |
-| **M3：Agent 深化 + 上线** | Day 8-10 | 完整 Agent 编排，部署线上 | Reflection 自检；邮箱鉴权；线上 URL 可访问（**HITL 已移除**） |
+| 里程碑                    | 时间        | 目标                         | 结束时能展示                                                         |
+| ------------------------- | ----------- | ---------------------------- | -------------------------------------------------------------------- |
+| **M1：骨架跑通**          | Day 1-3     | 全链路可点击，数据 mock      | 建档 → 进度页 → 报告页完整走通；LiteLLM 网关跑通                     |
+| **M2：核心引擎**          | Day 4-7     | 真实业务逻辑，真实数据       | 三套方案用真实算法；RAG 证据检索；LangSmith trace                    |
+| **M3：Agent 深化 + 上线** | Day 8-10    | 完整 Agent 编排，部署线上    | Reflection 自检；邮箱鉴权；线上 URL 可访问（**HITL 已移除**）        |
+| **Phase 2：增强功能**     | P2 Day 1-3  | Chat Panel + Admin Debug     | 报告问答 AI 助手；LangGraph 实时拓扑图；Debug 事件时间线             |
 
 ---
 
@@ -261,15 +263,115 @@
 
 ---
 
-## Demo 案例清单（M3 必须就绪）
+## Demo 案例清单（M3 + Phase 2 就绪）
 
-| #   | 案例类型       | 输入                                        | 预期输出                                   | 展示技术点                                 |
-| --- | -------------- | ------------------------------------------- | ------------------------------------------ | ------------------------------------------ |
-| 1   | 正常流程       | 省份河南 / 分数 612 / 位次 32680 / 物理化学 | 三套方案，均衡型推荐 8 所，有证据链        | 完整 Agent 链路、RAG 证据、LangSmith trace |
-| 2   | 高风险触发复核 | 同上但保底只填 2 所                         | 报告生成后触发 HITL，展示复核等待页        | interrupt/resume 机制                      |
-| 3   | 选科冲突       | 选历史，但填报了物理类专业                  | 规则过滤命中，报告标红，选科冲突风险项     | Rule Engine 确定性校验                     |
-| 4   | 合规拦截       | 在测试用例中注入"保证录取"表述              | Reflection Agent 拦截，report_draft 被修正 | Reflection + 合规自检                      |
-| 5   | 体检限制       | 填报临床医学，档案注明色觉异常              | 体检限制高风险标红，建议复核               | 医学限制规则                               |
+| #   | 案例类型               | 输入                                          | 预期输出                                             | 展示技术点                                         |
+| --- | ---------------------- | --------------------------------------------- | ---------------------------------------------------- | -------------------------------------------------- |
+| 1   | 正常流程               | 省份河南 / 分数 612 / 位次 32680 / 物理化学   | 三套方案，均衡型推荐 8 所，有证据链                  | 完整 Agent 链路、RAG 证据、LangSmith trace         |
+| 2   | 高风险触发复核         | 同上但保底只填 2 所                           | 报告生成后触发 HITL，展示复核等待页                  | interrupt/resume 机制                              |
+| 3   | 选科冲突               | 选历史，但填报了物理类专业                    | 规则过滤命中，报告标红，选科冲突风险项               | Rule Engine 确定性校验                             |
+| 4   | 合规拦截               | 在测试用例中注入"保证录取"表述                | Reflection Agent 拦截，report_draft 被修正           | Reflection + 合规自检                              |
+| 5   | 体检限制               | 填报临床医学，档案注明色觉异常                | 体检限制高风险标红，建议复核                         | 医学限制规则                                       |
+| 6   | 报告问答 Chat *(P2)*   | 报告生成后，用户提问"为什么推荐郑州大学？"    | ConversationAgent 流式回复，引用 2025 年招生数据     | ConversationAgent、RAG-over-report、行内引用标签   |
+| 7   | Admin Debug *(P2)*     | 管理员打开 `/admin/debug`，触发一条新 run     | 拓扑图节点实时着色，并行区高亮，时间线实时滚动       | Debug SSE 事件、静态拓扑图、节点着色动画           |
+
+---
+
+## Phase 2 Sprint（P2 Day 1-3）
+
+**目标**：在 M3 上线后，3 天内交付两个高价值增强功能：报告问答 Chat Panel 和 Admin Debug 控制台。
+
+### Phase 2 DoD
+
+```
+✅ POST /api/v1/reports/{id}/chat 可用，流式 SSE 回复正常
+✅ ConversationAgent 基于报告上下文回答，禁词正则检测覆盖对话输出
+✅ 每用户每日 30 条对话限流生效，超限返回 429
+✅ 对话历史写入 Redis（TTL 7天）+ PostgreSQL 双层存储
+✅ 前端 Chat Panel：移动端底部 Sheet（70vh）/ 桌面 Drawer（380px）均正确展开
+✅ 4 条预设建议问题展示，点击直接发送
+✅ AI 回复含行内来源引用标签，点击跳转 /sources/[id]
+✅ GET /api/v1/admin/runs 和 /admin/runs/{id} 可用（role=admin 鉴权）
+✅ GET /api/v1/admin/runs/{id}/debug-events SSE 支持历史回放（0-0）
+✅ LangGraph 节点执行时正确推送 node_completed / tool_called / parallel_fan_out / parallel_fan_in 等 Debug SSE 事件
+✅ debug_summary_json 在 run 完成后由 Worker 写入 agent_runs 表
+✅ 前端 /admin/debug：三栏布局（Run 列表 + 拓扑图 + 时间线）渲染正确
+✅ LangGraph 拓扑图 10 个节点正确布局，节点状态随 Debug SSE 实时着色
+✅ 并行区域（retrieval + policy_rule）边流动动画正常，fan_in 后动画消失
+✅ Debug 事件时间线正确展示 8 种事件颜色，Auto-scroll 开启时自动滚动到最新
+✅ role != admin 访问 /admin/debug 跳转 403，不渲染任何数据
+```
+
+---
+
+### P2 Day 1：ConversationAgent 后端 + Debug SSE 基础
+
+**目标**：Chat API 可用，LangGraph 节点开始发出 Debug 事件。
+
+| 任务 | 类型 | 参考 |
+| --- | --- | --- |
+| Alembic 新增 `report_conversations` 表 + `agent_runs.debug_summary_json` JSONB 列 | backend | backend-prd Section 6.1 |
+| `ConversationAgent`：加载报告上下文（plan_json 压缩 + profile），调用 LiteLLM 生成回复 | backend | backend-prd Section 10.9 |
+| `ConversationAgent` 工具：`get_report_context`（只读），`vector_search`（scoped 到同省份年份） | backend | backend-prd Section 10.9 |
+| `POST /api/v1/reports/{id}/chat`：SSE 端点，生成后合规检测，通过后流式推送 `token` 事件 | backend | backend-prd Section 5.1, 10.9 |
+| `GET /api/v1/reports/{id}/chat/history`：从 Redis / PostgreSQL 读取对话历史 | backend | backend-prd Section 5.1 |
+| `DELETE /api/v1/reports/{id}/chat`：清空 Redis + PostgreSQL 对话历史 | backend | backend-prd Section 5.1 |
+| 对话每日 30 条限流：Redis 计数器，超限返回 `429 rate_limited` | backend | backend-prd Section 10.9 |
+| **新建 `backend/app/agent/debug_events.py`**：`emit_debug_event(run_id, event_type, data)` 工具函数，XADD 写入 Redis Stream，try/except 静默 | backend | backend-prd Section 5.8 |
+| LangGraph 各节点入口 / 出口注入 `emit_debug_event` 调用，推送 `node_started` / `node_completed` 事件 | agent | backend-prd Section 5.8 |
+| `parallel_fan_out` / `parallel_fan_in` 事件：在 `after_data_resolver` 函数和 merge_node 中注入 | agent | backend-prd Section 5.8 |
+
+**P2 Day 1 验收**：`POST /api/v1/reports/{id}/chat` 返回流式回复；执行任意一条 run 后，Redis Stream 中可见 `node_started` + `node_completed` + `parallel_fan_out` + `parallel_fan_in` 事件。
+
+---
+
+### P2 Day 2：Chat Panel 前端 + Admin Debug 后端 API
+
+**目标**：Chat Panel 前端可用；Admin Run 列表和单 Run 元数据 API 可用。
+
+| 任务 | 类型 | 参考 |
+| --- | --- | --- |
+| `ChatPanel` 组件：桌面 Drawer（380px）/ 移动 Sheet（70vh），含历史列表和输入区 | frontend | frontend-prd Section 8.6, 10 |
+| `ChatSuggestedQuestions`：对话为空时展示 4 条预设问题卡片，点击直接发送 | frontend | frontend-prd Section 8.6 |
+| `ChatMessageBubble`：用户右对齐 / AI 左对齐，含打字动画 `ChatTypingIndicator` | frontend | frontend-prd Section 8.6, 10 |
+| `ChatInput`：多行文本框 200 字上限，Enter 发送 / Shift+Enter 换行 | frontend | frontend-prd Section 10 |
+| `CitationInline`：行内来源引用徽章，hover 展示 Tooltip，点击跳转 `/sources/[id]` | frontend | frontend-prd Section 10 |
+| 报告页"问一问"悬浮按钮（仅 run completed 时展示），点击打开 ChatPanel | frontend | frontend-prd Section 8.6 |
+| Zustand 新增 Chat 状态：`isChatPanelOpen` / `conversation_id` / 消息缓存 / `streamingToken` | frontend | frontend-prd Section 11.1 |
+| SSE 订阅 `POST /api/v1/reports/{id}/chat`：逐 token 追加到 `streamingToken`，收到 `done` 后提交为完整消息 | frontend | frontend-prd Section 8.6 |
+| `GET /api/v1/admin/runs`：返回最近 50 条 run 的调试摘要（含 province、耗时、cost_usd、degraded_agents、triggered_human_review） | backend | backend-prd Section 14.5 |
+| `GET /api/v1/admin/runs/{id}`：返回 node_timings、tool_call_summary、state_summary、cost_breakdown（从 debug_summary_json 读取） | backend | backend-prd Section 14.5 |
+| `GET /api/v1/admin/metrics/summary`：从 Redis 计数器聚合返回指标快照 | backend | backend-prd Section 14.5 |
+| FastAPI `require_admin_role` Dependency 注入所有 `/api/v1/admin/*` 路由 | backend | backend-prd Section 14.5 |
+| ARQ Worker：run 完成后聚合 Redis Stream debug 事件，写入 `agent_runs.debug_summary_json` | backend | backend-prd Section 14.5 |
+| **P2 Day 2 Chat 验收**：Chat Panel 在报告页正确展开，预设问题点击可发送，AI 流式回复正常 | QA | frontend-prd Section 14.1 |
+
+**P2 Day 2 验收**：Chat Panel 端到端可用；`GET /api/v1/admin/runs` 返回带调试摘要的 run 列表。
+
+---
+
+### P2 Day 3：Admin Debug 前端（拓扑图 + 时间线）
+
+**目标**：`/admin/debug` 完整可用，LangGraph 拓扑图实时着色，Debug 事件时间线可回放。
+
+| 任务 | 类型 | 参考 |
+| --- | --- | --- |
+| `/admin/debug` 路由：`role=admin` 守卫（服务端 + 客户端双重检查），非 admin 跳转 403 | frontend | frontend-prd Section 8.11 |
+| `DebugMetricsBar`：顶部指标条，TanStack Query 每 30s 轮询，错误率 > 10% 变红，P95 > 60s 数字标红 | frontend | frontend-prd Section 8.11, 10 |
+| `DebugRunList`：左侧 Run 列表，状态/耗时/费用/降级标记，实时跟随开关，三种筛选条件 | frontend | frontend-prd Section 8.11, 10 |
+| `GET /api/v1/admin/runs/{id}/debug-events`：Admin Debug SSE 端点，`XREAD 0-0` 历史回放，run 已完成时发送 `stream_end` 关闭连接 | backend | backend-prd Section 5.8, 14.5 |
+| `LangGraphTopology`：CSS Grid + 绝对定位 SVG 边线，10 节点固定布局 | frontend | frontend-prd Section 8.11, 10 |
+| `TopologyNode`：6 种状态颜色（pending/running/completed/degraded/failed/interrupted）+ 脉冲动画（running）+ 徽章（degraded/failed） | frontend | frontend-prd Section 8.11, 10 |
+| `TopologyEdge`：SVG 线条 4 种样式（主流程/并行/条件/interrupt）；`parallel_fan_out` 事件触发并行边流动动画，`fan_in` 后动画消失 | frontend | frontend-prd Section 8.11, 10 |
+| Reflection 回退循环箭头：`reflection_iteration(passed=false)` 事件时闪烁，节点右侧展示 `N/3` 迭代计数 | frontend | frontend-prd Section 8.11 |
+| `NodeDetailPanel`：点击节点后展开，展示该节点工具调用列表（来自 `tool_called` 事件）、降级详情、Reflection 迭代状态 | frontend | frontend-prd Section 8.11, 10 |
+| Zustand Debug 状态：`selectedRunId` / `isLiveFollowing` / `nodeStates` Map / `debugEvents` 数组 / `timelineFilter` | frontend | frontend-prd Section 11.1 |
+| Debug SSE 订阅：消费 `debug-events` 流，按事件类型更新 `nodeStates`，追加 `debugEvents` | frontend | frontend-prd Section 8.11 |
+| `DebugEventTimeline` + `DebugEventRow`：8 种事件颜色编码，筛选条，Auto-scroll，底部固定"在 LangSmith 查看 ↗"按钮 | frontend | frontend-prd Section 8.11, 10 |
+| **Demo 案例 #6**：Chat Panel 演示（提问 → 流式回复 → 行内引用标签） | demo | sprint-plan Demo #6 |
+| **Demo 案例 #7**：Admin Debug 演示（执行 run，实时观察拓扑图节点着色 → 并行边高亮 → 时间线事件） | demo | sprint-plan Demo #7 |
+
+**P2 Day 3 验收**：Phase 2 DoD 全部打勾；Demo #6 / #7 可现场演示。
 
 ---
 
@@ -279,11 +381,12 @@
 
 在 GitHub repo → Issues → Milestones 创建：
 
-| Milestone    | Due Date | 描述                                    |
-| ------------ | -------- | --------------------------------------- |
-| M1：骨架跑通 | Day 3    | 全链路联通，mock 数据可 demo            |
-| M2：核心引擎 | Day 7    | 真实业务逻辑，RAG 检索，LangSmith trace |
-| M3：上线     | Day 10   | HITL 闭环，线上部署，demo 就绪          |
+| Milestone        | Due Date    | 描述                                            |
+| ---------------- | ----------- | ----------------------------------------------- |
+| M1：骨架跑通     | Day 3       | 全链路联通，mock 数据可 demo                    |
+| M2：核心引擎     | Day 7       | 真实业务逻辑，RAG 检索，LangSmith trace         |
+| M3：上线         | Day 10      | HITL 闭环，线上部署，demo 就绪                  |
+| Phase 2：增强功能 | P2 Day 3   | Chat Panel + Admin Debug 控制台交付              |
 
 ### Labels 设置
 
@@ -298,7 +401,7 @@ test        灰色   单元测试 / 集成测试
 
 ### Issue 模板
 
-每个 Issue 标题格式：`[M1/M2/M3] 功能描述`，正文包含：
+每个 Issue 标题格式：`[M1/M2/M3/P2] 功能描述`，正文包含：
 
 - 具体任务列表（checkbox）
 - 参考 PRD 章节链接
@@ -310,11 +413,13 @@ test        灰色   单元测试 / 集成测试
 
 ---
 
-## 当前版本 Phase 2 留存项
+## Phase 2 留存项（P2 Day 4+ 或 Phase 3）
 
-以下功能不影响技术深度展示，不在本 Sprint 内实现：
+> **已移入 Phase 2 Sprint**：报告问答 Chat Panel（P2 Day 1-2）、Admin Debug 控制台（P2 Day 2-3）。
 
-| 功能                           | 原因                                        | Phase 2 切入点                          |
+以下功能不影响技术深度展示，暂不在本 Sprint 内实现：
+
+| 功能                           | 原因                                        | 切入点                                  |
 | ------------------------------ | ------------------------------------------- | --------------------------------------- |
 | 志愿表文件上传 + OCR           | 与核心技术点无关，需额外文件解析服务        | 引入异步文件处理后实现                  |
 | 自托管 BGE embedding（需 GPU） | 只改 LiteLLM config 即可切换，无代码变更    | Railway 支持 GPU 实例后迁移             |
@@ -322,6 +427,7 @@ test        灰色   单元测试 / 集成测试
 | HITL `need_more_info` 子流程   | 主干 approved/rejected 已完整，子流程是增量 | 复核员反馈收集后实现                    |
 | 黄金评测集 30-50 案例          | 5-10 个够 demo，大批量自动化是 CI 工作      | Phase 2 引入 LangSmith Dataset 自动评测 |
 | 多省份数据                     | 窄而深比宽而浅更有价值，1 省做透即可        | 验证河南省数据链路稳定后扩展            |
+| Chat LLM Judge 合规层          | 正则层先上，LLM Judge 是增量优化            | Chat 稳定后接入，参考 backend-prd 12.1  |
 
 ---
 
