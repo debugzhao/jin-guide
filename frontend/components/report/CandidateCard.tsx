@@ -4,7 +4,8 @@ import { useState } from 'react'
 import { cn } from '@/lib/utils'
 import Card from '@/components/ui/Card'
 import Badge from '@/components/ui/Badge'
-import { ChevronDown, ChevronUp, ExternalLink } from 'lucide-react'
+import EvidenceDrawer from '@/components/report/EvidenceDrawer'
+import { ChevronDown, ChevronUp, ExternalLink, BookOpen } from 'lucide-react'
 import type { Candidate, BadgeVariant } from '@/types'
 
 interface CandidateCardProps {
@@ -26,6 +27,7 @@ const tierLabel: Record<string, string> = {
 
 export default function CandidateCard({ candidate, rank }: CandidateCardProps) {
   const [expanded, setExpanded] = useState(false)
+  const [evidenceOpen, setEvidenceOpen] = useState(false)
 
   return (
     <Card className="p-4">
@@ -106,8 +108,24 @@ export default function CandidateCard({ candidate, rank }: CandidateCardProps) {
               查看数据来源 <ExternalLink className="w-3 h-3" />
             </a>
           )}
+          {(candidate.evidenceIds?.length ?? 0) > 0 && (
+            <button
+              onClick={() => setEvidenceOpen(true)}
+              className="flex items-center gap-1 text-xs text-[#0D9488]"
+            >
+              <BookOpen className="w-3 h-3" />
+              查看证据来源（{candidate.evidenceIds!.length} 项）
+            </button>
+          )}
         </div>
       )}
+
+      <EvidenceDrawer
+        open={evidenceOpen}
+        onClose={() => setEvidenceOpen(false)}
+        evidenceIds={candidate.evidenceIds ?? []}
+        schoolName={candidate.schoolName}
+      />
     </Card>
   )
 }

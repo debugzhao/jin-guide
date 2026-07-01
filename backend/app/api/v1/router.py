@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import auth, profile, agent, reports, data, risk, volunteer
+from app.api.v1 import auth, profile, agent, reports, data, risk, volunteer, sources
 
 router = APIRouter()
 
@@ -11,3 +11,4 @@ router.include_router(reports.router, prefix="/reports", tags=["reports"])
 router.include_router(data.router, prefix="/data", tags=["data"])
 router.include_router(risk.router, prefix="/risk", tags=["risk"])
 router.include_router(volunteer.router, prefix="/volunteer", tags=["volunteer"])
+router.include_router(sources.router, prefix="/sources", tags=["sources"])

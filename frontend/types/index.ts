@@ -25,6 +25,7 @@ export interface Candidate {
   subjectRequirements: string
   reasons: string[]
   dataSourceUrl?: string
+  evidenceIds?: string[]   // source document IDs for EvidenceDrawer
 }
 
 export interface RiskItem {

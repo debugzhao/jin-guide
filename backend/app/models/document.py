@@ -2,10 +2,13 @@ from datetime import UTC, datetime
 from typing import Optional
 from uuid import uuid4
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import DateTime, ForeignKey, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+
+EMBEDDING_DIMS = 1536
 
 
 class Document(Base):
@@ -44,8 +47,7 @@ class Chunk(Base):
         String(36), ForeignKey("documents.id")
     )
     content: Mapped[str] = mapped_column(Text)
-    # Placeholder for pgvector in M2; stored as Text for now
-    embedding: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    embedding: Mapped[Optional[list]] = mapped_column(Vector(EMBEDDING_DIMS), nullable=True)
     # Model identifier used to generate embedding (for migration filtering)
     embedding_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     # Metadata: province, year, university_id, major_id, page_num, etc.

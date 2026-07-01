@@ -15,4 +15,5 @@ langsmith==0.1.147
 python-jose[cryptography]==3.3.0
 python-multipart==0.0.12
 httpx==0.28.1
+pgvector==0.3.6
 structlog==24.4.0
