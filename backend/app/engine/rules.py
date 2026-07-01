@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any
 from sqlalchemy import select, func, text
 from sqlalchemy.orm import Session
+from langsmith import traceable
 
 from app.agent.tool_response import ToolResponse
 from app.models.admission import University, AdmissionScore, SubjectRequirement
@@ -23,6 +24,7 @@ _SUBJECT_NAMES = {"物理", "化学", "生物", "历史", "政治", "地理"}
 
 # ── 1. 选科资格校验 ────────────────────────────────────────────────────────────
 
+@traceable(name="rule:check_subject_req", run_type="tool")
 def check_subject_req(
     university_id: str,
     major_name: str,
@@ -93,6 +95,7 @@ def check_subject_req(
 
 # ── 2. 体检限制校验 ───────────────────────────────────────────────────────────
 
+@traceable(name="rule:check_medical_restriction", run_type="tool")
 def check_medical_restriction(
     university_id: str,
     major_name: str,
@@ -161,6 +164,7 @@ def check_medical_restriction(
 
 # ── 3. 批次资格校验 ───────────────────────────────────────────────────────────
 
+@traceable(name="rule:check_batch_eligibility", run_type="tool")
 def check_batch_eligibility(
     student_rank: int,
     province: str,
@@ -232,6 +236,7 @@ def check_batch_eligibility(
 
 # ── 4. 学费预算校验 ────────────────────────────────────────────────────────────
 
+@traceable(name="rule:check_budget", run_type="tool")
 def check_budget(
     university_id: str,
     family_budget_per_year: int,

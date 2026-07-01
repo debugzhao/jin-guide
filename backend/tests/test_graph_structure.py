@@ -6,14 +6,14 @@ from app.agent.graph import agent_graph, create_graph
 
 
 class TestGraphNodes:
-    def test_all_six_nodes_present(self):
+    def test_all_eight_nodes_present(self):
         nodes = set(agent_graph.nodes)
-        assert "data_resolver" in nodes
-        assert "retrieval_agent" in nodes
-        assert "policy_rule_agent" in nodes
-        assert "recommendation" in nodes
-        assert "risk" in nodes
-        assert "report" in nodes
+        expected = {
+            "data_resolver", "retrieval_agent", "policy_rule_agent",
+            "recommendation", "risk", "report", "reflection", "human_review",
+        }
+        for n in expected:
+            assert n in nodes, f"Node '{n}' missing from graph"
 
     def test_no_mock_nodes(self):
         nodes = set(agent_graph.nodes)

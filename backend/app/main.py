@@ -1,3 +1,5 @@
+import os
+
 import structlog
 from arq import create_pool
 from arq.connections import RedisSettings
@@ -8,6 +10,13 @@ from sqlalchemy import text
 from app.api.v1.router import router as v1_router
 from app.config import settings
 from app.database import engine
+
+# LangSmith tracing: must be set before any LangChain/LangGraph import creates a client.
+# LangGraph auto-reads these env vars; no code changes needed in graph.py.
+if settings.langsmith_api_key:
+    os.environ["LANGCHAIN_TRACING_V2"] = "true"
+    os.environ["LANGCHAIN_API_KEY"] = settings.langsmith_api_key
+    os.environ["LANGCHAIN_PROJECT"] = settings.langsmith_project
 
 logger = structlog.get_logger()
 
