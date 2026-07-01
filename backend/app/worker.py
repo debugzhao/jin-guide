@@ -35,16 +35,25 @@ configure_logging()
 logger = structlog.get_logger()
 
 
-async def _stream_graph(graph_input, config: dict, run_id: str) -> None:
+async def _stream_graph(
+    graph_input, config: dict, run_id: str
+) -> dict:
     """
     Drive the graph via astream(stream_mode="updates") and log one structured
     line per completed superstep: run_id, node, event, latency_ms.
+
+    Returns a debug_summary dict for writing to agent_runs.debug_summary_json.
     """
+    node_timings: dict[str, float] = {}
+    tool_call_counts: dict[str, int] = {}
+    degraded_agents: list[str] = []
     step_started_at = time.perf_counter()
+
     async for chunk in agent_graph.astream(graph_input, config=config, stream_mode="updates"):
         latency_ms = round((time.perf_counter() - step_started_at) * 1000, 1)
         step_started_at = time.perf_counter()
-        for node_name in chunk:
+        for node_name, node_state in chunk.items():
+            node_timings[node_name] = latency_ms
             logger.info(
                 "agent_node_completed",
                 run_id=run_id,
@@ -52,6 +61,21 @@ async def _stream_graph(graph_input, config: dict, run_id: str) -> None:
                 event="node_completed",
                 latency_ms=latency_ms,
             )
+            # Collect degraded agents from state delta
+            if isinstance(node_state, dict):
+                for agent_name in node_state.get("degraded_agents", []):
+                    if agent_name not in degraded_agents:
+                        degraded_agents.append(agent_name)
+
+    return {
+        "node_timings": node_timings,
+        "tool_call_summary": [
+            {"node": n, "count": c} for n, c in tool_call_counts.items()
+        ],
+        "state_summary": {"nodes_completed": list(node_timings.keys())},
+        "degraded_agents": degraded_agents,
+        "triggered_human_review": False,
+    }
 
 
 def _build_initial_state(run: AgentRun) -> VolunteerPlanState:
@@ -143,9 +167,16 @@ async def run_agent(ctx: dict, run_id: str) -> None:
     logger.info("agent_run_started", run_id=run_id, node="run", event="run_started")
 
     try:
-        await _stream_graph(state, config, run_id)
+        debug_summary = await _stream_graph(state, config, run_id)
 
         total_tokens, cost_usd, trace_url = _get_langsmith_stats(ls_run_id)
+        duration_seconds = round(time.perf_counter() - run_started_at, 2)
+
+        # Enrich debug summary with cost info
+        debug_summary["cost_breakdown"] = {
+            "cost_usd": cost_usd,
+            "cost_tokens": total_tokens,
+        }
 
         async with async_session_maker() as db2:
             result2 = await db2.execute(select(AgentRun).where(AgentRun.id == run_id))
@@ -156,6 +187,8 @@ async def run_agent(ctx: dict, run_id: str) -> None:
                 run2.cost_tokens = total_tokens
                 run2.cost_usd = cost_usd
                 run2.trace_url = trace_url
+                run2.duration_seconds = duration_seconds
+                run2.debug_summary_json = debug_summary
                 await db2.commit()
 
         logger.info(
@@ -163,11 +196,12 @@ async def run_agent(ctx: dict, run_id: str) -> None:
             run_id=run_id,
             node="run",
             event="run_completed",
-            latency_ms=round((time.perf_counter() - run_started_at) * 1000, 1),
+            latency_ms=round(duration_seconds * 1000, 1),
         )
 
     except Exception as exc:
-        latency_ms = round((time.perf_counter() - run_started_at) * 1000, 1)
+        duration_seconds = round(time.perf_counter() - run_started_at, 2)
+        latency_ms = round(duration_seconds * 1000, 1)
         async with async_session_maker() as db3:
             result3 = await db3.execute(select(AgentRun).where(AgentRun.id == run_id))
             run3 = result3.scalar_one_or_none()
@@ -175,6 +209,7 @@ async def run_agent(ctx: dict, run_id: str) -> None:
                 run3.status = "failed"
                 run3.error_msg = str(exc)
                 run3.completed_at = datetime.now(UTC)
+                run3.duration_seconds = duration_seconds
                 await db3.commit()
         logger.warning(
             "agent_run_failed",

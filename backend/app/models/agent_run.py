@@ -3,6 +3,7 @@ from typing import Optional
 from uuid import uuid4
 
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -30,6 +31,10 @@ class AgentRun(Base):
     cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     trace_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     error_msg: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Aggregated debug telemetry: {node_timings, tool_call_summary, state_summary, cost_breakdown}
+    debug_summary_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    # Wall-clock duration in seconds, written at completion
+    duration_seconds: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )

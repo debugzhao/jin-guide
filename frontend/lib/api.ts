@@ -164,6 +164,125 @@ export const api = {
 }
 
 
+// ── Chat API ──────────────────────────────────────────────────────────────────
+
+export interface ChatHistoryMessage {
+  role: 'user' | 'assistant'
+  content: string
+  citations?: { source_id: string; text: string }[]
+  created_at: string
+}
+
+export interface ChatHistoryResult {
+  report_id: string
+  messages: ChatHistoryMessage[]
+  total: number
+}
+
+export const chatApi = {
+  /** Load existing chat history for a report */
+  getHistory: (reportId: string) =>
+    apiFetch<ChatHistoryResult>(`/api/v1/reports/${reportId}/chat/history`),
+
+  /** Clear conversation history */
+  clearHistory: (reportId: string) =>
+    apiFetch<void>(`/api/v1/reports/${reportId}/chat`, { method: 'DELETE' }),
+
+  /**
+   * Open a streaming SSE connection for a chat message.
+   * Returns a native EventSource-compatible URL (or use fetch with ReadableStream).
+   * Since EventSource doesn't support POST, we use fetch directly.
+   */
+  streamMessage: (
+    reportId: string,
+    message: string,
+    callbacks: {
+      onToken: (token: string) => void
+      onCitation: (citation: { source_id: string; text: string }) => void
+      onDone: (citations: { source_id: string; text: string }[]) => void
+      onComplianceWarning: (issues: string[]) => void
+      onError: (msg: string) => void
+      onRateLimit: () => void
+    }
+  ): (() => void) => {
+    const BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+    let aborted = false
+    const controller = new AbortController()
+
+    const run = async () => {
+      try {
+        const resp = await fetch(`${BASE_URL}/api/v1/reports/${reportId}/chat`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message }),
+          signal: controller.signal,
+        })
+
+        if (resp.status === 429) {
+          callbacks.onRateLimit()
+          return
+        }
+        if (!resp.ok) {
+          const body = await resp.json().catch(() => ({}))
+          callbacks.onError(body?.detail?.message || body?.detail || `HTTP ${resp.status}`)
+          return
+        }
+        if (!resp.body) return
+
+        const reader = resp.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+
+        while (!aborted) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+
+          const lines = buffer.split('\n')
+          buffer = lines.pop() ?? ''
+
+          let currentEvent = ''
+          for (const line of lines) {
+            if (line.startsWith('event: ')) {
+              currentEvent = line.slice(7).trim()
+            } else if (line.startsWith('data: ')) {
+              const raw = line.slice(6).trim()
+              try {
+                const data = JSON.parse(raw)
+                if (currentEvent === 'token') {
+                  callbacks.onToken(data.content ?? '')
+                } else if (currentEvent === 'citation') {
+                  callbacks.onCitation({ source_id: data.source_id, text: data.text })
+                } else if (currentEvent === 'done') {
+                  callbacks.onDone(data.citations ?? [])
+                } else if (currentEvent === 'compliance_warning') {
+                  callbacks.onComplianceWarning(data.issues ?? [])
+                } else if (currentEvent === 'error') {
+                  callbacks.onError(data.message ?? '未知错误')
+                }
+              } catch {
+                // ignore parse errors on non-JSON lines
+              }
+              currentEvent = ''
+            }
+          }
+        }
+      } catch (err) {
+        if (!aborted) {
+          callbacks.onError(err instanceof Error ? err.message : '连接中断')
+        }
+      }
+    }
+
+    run()
+    return () => {
+      aborted = true
+      controller.abort()
+    }
+  },
+}
+
 export interface VolunteerCheckResult {
   overallRisk: 'low' | 'medium' | 'high'
   riskScore: number

@@ -2,11 +2,12 @@
 
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { Share2, AlertCircle, RefreshCw } from 'lucide-react'
+import { Share2, AlertCircle, RefreshCw, MessageCircle } from 'lucide-react'
 import TopNav from '@/components/layout/TopNav'
 import RiskOverview from '@/components/report/RiskOverview'
 import PlanTabs from '@/components/report/PlanTabs'
 import CandidateCard from '@/components/report/CandidateCard'
+import ChatPanel from '@/components/chat/ChatPanel'
 import { useAppStore } from '@/lib/store'
 import type { Candidate, PlanType, RiskItem } from '@/types'
 
@@ -83,7 +84,7 @@ const PLAN_DESC: Record<string, string> = {
 export default function ReportDetailPage() {
   const { id } = useParams<{ id: string }>()
   const router = useRouter()
-  const { currentTab, setCurrentTab } = useAppStore()
+  const { currentTab, setCurrentTab, openChatPanel, isChatPanelOpen } = useAppStore()
 
   const [report, setReport] = useState<ApiReport | null>(null)
   const [loading, setLoading] = useState(true)
@@ -183,6 +184,23 @@ export default function ReportDetailPage() {
 
         <div className="pb-6" />
       </main>
+
+      {/* Floating "问一问" button — only shown on completed reports */}
+      {!isChatPanelOpen && (
+        <button
+          onClick={() => openChatPanel(id)}
+          className="fixed bottom-6 right-5 z-30 flex items-center gap-2 px-4 py-2.5
+            bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-full
+            shadow-lg hover:shadow-xl transition-all active:scale-95"
+          aria-label="打开 AI 助手"
+        >
+          <MessageCircle className="w-4 h-4" />
+          <span>问一问</span>
+        </button>
+      )}
+
+      {/* Chat Panel (Drawer / Sheet) */}
+      <ChatPanel reportId={id} />
     </div>
   )
 }

@@ -75,3 +75,33 @@ export interface AgentStep {
   label: string
   status: StepStatus
 }
+
+// ── Chat Panel ──────────────────────────────────────────────────────────────
+
+export interface ChatCitation {
+  source_id: string
+  text: string
+}
+
+export type ChatMessageRole = 'user' | 'assistant'
+
+export interface ChatMessage {
+  id: string
+  role: ChatMessageRole
+  content: string
+  citations: ChatCitation[]
+  created_at: string
+  /** True while the assistant message is still streaming tokens */
+  streaming?: boolean
+}
+
+export interface ChatState {
+  isChatPanelOpen: boolean
+  /** The report_id this chat session belongs to */
+  activeReportId: string | null
+  messages: ChatMessage[]
+  /** Tokens accumulating for the current streaming message */
+  streamingContent: string
+  isStreaming: boolean
+  dailyLimitReached: boolean
+}
