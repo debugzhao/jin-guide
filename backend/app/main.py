@@ -10,6 +10,7 @@ from sqlalchemy import text
 from app.api.v1.router import router as v1_router
 from app.config import settings
 from app.database import engine
+from app.logging_config import configure_logging
 
 # LangSmith tracing: must be set before any LangChain/LangGraph import creates a client.
 # LangGraph auto-reads these env vars; no code changes needed in graph.py.
@@ -18,6 +19,7 @@ if settings.langsmith_api_key:
     os.environ["LANGCHAIN_API_KEY"] = settings.langsmith_api_key
     os.environ["LANGCHAIN_PROJECT"] = settings.langsmith_project
 
+configure_logging()
 logger = structlog.get_logger()
 
 app = FastAPI(

@@ -2,11 +2,14 @@
 
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { Share2, AlertCircle, RefreshCw } from 'lucide-react'
+import { Share2, AlertCircle, AlertTriangle, RefreshCw } from 'lucide-react'
 import TopNav from '@/components/layout/TopNav'
 import RiskOverview from '@/components/report/RiskOverview'
 import PlanTabs from '@/components/report/PlanTabs'
 import CandidateCard from '@/components/report/CandidateCard'
+import Button from '@/components/ui/Button'
+import { useToastStore } from '@/components/ui/Toast'
+import { reviewApi, type ReviewListItem } from '@/lib/api'
 import { useAppStore } from '@/lib/store'
 import type { Candidate, PlanType, RiskItem } from '@/types'
 
@@ -88,6 +91,9 @@ export default function ReportDetailPage() {
   const [report, setReport] = useState<ApiReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [existingReview, setExistingReview] = useState<ReviewListItem | null>(null)
+  const [requestingReview, setRequestingReview] = useState(false)
+  const { addToast } = useToastStore()
 
   useEffect(() => {
     if (!id) return
@@ -97,6 +103,28 @@ export default function ReportDetailPage() {
       .catch((e: Error) => setError(e.message || '加载报告失败'))
       .finally(() => setLoading(false))
   }, [id])
+
+  useEffect(() => {
+    if (!id) return
+    reviewApi.getByReportId(id).then(setExistingReview).catch(() => {})
+  }, [id])
+
+  const handleRequestReview = async () => {
+    if (!id || requestingReview) return
+    setRequestingReview(true)
+    try {
+      if (existingReview && existingReview.status !== 'closed') {
+        router.push(`/reports/${id}/review`)
+        return
+      }
+      await reviewApi.create(id)
+      router.push(`/reports/${id}/review`)
+    } catch {
+      addToast('error', '申请人工复核失败，请稍后重试')
+    } finally {
+      setRequestingReview(false)
+    }
+  }
 
   if (loading) {
     return (
@@ -174,12 +202,37 @@ export default function ReportDetailPage() {
         <div className="text-xs text-[#64748B] px-1">{PLAN_DESC[activePlan] || ''}</div>
 
         {candidates.length > 0 ? (
-          <div className="space-y-3 pb-6">
+          <div className="space-y-3">
             {candidates.map((c, i) => <CandidateCard key={c.id} candidate={c} rank={i + 1} />)}
           </div>
         ) : (
           <div className="py-10 text-center text-sm text-gray-400">暂无候选院校数据</div>
         )}
+
+        {/* HITL 入口：高风险时展示提示条；用户也可随时主动申请 */}
+        <div className="space-y-3 pb-6">
+          {overallRisk === 'high' && (
+            <div className="bg-[#FFFBEB] border border-[#D97706] rounded-card p-4 flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-[#D97706] flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-semibold text-[#92400E]">该方案存在较高风险，建议人工复核</p>
+                <p className="text-xs text-[#B45309] mt-1">复核员将在 4 小时内给出专业建议</p>
+              </div>
+            </div>
+          )}
+          <Button
+            variant={overallRisk === 'high' ? 'primary' : 'outline'}
+            size="lg"
+            onClick={handleRequestReview}
+            disabled={requestingReview}
+          >
+            {existingReview && existingReview.status !== 'closed'
+              ? '查看复核进度'
+              : overallRisk === 'high'
+              ? '申请人工复核'
+              : '对方案有疑虑？申请人工复核'}
+          </Button>
+        </div>
       </main>
     </div>
   )

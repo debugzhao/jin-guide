@@ -12,12 +12,22 @@ See PRD Section 2 for the async task layer architecture:
 Day 8 additions:
 - run_agent now catches NodeInterrupt → marks run as 'interrupted'
 - run_agent_resume: resumes an interrupted run via Command(resume=payload)
+
+Day 9 additions:
+- Graph execution switched from agent_graph.ainvoke() to consuming
+  agent_graph.astream(..., stream_mode="updates"), which yields one chunk per
+  completed superstep (a single node, or several nodes that ran in parallel via
+  the Send API). This gives per-node visibility for structured logging without
+  changing interrupt/exception behavior — interrupt() still raises out of the
+  node coroutine the same way whether the graph is driven via ainvoke or astream.
 """
 import asyncio
 import os
+import time
 import uuid
 from datetime import UTC, datetime
 
+import structlog
 from arq.connections import RedisSettings
 from sqlalchemy import select
 
@@ -25,6 +35,7 @@ from app.agent.graph import agent_graph, _checkpointer
 from app.agent.state import VolunteerPlanState
 from app.config import settings
 from app.database import async_session_maker
+from app.logging_config import configure_logging
 from app.models.agent_run import AgentRun
 
 # Must be set before any LangChain client is initialized.
@@ -32,6 +43,32 @@ if settings.langsmith_api_key:
     os.environ["LANGCHAIN_TRACING_V2"] = "true"
     os.environ["LANGCHAIN_API_KEY"] = settings.langsmith_api_key
     os.environ["LANGCHAIN_PROJECT"] = settings.langsmith_project
+
+configure_logging()
+logger = structlog.get_logger()
+
+
+async def _stream_graph(graph_input, config: dict, run_id: str, phase: str) -> None:
+    """
+    Drive the graph via astream(stream_mode="updates") and log one structured
+    line per completed superstep: run_id, node, event, latency_ms are always
+    present so logs can be filtered/aggregated per run or per node.
+
+    `phase` distinguishes the initial run from a post-HITL resume in the logs.
+    """
+    step_started_at = time.perf_counter()
+    async for chunk in agent_graph.astream(graph_input, config=config, stream_mode="updates"):
+        latency_ms = round((time.perf_counter() - step_started_at) * 1000, 1)
+        step_started_at = time.perf_counter()
+        for node_name in chunk:
+            logger.info(
+                "agent_node_completed",
+                run_id=run_id,
+                node=node_name,
+                event="node_completed",
+                phase=phase,
+                latency_ms=latency_ms,
+            )
 
 
 def _build_initial_state(run: AgentRun) -> VolunteerPlanState:
@@ -129,8 +166,11 @@ async def run_agent(ctx: dict, run_id: str) -> None:
         },
     }
 
+    run_started_at = time.perf_counter()
+    logger.info("agent_run_started", run_id=run_id, node="run", event="run_started", phase="initial")
+
     try:
-        await agent_graph.ainvoke(state, config=config)
+        await _stream_graph(state, config, run_id, phase="initial")
 
         total_tokens, cost_usd, trace_url = _get_langsmith_stats(ls_run_id)
 
@@ -147,11 +187,20 @@ async def run_agent(ctx: dict, run_id: str) -> None:
                 run2.trace_url = trace_url
                 await db2.commit()
 
+        logger.info(
+            "agent_run_completed",
+            run_id=run_id,
+            node="run",
+            event="run_completed",
+            latency_ms=round((time.perf_counter() - run_started_at) * 1000, 1),
+        )
+
     except Exception as exc:
         exc_type = type(exc).__name__
         is_interrupt = exc_type in ("NodeInterrupt", "GraphInterrupt") or (
             hasattr(exc, "__class__") and "Interrupt" in exc_type
         )
+        latency_ms = round((time.perf_counter() - run_started_at) * 1000, 1)
 
         if is_interrupt:
             _, _, trace_url = _get_langsmith_stats(ls_run_id)
@@ -164,6 +213,13 @@ async def run_agent(ctx: dict, run_id: str) -> None:
                     run3.status = "interrupted"
                     run3.trace_url = trace_url
                     await db3.commit()
+            logger.info(
+                "agent_run_interrupted",
+                run_id=run_id,
+                node="run",
+                event="run_interrupted",
+                latency_ms=latency_ms,
+            )
             return
 
         async with async_session_maker() as db4:
@@ -176,6 +232,14 @@ async def run_agent(ctx: dict, run_id: str) -> None:
                 run4.error_msg = str(exc)
                 run4.completed_at = datetime.now(UTC)
                 await db4.commit()
+        logger.warning(
+            "agent_run_failed",
+            run_id=run_id,
+            node="run",
+            event="run_failed",
+            latency_ms=latency_ms,
+            error=str(exc),
+        )
         raise
 
 
@@ -201,8 +265,11 @@ async def run_agent_resume(ctx: dict, run_id: str, resume_payload: dict) -> None
 
     config = {"configurable": {"thread_id": run.thread_id}}
 
+    resume_started_at = time.perf_counter()
+    logger.info("agent_resume_started", run_id=run_id, node="resume", event="resume_started", phase="resume")
+
     try:
-        await agent_graph.ainvoke(Command(resume=resume_payload), config=config)
+        await _stream_graph(Command(resume=resume_payload), config, run_id, phase="resume")
 
         async with async_session_maker() as db2:
             result2 = await db2.execute(
@@ -213,6 +280,14 @@ async def run_agent_resume(ctx: dict, run_id: str, resume_payload: dict) -> None
                 run2.status = "completed"
                 run2.completed_at = datetime.now(UTC)
                 await db2.commit()
+
+        logger.info(
+            "agent_resume_completed",
+            run_id=run_id,
+            node="resume",
+            event="resume_completed",
+            latency_ms=round((time.perf_counter() - resume_started_at) * 1000, 1),
+        )
 
     except Exception as exc:
         async with async_session_maker() as db3:
@@ -225,6 +300,14 @@ async def run_agent_resume(ctx: dict, run_id: str, resume_payload: dict) -> None
                 run3.error_msg = f"resume failed: {exc!s}"
                 run3.completed_at = datetime.now(UTC)
                 await db3.commit()
+        logger.warning(
+            "agent_resume_failed",
+            run_id=run_id,
+            node="resume",
+            event="resume_failed",
+            latency_ms=round((time.perf_counter() - resume_started_at) * 1000, 1),
+            error=str(exc),
+        )
         raise
 
 

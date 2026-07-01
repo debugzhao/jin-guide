@@ -1,18 +1,20 @@
 """
-Human Review API (Day 8).
+Human Review API (Day 8-9).
 
 Endpoints:
-  GET    /api/v1/reviews                — list reviews (reviewer queue)
+  GET    /api/v1/reviews                — list reviews (reviewer queue / by report_id)
+  POST   /api/v1/reviews                — user-initiated review request (no active interrupt)
   GET    /api/v1/reviews/{id}           — get single review + checklist
   PATCH  /api/v1/reviews/{id}           — submit conclusion, trigger resume
 
-PRD references: Section 11.2 (interrupt mechanism), 11.7 (resume payload).
+PRD references: Section 11.2 (interrupt mechanism), 11.7 (resume payload), 8.7 (user-facing review page).
 """
 from __future__ import annotations
 
 import structlog
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -22,9 +24,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.models.agent_run import AgentRun
+from app.models.report import Report
 from app.models.review import HumanReview
 
 logger = structlog.get_logger()
+
+# Same SLA window used by the interrupt-triggered review node (backend/app/agent/nodes/human_review.py)
+_REVIEW_SLA_HOURS = 4
 
 
 def _write_langsmith_feedback(trace_url: str, conclusion: str, notes: str | None) -> None:
@@ -79,6 +85,15 @@ class ReviewListItem(BaseModel):
     timeout_at: Optional[str]
 
 
+class CreateReviewIn(BaseModel):
+    report_id: str
+    reason: Optional[str] = None
+
+
+class ClaimReviewIn(BaseModel):
+    reviewer_id: str
+
+
 class SubmitConclusionIn(BaseModel):
     # approved / rejected / need_more_info
     conclusion: str
@@ -95,6 +110,7 @@ class SubmitConclusionIn(BaseModel):
 @router.get("", response_model=list[ReviewListItem])
 async def list_reviews(
     status: Optional[str] = Query(None, description="Filter by status (pending / in_review / reviewed)"),
+    report_id: Optional[str] = Query(None, description="Filter by report_id (user-side lookup)"),
     limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
 ):
@@ -106,6 +122,8 @@ async def list_reviews(
     )
     if status:
         stmt = stmt.where(HumanReview.status == status)
+    if report_id:
+        stmt = stmt.where(HumanReview.report_id == report_id)
 
     result = await db.execute(stmt)
     reviews = result.scalars().all()
@@ -124,6 +142,99 @@ async def list_reviews(
     ]
 
 
+@router.post("", response_model=ReviewOut)
+async def create_review(
+    body: CreateReviewIn,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    User-initiated review request (PRD 8.7 "用户也可主动点击...申请人工复核").
+
+    Unlike the interrupt-triggered flow in human_review_node, this does not pause
+    a running graph — the report already exists and was delivered normally.
+    Submitting a conclusion for this review later will not attempt to resume a
+    graph run, since PATCH /reviews/{id} only enqueues a resume job when
+    review.run_id is set AND the graph is actually paused there.
+    """
+    report_result = await db.execute(select(Report).where(Report.id == body.report_id))
+    report = report_result.scalar_one_or_none()
+    if not report:
+        raise HTTPException(status_code=404, detail="report not found")
+
+    # Idempotent: reuse an existing open review instead of creating duplicates
+    existing_result = await db.execute(
+        select(HumanReview)
+        .where(HumanReview.report_id == body.report_id)
+        .where(HumanReview.status.notin_(["reviewed", "closed"]))
+        .order_by(HumanReview.created_at.desc())
+        .limit(1)
+    )
+    existing = existing_result.scalar_one_or_none()
+    if existing:
+        return ReviewOut(
+            id=existing.id,
+            report_id=existing.report_id,
+            run_id=existing.run_id,
+            reviewer_id=existing.reviewer_id,
+            status=existing.status,
+            checklist_json=existing.checklist_json,
+            conclusion=existing.conclusion,
+            reviewer_notes=existing.reviewer_notes,
+            created_at=existing.created_at.isoformat(),
+            completed_at=existing.completed_at.isoformat() if existing.completed_at else None,
+            timeout_at=existing.timeout_at.isoformat() if existing.timeout_at else None,
+        )
+
+    plan_json = report.plan_json or {}
+    # plan_json.risk_items uses {level, description} (see report_agent.py); the
+    # review checklist schema uses {risk_type, severity, targets, message} — convert.
+    risk_items = [
+        {
+            "risk_type": r.get("risk_type", "general"),
+            "severity": r.get("level", "medium"),
+            "targets": r.get("targets", []),
+            "message": r.get("description", ""),
+        }
+        for r in (plan_json.get("risk_items") or [])
+    ]
+    summary = body.reason or "用户主动申请人工复核。"
+
+    now = datetime.now(UTC)
+    review = HumanReview(
+        id=str(uuid4()),
+        report_id=report.id,
+        run_id=report.run_id,
+        status="pending",
+        checklist_json={
+            "summary": summary,
+            "trigger_reasons": ["user_requested"],
+            "risk_items": risk_items,
+            "compliance_issues": [],
+            "data_warnings": [],
+            "reviewer_checklist": [
+                {"id": "c1", "item": "复核用户提出的具体疑虑", "required": True},
+            ],
+        },
+        timeout_at=now + timedelta(hours=_REVIEW_SLA_HOURS),
+    )
+    db.add(review)
+    await db.commit()
+
+    return ReviewOut(
+        id=review.id,
+        report_id=review.report_id,
+        run_id=review.run_id,
+        reviewer_id=review.reviewer_id,
+        status=review.status,
+        checklist_json=review.checklist_json,
+        conclusion=review.conclusion,
+        reviewer_notes=review.reviewer_notes,
+        created_at=review.created_at.isoformat(),
+        completed_at=None,
+        timeout_at=review.timeout_at.isoformat() if review.timeout_at else None,
+    )
+
+
 @router.get("/{review_id}", response_model=ReviewOut)
 async def get_review(
     review_id: str,
@@ -136,6 +247,53 @@ async def get_review(
     review = result.scalar_one_or_none()
     if not review:
         raise HTTPException(status_code=404, detail="review not found")
+
+    return ReviewOut(
+        id=review.id,
+        report_id=review.report_id,
+        run_id=review.run_id,
+        reviewer_id=review.reviewer_id,
+        status=review.status,
+        checklist_json=review.checklist_json,
+        conclusion=review.conclusion,
+        reviewer_notes=review.reviewer_notes,
+        created_at=review.created_at.isoformat(),
+        completed_at=review.completed_at.isoformat() if review.completed_at else None,
+        timeout_at=review.timeout_at.isoformat() if review.timeout_at else None,
+    )
+
+
+@router.patch("/{review_id}/claim", response_model=ReviewOut)
+async def claim_review(
+    review_id: str,
+    body: ClaimReviewIn,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Reviewer claims a pending review (复核员工作台 "领取任务").
+
+    Only 'pending' reviews can be claimed. Re-claiming by the same reviewer
+    is idempotent (e.g. page refresh); claiming by a different reviewer while
+    already 'in_review' is rejected to avoid two reviewers working the same task.
+    """
+    result = await db.execute(
+        select(HumanReview).where(HumanReview.id == review_id)
+    )
+    review = result.scalar_one_or_none()
+    if not review:
+        raise HTTPException(status_code=404, detail="review not found")
+
+    if review.status == "in_review" and review.reviewer_id == body.reviewer_id:
+        pass  # idempotent re-claim
+    elif review.status != "pending":
+        raise HTTPException(
+            status_code=409,
+            detail=f"review is not claimable (status='{review.status}')",
+        )
+    else:
+        review.status = "in_review"
+        review.reviewer_id = body.reviewer_id
+        await db.commit()
 
     return ReviewOut(
         id=review.id,

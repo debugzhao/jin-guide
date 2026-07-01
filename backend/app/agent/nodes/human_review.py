@@ -210,6 +210,7 @@ async def human_review_node(state: VolunteerPlanState) -> dict:
         "human_interrupt",
         {
             "review_task_id": review_id,
+            "report_id": state.get("report_id"),
             "message": f"报告需要人工复核，预计等待时间 {_REVIEW_SLA_HOURS} 小时",
             "sla_hours": _REVIEW_SLA_HOURS,
             "trigger_reasons": checklist_json.get("trigger_reasons", []),
