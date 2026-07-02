@@ -90,6 +90,10 @@ async def generate_report(
     Internally equivalent to POST /agent/runs with task_type=generate_report.
     See PRD 5.1 for the semantic description.
     """
+    arq_pool = getattr(request.app.state, "arq_pool", None)
+    if not arq_pool:
+        raise HTTPException(status_code=503, detail="ARQ pool unavailable")
+
     thread_id = body.thread_id or str(uuid4())
     run_id = str(uuid4())
 
@@ -105,9 +109,7 @@ async def generate_report(
     await db.commit()
 
     # Enqueue to ARQ worker
-    arq_pool = getattr(request.app.state, "arq_pool", None)
-    if arq_pool:
-        await arq_pool.enqueue_job("run_agent", run_id)
+    await arq_pool.enqueue_job("run_agent", run_id)
 
     return GenerateReportOut(
         run_id=run_id,

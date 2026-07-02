@@ -54,6 +54,10 @@ async def create_agent_run(
     Create an AgentRun, enqueue it to ARQ for background execution.
     Uses thread_id as idempotency key (see PRD 13.2).
     """
+    arq_pool = getattr(request.app.state, "arq_pool", None)
+    if not arq_pool:
+        raise HTTPException(status_code=503, detail="ARQ pool unavailable")
+
     thread_id = body.thread_id or str(uuid4())
 
     # Idempotency check: same thread_id within 24h with active status → 409
@@ -89,9 +93,7 @@ async def create_agent_run(
     await db.commit()
 
     # Enqueue to ARQ worker
-    arq_pool = getattr(request.app.state, "arq_pool", None)
-    if arq_pool:
-        await arq_pool.enqueue_job("run_agent", run_id)
+    await arq_pool.enqueue_job("run_agent", run_id)
 
     return AgentRunOut(
         run_id=run_id,

@@ -1,6 +1,7 @@
 """
 ARQ Worker for 问津 Agent.
 """
+import asyncio
 import json
 import os
 import time
@@ -80,7 +81,7 @@ async def _stream_graph(
                 "agent_node_completed",
                 run_id=run_id,
                 node=node_name,
-                event="node_completed",
+                stage="node_completed",
                 latency_ms=latency_ms,
             )
             # Collect degraded agents from state delta
@@ -186,7 +187,7 @@ async def run_agent(ctx: dict, run_id: str) -> None:
     }
 
     run_started_at = time.perf_counter()
-    logger.info("agent_run_started", run_id=run_id, node="run", event="run_started")
+    logger.info("agent_run_started", run_id=run_id, node="run", stage="run_started")
 
     try:
         debug_summary = await _stream_graph(state, config, run_id)
@@ -218,19 +219,23 @@ async def run_agent(ctx: dict, run_id: str) -> None:
             "agent_run_completed",
             run_id=run_id,
             node="run",
-            event="run_completed",
+            stage="run_completed",
             latency_ms=round(duration_seconds * 1000, 1),
         )
 
-    except Exception as exc:
+    except (Exception, asyncio.CancelledError) as exc:
         duration_seconds = round(time.perf_counter() - run_started_at, 2)
         latency_ms = round(duration_seconds * 1000, 1)
+        error_msg = str(exc) or (
+            f"job cancelled (job_timeout={WorkerSettings.job_timeout}s exceeded)"
+            if isinstance(exc, asyncio.CancelledError) else repr(exc)
+        )
         async with async_session_maker() as db3:
             result3 = await db3.execute(select(AgentRun).where(AgentRun.id == run_id))
             run3 = result3.scalar_one_or_none()
             if run3:
                 run3.status = "failed"
-                run3.error_msg = str(exc)
+                run3.error_msg = error_msg
                 run3.completed_at = datetime.now(UTC)
                 run3.duration_seconds = duration_seconds
                 await db3.commit()
@@ -238,9 +243,9 @@ async def run_agent(ctx: dict, run_id: str) -> None:
             "agent_run_failed",
             run_id=run_id,
             node="run",
-            event="run_failed",
+            stage="run_failed",
             latency_ms=latency_ms,
-            error=str(exc),
+            error=error_msg,
         )
         raise
 

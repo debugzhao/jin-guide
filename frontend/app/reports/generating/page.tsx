@@ -39,6 +39,7 @@ function GeneratingContent() {
   const receivedAnyEvent = useRef(false)
   const hasReceivedBusinessEvent = useRef(false)
   const redirectedRef = useRef(false)
+  const fallbackTriggeredRef = useRef(false)
   const MAX_RECONNECT = 3
 
   const clearTimer = () => {
@@ -187,7 +188,8 @@ function GeneratingContent() {
     timerRef.current = setInterval(() => {
       setElapsedSeconds(s => {
         const next = s + 1
-        if (next >= 25 && !hasReceivedBusinessEvent.current) {
+        if (next >= 25 && !hasReceivedBusinessEvent.current && !fallbackTriggeredRef.current) {
+          fallbackTriggeredRef.current = true
           esRef.current?.close()
           pollRunAndRedirect(runId)
         }
