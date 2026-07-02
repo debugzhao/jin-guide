@@ -157,14 +157,21 @@ async def chat_with_report(
     Report must have status=completed.
     """
     # ── Validate report ────────────────────────────────────────────────────
-    result = await db.execute(
-        select(Report).where(Report.id == report_id, Report.deleted_at.is_(None))
-    )
-    report = result.scalar_one_or_none()
-    if not report:
-        raise HTTPException(status_code=404, detail="报告不存在")
-    if report.status != "completed":
-        raise HTTPException(status_code=422, detail="报告尚未生成完成，无法进行问答")
+    if report_id == "demo-report":
+        from app.api.v1.mock_data import MOCK_REPORT_PLAN, MOCK_REPORT_EVIDENCE
+        report_plan_json = MOCK_REPORT_PLAN
+        report_evidence_json = MOCK_REPORT_EVIDENCE
+    else:
+        result = await db.execute(
+            select(Report).where(Report.id == report_id, Report.deleted_at.is_(None))
+        )
+        report = result.scalar_one_or_none()
+        if not report:
+            raise HTTPException(status_code=404, detail="报告不存在")
+        if report.status != "completed":
+            raise HTTPException(status_code=422, detail="报告尚未生成完成，无法进行问答")
+        report_plan_json = report.plan_json
+        report_evidence_json = report.evidence_json
 
     # ── Validate message ───────────────────────────────────────────────────
     message = body.message.strip()
@@ -198,8 +205,8 @@ async def chat_with_report(
         citations = []
 
         async for event in stream_conversation_response(
-            plan_json=report.plan_json,
-            evidence_json=report.evidence_json,
+            plan_json=report_plan_json,
+            evidence_json=report_evidence_json,
             history=history,
             user_message=message,
         ):
@@ -242,9 +249,10 @@ async def chat_with_report(
                 new_history = new_history[-_MAX_MESSAGES_STORED:]
                 await _save_history_to_redis(report_id, user_id, new_history)
                 # Best-effort DB persist (fire and forget — use separate session)
-                from app.database import async_session_maker
-                async with async_session_maker() as persist_db:
-                    await _persist_history_to_db(persist_db, report_id, current_user.id if current_user else None, new_history)
+                if report_id != "demo-report":
+                    from app.database import async_session_maker
+                    async with async_session_maker() as persist_db:
+                        await _persist_history_to_db(persist_db, report_id, current_user.id if current_user else None, new_history)
 
             elif event_type == "error":
                 payload = json.dumps({"message": event.get("message", "未知错误")}, ensure_ascii=False)
@@ -273,28 +281,31 @@ async def get_chat_history(
     Return the conversation history for a report.
     Tries Redis hot layer first; falls back to PostgreSQL.
     """
-    result = await db.execute(
-        select(Report).where(Report.id == report_id, Report.deleted_at.is_(None))
-    )
-    if not result.scalar_one_or_none():
-        raise HTTPException(status_code=404, detail="报告不存在")
-
     user_id = current_user.id if current_user else "anon"
 
-    # Try hot layer first
-    messages = await _load_history_from_redis(report_id, user_id)
-
-    if not messages:
-        # Fall back to DB
-        conv_result = await db.execute(
-            select(ReportConversation).where(
-                ReportConversation.report_id == report_id,
-                ReportConversation.user_id == (current_user.id if current_user else None),
-            )
+    if report_id == "demo-report":
+        messages = await _load_history_from_redis(report_id, user_id)
+    else:
+        result = await db.execute(
+            select(Report).where(Report.id == report_id, Report.deleted_at.is_(None))
         )
-        conv = conv_result.scalar_one_or_none()
-        if conv:
-            messages = conv.messages_json or []
+        if not result.scalar_one_or_none():
+            raise HTTPException(status_code=404, detail="报告不存在")
+
+        # Try hot layer first
+        messages = await _load_history_from_redis(report_id, user_id)
+
+        if not messages:
+            # Fall back to DB
+            conv_result = await db.execute(
+                select(ReportConversation).where(
+                    ReportConversation.report_id == report_id,
+                    ReportConversation.user_id == (current_user.id if current_user else None),
+                )
+            )
+            conv = conv_result.scalar_one_or_none()
+            if conv:
+                messages = conv.messages_json or []
 
     return ChatHistoryOut(
         report_id=report_id,
@@ -310,12 +321,6 @@ async def clear_chat_history(
     current_user: User | None = Depends(get_current_user),
 ):
     """Clear conversation history from both Redis and PostgreSQL."""
-    result = await db.execute(
-        select(Report).where(Report.id == report_id, Report.deleted_at.is_(None))
-    )
-    if not result.scalar_one_or_none():
-        raise HTTPException(status_code=404, detail="报告不存在")
-
     user_id = current_user.id if current_user else "anon"
 
     # Clear Redis
@@ -325,15 +330,22 @@ async def clear_chat_history(
     finally:
         await redis_client.aclose()
 
-    # Clear DB
-    conv_result = await db.execute(
-        select(ReportConversation).where(
-            ReportConversation.report_id == report_id,
-            ReportConversation.user_id == (current_user.id if current_user else None),
+    if report_id != "demo-report":
+        result = await db.execute(
+            select(Report).where(Report.id == report_id, Report.deleted_at.is_(None))
         )
-    )
-    conv = conv_result.scalar_one_or_none()
-    if conv:
-        conv.messages_json = []
-        conv.updated_at = datetime.now(UTC)
-        await db.commit()
+        if not result.scalar_one_or_none():
+            raise HTTPException(status_code=404, detail="报告不存在")
+
+        # Clear DB
+        conv_result = await db.execute(
+            select(ReportConversation).where(
+                ReportConversation.report_id == report_id,
+                ReportConversation.user_id == (current_user.id if current_user else None),
+            )
+        )
+        conv = conv_result.scalar_one_or_none()
+        if conv:
+            conv.messages_json = []
+            conv.updated_at = datetime.now(UTC)
+            await db.commit()

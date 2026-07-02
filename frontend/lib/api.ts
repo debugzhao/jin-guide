@@ -72,7 +72,8 @@ export const api = {
     return { runId: res.run_id }
   },
   getReport: (id: string) => apiFetch<unknown>(`/api/v1/reports/${id}`),
-  getRunStatus: (id: string) => apiFetch<unknown>(`/api/v1/agent/runs/${id}`),
+  getReportByRun: (runId: string) => apiFetch<{ id: string }>(`/api/v1/reports/by-run/${runId}`),
+  getRunStatus: (id: string) => apiFetch<{ status: string; error_msg?: string }>(`/api/v1/agent/runs/${id}`),
   getRiskPreview: async (params: {
     province: string
     score: number

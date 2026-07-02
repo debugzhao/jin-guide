@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Suspense } from 'react'
 import { CheckCircle, Loader2, XCircle, Clock } from 'lucide-react'
+import { api } from '@/lib/api'
 import type { AgentStep, StepStatus } from '@/types'
 
 const INITIAL_STEPS: AgentStep[] = [
@@ -15,7 +16,6 @@ const INITIAL_STEPS: AgentStep[] = [
   { id: 'reflection',      label: '合规自检',           status: 'waiting' },
 ]
 
-// policy_rule_agent 事件映射到同一步骤（并行节点）
 const NODE_STEP_MAP: Record<string, string> = {
   policy_rule_agent: 'retrieval_agent',
 }
@@ -34,9 +34,70 @@ function GeneratingContent() {
 
   const esRef = useRef<EventSource | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const reconnectCount = useRef(0)
   const receivedAnyEvent = useRef(false)
+  const hasReceivedBusinessEvent = useRef(false)
+  const redirectedRef = useRef(false)
   const MAX_RECONNECT = 3
+
+  const clearTimer = () => {
+    if (timerRef.current) clearInterval(timerRef.current)
+  }
+
+  const clearPollTimer = () => {
+    if (pollTimerRef.current) clearTimeout(pollTimerRef.current)
+  }
+
+  const redirectToReport = (reportId: string) => {
+    if (redirectedRef.current) return
+    redirectedRef.current = true
+    setPageStatus('completed')
+    setOverallProgress(100)
+    setSteps(prev => prev.map(s => ({ ...s, status: 'completed' })))
+    esRef.current?.close()
+    clearTimer()
+    clearPollTimer()
+    setTimeout(() => router.push(`/reports/${reportId}`), 1200)
+  }
+
+  const markFailed = () => {
+    setPageStatus('failed')
+    setSteps(prev => prev.map(s =>
+      s.status === 'running' ? { ...s, status: 'failed' } : s
+    ))
+    esRef.current?.close()
+    clearTimer()
+    clearPollTimer()
+  }
+
+  const pollRunAndRedirect = (rid: string) => {
+    if (rid === 'demo-run') {
+      redirectToReport('demo-report')
+      return
+    }
+
+    const poll = async () => {
+      if (redirectedRef.current) return
+      try {
+        const run = await api.getRunStatus(rid)
+        if (run.status === 'completed') {
+          const report = await api.getReportByRun(rid)
+          redirectToReport(report.id)
+          return
+        }
+        if (run.status === 'failed') {
+          markFailed()
+          return
+        }
+      } catch {
+        // run/report 尚未就绪，继续轮询
+      }
+      pollTimerRef.current = setTimeout(poll, 2000)
+    }
+
+    poll()
+  }
 
   const connectSSE = (rid: string) => {
     const BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -46,8 +107,13 @@ function GeneratingContent() {
     )
     esRef.current = es
 
+    es.addEventListener('connected', () => {
+      receivedAnyEvent.current = true
+    })
+
     es.addEventListener('node_started', (e: MessageEvent) => {
       receivedAnyEvent.current = true
+      hasReceivedBusinessEvent.current = true
       try {
         const data = JSON.parse(e.data)
         const nodeId: string = NODE_STEP_MAP[data.node] ?? data.node
@@ -63,6 +129,7 @@ function GeneratingContent() {
 
     es.addEventListener('node_completed', (e: MessageEvent) => {
       receivedAnyEvent.current = true
+      hasReceivedBusinessEvent.current = true
       try {
         const data = JSON.parse(e.data)
         const nodeId: string = NODE_STEP_MAP[data.node] ?? data.node
@@ -72,26 +139,30 @@ function GeneratingContent() {
 
     es.addEventListener('completed', (e: MessageEvent) => {
       receivedAnyEvent.current = true
+      hasReceivedBusinessEvent.current = true
       try {
         const data = JSON.parse(e.data)
-        setPageStatus('completed')
-        setOverallProgress(100)
-        setSteps(prev => prev.map(s => ({ ...s, status: 'completed' })))
-        es.close()
-        clearTimer()
-        const reportId = data.report_id ?? 'demo-report'
-        setTimeout(() => router.push(`/reports/${reportId}`), 1200)
-      } catch {}
+        const reportId = data.report_id as string | undefined
+        if (reportId) {
+          redirectToReport(reportId)
+        } else {
+          pollRunAndRedirect(rid)
+        }
+      } catch {
+        pollRunAndRedirect(rid)
+      }
+    })
+
+    es.addEventListener('failed', () => {
+      receivedAnyEvent.current = true
+      hasReceivedBusinessEvent.current = true
+      markFailed()
     })
 
     es.addEventListener('error', () => {
       receivedAnyEvent.current = true
-      setPageStatus('failed')
-      setSteps(prev => prev.map(s =>
-        s.status === 'running' ? { ...s, status: 'failed' } : s
-      ))
-      es.close()
-      clearTimer()
+      hasReceivedBusinessEvent.current = true
+      markFailed()
     })
 
     es.onerror = () => {
@@ -101,47 +172,36 @@ function GeneratingContent() {
         if (reconnectCount.current <= MAX_RECONNECT) {
           setTimeout(() => connectSSE(rid), 1500)
         } else {
-          simulateProgress()
+          pollRunAndRedirect(rid)
         }
       }
     }
   }
 
-  const clearTimer = () => {
-    if (timerRef.current) clearInterval(timerRef.current)
-  }
-
   useEffect(() => {
-    timerRef.current = setInterval(() => setElapsedSeconds(s => s + 1), 1000)
+    if (runId === 'demo-run') {
+      redirectToReport('demo-report')
+      return
+    }
+
+    timerRef.current = setInterval(() => {
+      setElapsedSeconds(s => {
+        const next = s + 1
+        if (next >= 25 && !hasReceivedBusinessEvent.current) {
+          esRef.current?.close()
+          pollRunAndRedirect(runId)
+        }
+        return next
+      })
+    }, 1000)
     connectSSE(runId)
     return () => {
       esRef.current?.close()
       clearTimer()
+      clearPollTimer()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId])
-
-  const simulateProgress = () => {
-    let stepIdx = 0
-    const advance = () => {
-      if (stepIdx >= INITIAL_STEPS.length) {
-        setPageStatus('completed')
-        setOverallProgress(100)
-        clearTimer()
-        setTimeout(() => router.push('/reports/demo-report'), 1200)
-        return
-      }
-      const nodeId = INITIAL_STEPS[stepIdx].id
-      setSteps(prev => prev.map(s => s.id === nodeId ? { ...s, status: 'running' } : s))
-      setOverallProgress(Math.round((stepIdx / INITIAL_STEPS.length) * 100))
-      setTimeout(() => {
-        setSteps(prev => prev.map(s => s.id === nodeId ? { ...s, status: 'completed' } : s))
-        stepIdx++
-        setTimeout(advance, 400)
-      }, 1800 + Math.random() * 800)
-    }
-    advance()
-  }
 
   const formatTime = (s: number) => {
     const m = Math.floor(s / 60)
@@ -168,7 +228,6 @@ function GeneratingContent() {
       </header>
 
       <main className="flex-1 max-w-screen-md mx-auto w-full px-4 py-6 space-y-6">
-        {/* 总体进度条 */}
         <div className="bg-white rounded-card border border-[#E2E8F0] p-4 space-y-3">
           <div className="flex items-center justify-between">
             <span className="text-sm font-medium text-[#0F172A]">总体进度</span>
@@ -194,7 +253,6 @@ function GeneratingContent() {
           </div>
         </div>
 
-        {/* 步骤列表 */}
         <div className="bg-white rounded-card border border-[#E2E8F0] divide-y divide-[#E2E8F0]">
           {steps.map((s) => (
             <div key={s.id} className="flex items-center gap-3 px-4 py-3.5">
@@ -217,7 +275,6 @@ function GeneratingContent() {
           ))}
         </div>
 
-        {/* 超时提示 */}
         {pageStatus === 'running' && elapsedSeconds > 60 && (
           <div className="bg-[#EFF6FF] rounded-card p-4">
             <p className="text-xs text-[#1E40AF]">
@@ -226,7 +283,6 @@ function GeneratingContent() {
           </div>
         )}
 
-        {/* 失败重试 */}
         {pageStatus === 'failed' && (
           <button
             onClick={() => router.back()}

@@ -1,20 +1,13 @@
 """
 ARQ Worker for 问津 Agent.
-
-This module defines the background task functions executed by ARQ workers.
-Run with: arq app.worker.WorkerSettings
-
-Architecture:
-- Reports are generated via ARQ (not FastAPI BackgroundTasks) for reliability
-- LangGraph runs in isolated Worker process
-- Progress events written to Redis Stream → consumed by SSE endpoint
-- Graph execution uses astream(stream_mode="updates") for per-node structured logging
 """
+import json
 import os
 import time
 import uuid
 from datetime import UTC, datetime
 
+import redis.asyncio as aioredis
 import structlog
 from arq.connections import RedisSettings
 from sqlalchemy import select
@@ -25,6 +18,7 @@ from app.config import settings
 from app.database import async_session_maker
 from app.logging_config import configure_logging
 from app.models.agent_run import AgentRun
+from app.models.report import Report
 
 if settings.langsmith_api_key:
     os.environ["LANGCHAIN_TRACING_V2"] = "true"
@@ -33,6 +27,34 @@ if settings.langsmith_api_key:
 
 configure_logging()
 logger = structlog.get_logger()
+
+
+async def _push_run_sse(run_id: str, event: str, data: dict) -> None:
+    redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
+    try:
+        await redis_client.xadd(
+            f"sse:{run_id}",
+            {"event": event, "data": json.dumps(data, ensure_ascii=False)},
+        )
+        await redis_client.expire(f"sse:{run_id}", 3600)
+    finally:
+        await redis_client.aclose()
+
+
+async def _emit_completed_if_report_exists(run_id: str) -> None:
+    """Fallback: ensure frontend receives completed when report was persisted."""
+    async with async_session_maker() as db:
+        result = await db.execute(
+            select(Report).where(Report.run_id == run_id, Report.deleted_at.is_(None))
+        )
+        report = result.scalar_one_or_none()
+        if not report:
+            return
+        await _push_run_sse(run_id, "completed", {
+            "report_id": report.id,
+            "risk_level": report.risk_level,
+            "compliance_passed": True,
+        })
 
 
 async def _stream_graph(
@@ -168,6 +190,7 @@ async def run_agent(ctx: dict, run_id: str) -> None:
 
     try:
         debug_summary = await _stream_graph(state, config, run_id)
+        await _emit_completed_if_report_exists(run_id)
 
         total_tokens, cost_usd, trace_url = _get_langsmith_stats(ls_run_id)
         duration_seconds = round(time.perf_counter() - run_started_at, 2)

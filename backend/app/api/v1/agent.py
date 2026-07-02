@@ -174,7 +174,7 @@ async def stream_run_events(
 
         try:
             # Send initial connection confirmation
-            yield f"data: {json.dumps({'event': 'connected', 'run_id': run_id})}\n\n"
+            yield f"event: connected\ndata: {json.dumps({'run_id': run_id})}\n\n"
 
             while True:
                 # Check if client disconnected

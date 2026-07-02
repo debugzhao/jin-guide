@@ -218,7 +218,7 @@ export default function AssessPage() {
           </Button>
           <button
             className="w-full text-sm text-[#64748B] py-2"
-            onClick={() => router.push('/reports/demo')}
+            onClick={() => router.push('/reports/demo-report')}
           >
             查看示例报告
           </button>

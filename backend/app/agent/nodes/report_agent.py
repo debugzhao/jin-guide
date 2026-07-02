@@ -254,6 +254,7 @@ async def report_agent(state: VolunteerPlanState) -> dict:
 
     # ── 5. Persist to DB ──────────────────────────────────────────────────────
     report_id = str(uuid4())
+    db_saved = False
     try:
         from app.database import async_session_maker
         from app.models.report import Report
@@ -272,16 +273,21 @@ async def report_agent(state: VolunteerPlanState) -> dict:
             )
             db.add(report)
             await db.commit()
+            db_saved = True
     except Exception as exc:
         logger.exception("Failed to persist report to DB")
         compliance_issues.append(f"报告保存失败：{exc!s}")
 
-    await _push_sse(run_id, "completed", {
-        "report_id": report_id,
-        "risk_level": overall_risk,
-        "needs_review": state.get("needs_human_review", False),
-        "compliance_passed": compliance_passed,
-    })
+    if db_saved:
+        await _push_sse(run_id, "completed", {
+            "report_id": report_id,
+            "risk_level": overall_risk,
+            "compliance_passed": compliance_passed,
+        })
+    else:
+        await _push_sse(run_id, "failed", {
+            "message": "报告保存失败，请稍后重试",
+        })
 
     return {
         "report_id": report_id,

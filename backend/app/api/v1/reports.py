@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.mock_data import MOCK_REPORT_EVIDENCE, MOCK_REPORT_PLAN
 from app.database import get_db
 from app.models.agent_run import AgentRun
 from app.models.report import Report
@@ -46,6 +47,36 @@ class ReportListItem(BaseModel):
     risk_score: Optional[float]
     dataset_version: Optional[str]
     created_at: str
+
+
+def _demo_report_out() -> ReportOut:
+    return ReportOut(
+        id="demo-report",
+        profile_id="demo-profile",
+        run_id="demo-run",
+        status="completed",
+        risk_level="high",
+        risk_score=70.0,
+        plan_json=MOCK_REPORT_PLAN,
+        evidence_json=MOCK_REPORT_EVIDENCE,
+        dataset_version="河南_2026_v1",
+        created_at="2026-07-02T10:00:00Z",
+    )
+
+
+def _report_to_out(report: Report) -> ReportOut:
+    return ReportOut(
+        id=report.id,
+        profile_id=report.profile_id,
+        run_id=report.run_id,
+        status=report.status,
+        risk_level=report.risk_level,
+        risk_score=report.risk_score,
+        plan_json=report.plan_json,
+        evidence_json=report.evidence_json,
+        dataset_version=report.dataset_version,
+        created_at=report.created_at.isoformat(),
+    )
 
 
 @router.post("/generate", response_model=GenerateReportOut, status_code=201)
@@ -118,12 +149,39 @@ async def list_reports(
     ]
 
 
+@router.get("/demo-report", response_model=ReportOut)
+async def get_demo_report():
+    """Static demo report for UI preview and SSE timeout fallback."""
+    return _demo_report_out()
+
+
+@router.get("/by-run/{run_id}", response_model=ReportOut)
+async def get_report_by_run(
+    run_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Fetch a report by the AgentRun that generated it."""
+    if run_id == "demo-run":
+        return _demo_report_out()
+
+    result = await db.execute(
+        select(Report).where(Report.run_id == run_id, Report.deleted_at.is_(None))
+    )
+    report = result.scalar_one_or_none()
+    if not report:
+        raise HTTPException(status_code=404, detail="report not found")
+    return _report_to_out(report)
+
+
 @router.get("/{report_id}", response_model=ReportOut)
 async def get_report(
     report_id: str,
     db: AsyncSession = Depends(get_db),
 ):
     """Fetch a completed Report by ID."""
+    if report_id == "demo-report":
+        return _demo_report_out()
+
     result = await db.execute(
         select(Report).where(Report.id == report_id, Report.deleted_at.is_(None))
     )
@@ -131,15 +189,4 @@ async def get_report(
     if not report:
         raise HTTPException(status_code=404, detail="report not found")
 
-    return ReportOut(
-        id=report.id,
-        profile_id=report.profile_id,
-        run_id=report.run_id,
-        status=report.status,
-        risk_level=report.risk_level,
-        risk_score=report.risk_score,
-        plan_json=report.plan_json,
-        evidence_json=report.evidence_json,
-        dataset_version=report.dataset_version,
-        created_at=report.created_at.isoformat(),
-    )
+    return _report_to_out(report)

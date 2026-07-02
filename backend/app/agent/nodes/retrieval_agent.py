@@ -98,7 +98,7 @@ async def retrieval_agent(state: VolunteerPlanState) -> dict:
         from app.engine.embedding import embed_text
 
         query_text = f"{province} {batch} 招生计划 录取分数线 选科要求"
-        query_vector = await asyncio.to_thread(embed_text, query_text)
+        query_vector = await embed_text(query_text)
 
         from app.database import async_session_maker
         from app.engine.retrieval import rerank_evidence, vector_search
