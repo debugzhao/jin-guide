@@ -153,7 +153,7 @@ async def stream_conversation_response(
                     "model": _CONV_MODEL,
                     "messages": messages,
                     "max_tokens": 1200,
-                    "temperature": 0.4,
+                    "temperature": 1,
                     "stream": True,
                 },
             ) as resp:

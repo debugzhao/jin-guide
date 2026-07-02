@@ -90,7 +90,7 @@ async def _llm_judge(plan_json: dict, compliance_issues: list[str]) -> dict:
                         {"role": "user", "content": user_msg},
                     ],
                     "max_tokens": 500,
-                    "temperature": 0.1,
+                    "temperature": 1,
                 },
             )
             resp.raise_for_status()

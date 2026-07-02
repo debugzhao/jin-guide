@@ -64,7 +64,7 @@ async def create_agent_run(
     existing = await db.execute(
         select(AgentRun).where(
             AgentRun.thread_id == thread_id,
-            AgentRun.status.in_(["queued", "running", "interrupted"]),
+            AgentRun.status.in_(["queued", "running"]),
         )
     )
     existing_run = existing.scalar_one_or_none()
@@ -125,37 +125,6 @@ async def get_agent_run(
         created_at=run.created_at.isoformat(),
         completed_at=run.completed_at.isoformat() if run.completed_at else None,
     )
-
-
-@router.post("/runs/{run_id}/resume", status_code=202)
-async def resume_agent_run(
-    run_id: str,
-    body: dict,
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    Resume an interrupted AgentRun by enqueuing a resume ARQ job.
-    Body is the review conclusion payload injected into State.messages.
-    See PRD Section 11.7 for the payload schema.
-    """
-    result = await db.execute(select(AgentRun).where(AgentRun.id == run_id))
-    run = result.scalar_one_or_none()
-    if not run:
-        raise HTTPException(status_code=404, detail="run not found")
-
-    if run.status != "interrupted":
-        raise HTTPException(
-            status_code=409,
-            detail=f"run is in status '{run.status}'; only 'interrupted' runs can be resumed",
-        )
-
-    arq_pool = getattr(request.app.state, "arq_pool", None)
-    if not arq_pool:
-        raise HTTPException(status_code=503, detail="ARQ pool unavailable")
-
-    await arq_pool.enqueue_job("run_agent_resume", run_id, body)
-    return {"run_id": run_id, "status": "resuming"}
 
 
 @router.get("/runs/{run_id}/events")

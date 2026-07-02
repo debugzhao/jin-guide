@@ -48,7 +48,7 @@ async def _call_llm(messages: list[dict]) -> str:
                 "model": _REPORT_MODEL,
                 "messages": messages,
                 "max_tokens": 2000,
-                "temperature": 0.3,
+                "temperature": 1,
             },
         )
         resp.raise_for_status()
