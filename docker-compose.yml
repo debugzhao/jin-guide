@@ -109,7 +109,11 @@ services:
     ports:
       - "3001:3000"
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      NEXT_BASE_PATH: ${NEXT_BASE_PATH:-}
+      # Server-side (Server Components, BFF proxy route) — resolves via the Docker
+      # network's service name, unlike NEXT_PUBLIC_API_URL which the browser uses.
+      BACKEND_URL: http://backend:8000
     depends_on:
       - backend
     volumes:
