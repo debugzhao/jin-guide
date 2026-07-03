@@ -59,3 +59,6 @@ class VolunteerPlanState(TypedDict):
     completed_at: Optional[str]
     error: Optional[str]
     degraded_agents: list[str]  # Track which agents degraded
+
+    # ── Debug 工具调用日志（Admin Debug Console 用，Worker 聚合 tool_call_summary） ──
+    tool_call_log: Annotated[list[dict], operator.add]  # {node, tool, status, latency_ms}

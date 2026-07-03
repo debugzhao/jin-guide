@@ -7,14 +7,19 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from datetime import UTC, datetime
 
 import redis.asyncio as aioredis
 
+from app.agent.circuit_breaker import get_circuit_breaker
+from app.agent.debug_events import emit_circuit_breaker, emit_degraded, emit_tool_called
 from app.agent.state import VolunteerPlanState
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+_NODE_NAME = "retrieval_agent"
 
 
 async def _push_sse(run_id: str, event: str, data: dict) -> None:
@@ -24,7 +29,7 @@ async def _push_sse(run_id: str, event: str, data: dict) -> None:
             f"sse:{run_id}",
             {"event": event, "data": json.dumps(data, ensure_ascii=False)},
         )
-        await redis_client.expire(f"sse:{run_id}", 3600)
+        await redis_client.expire(f"sse:{run_id}", 604800)
     finally:
         await redis_client.aclose()
 
@@ -58,10 +63,21 @@ async def retrieval_agent(state: VolunteerPlanState) -> dict:
     subject_type = profile.get("subject_type", "physics")
 
     evidence_list: list[dict] = []
+    tool_call_log: list[dict] = []
     retrieved_at = datetime.now(UTC).isoformat()
 
     # ── 1. SQL search (sync, run in thread) ──────────────────────────────────
+    t0 = time.perf_counter()
     sql_records = await asyncio.to_thread(_sql_search_sync, province, batch, subject_type)
+    sql_latency_ms = round((time.perf_counter() - t0) * 1000, 1)
+    tool_call_log.append({
+        "node": _NODE_NAME, "tool": "admission_sql_search",
+        "status": "SUCCESS", "latency_ms": sql_latency_ms,
+    })
+    await emit_tool_called(
+        run_id, _NODE_NAME, "admission_sql_search", "SUCCESS", sql_latency_ms,
+        result_summary=f"{len(sql_records)}条",
+    )
 
     seen_univ: set[str] = set()
     for rec in sql_records:
@@ -94,6 +110,7 @@ async def retrieval_agent(state: VolunteerPlanState) -> dict:
         })
 
     # ── 2. Vector search + rerank (graceful degrade) ─────────────────────────
+    breaker = get_circuit_breaker()
     try:
         from app.engine.embedding import embed_text
 
@@ -103,6 +120,8 @@ async def retrieval_agent(state: VolunteerPlanState) -> dict:
         from app.database import async_session_maker
         from app.engine.retrieval import rerank_evidence, vector_search
 
+        state_before = breaker.get_state("pgvector")
+        t1 = time.perf_counter()
         async with async_session_maker() as db:
             v_result = await vector_search(
                 query_vector=query_vector,
@@ -112,10 +131,44 @@ async def retrieval_agent(state: VolunteerPlanState) -> dict:
                 top_k=20,
                 db=db,
             )
+        vector_latency_ms = round((time.perf_counter() - t1) * 1000, 1)
+        state_after = breaker.get_state("pgvector")
+
+        tool_call_log.append({
+            "node": _NODE_NAME, "tool": "vector_search",
+            "status": v_result.status.value, "latency_ms": vector_latency_ms,
+        })
+        await emit_tool_called(
+            run_id, _NODE_NAME, "vector_search", v_result.status.value, vector_latency_ms,
+            result_summary=f"{len(v_result.data.get('chunks', []))}条",
+        )
+        if state_after != state_before:
+            await emit_circuit_breaker(run_id, _NODE_NAME, "pgvector", state_after.value)
+        if v_result.data.get("degraded"):
+            await emit_degraded(run_id, _NODE_NAME, "vector_search", "sql_search_only", v_result.text)
 
         if v_result.status in ("SUCCESS", "PARTIAL"):
             chunks = v_result.data.get("chunks", [])
+
+            breaker_before = breaker.get_state("cohere_rerank")
+            t2 = time.perf_counter()
             reranked = await rerank_evidence(query_text, chunks)
+            rerank_latency_ms = round((time.perf_counter() - t2) * 1000, 1)
+            breaker_after = breaker.get_state("cohere_rerank")
+
+            tool_call_log.append({
+                "node": _NODE_NAME, "tool": "cohere_rerank",
+                "status": reranked.status.value, "latency_ms": rerank_latency_ms,
+            })
+            await emit_tool_called(
+                run_id, _NODE_NAME, "cohere_rerank", reranked.status.value, rerank_latency_ms,
+                result_summary=f"{len(reranked.data.get('chunks', []))}条",
+            )
+            if breaker_after != breaker_before:
+                await emit_circuit_breaker(run_id, _NODE_NAME, "cohere_rerank", breaker_after.value)
+            if reranked.data.get("degraded"):
+                await emit_degraded(run_id, _NODE_NAME, "cohere_rerank", "vector_top_n", reranked.text)
+
             for chunk in reranked.data.get("chunks", []):
                 evidence_list.append({
                     "source_id": chunk.get("document_id", ""),
@@ -128,6 +181,7 @@ async def retrieval_agent(state: VolunteerPlanState) -> dict:
                 })
     except Exception as exc:
         logger.warning("Vector search skipped in retrieval_agent: %s", exc)
+        await emit_degraded(run_id, _NODE_NAME, "vector_search+rerank", "sql_search_only", str(exc))
 
     await _push_sse(run_id, "node_completed", {
         "node": "retrieval_agent",
@@ -138,4 +192,5 @@ async def retrieval_agent(state: VolunteerPlanState) -> dict:
     return {
         "evidence_list": evidence_list,
         "retrieval_complete": True,
+        "tool_call_log": tool_call_log,
     }

@@ -105,3 +105,37 @@ export interface ChatState {
   isStreaming: boolean
   dailyLimitReached: boolean
 }
+
+// ── Admin Debug Console ──────────────────────────────────────────────────────
+
+/** Node visual states — mirrors debug event payloads from the LangGraph run. */
+export type NodeStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'degraded'
+  | 'failed'
+  | 'interrupted'
+  | 'skipped'
+
+export interface DebugNodeState {
+  status: NodeStatus
+  latencyMs?: number
+  /** Reflection retry counter, e.g. 1/3 */
+  iteration?: number
+}
+
+export interface DebugEvent {
+  id: string
+  /** Event type without the "debug:" prefix, e.g. node_started, tool_called */
+  type: string
+  ts: number
+  node?: string
+  raw: Record<string, unknown>
+}
+
+export interface DebugRunFilter {
+  status?: 'running' | 'completed' | 'failed' | 'interrupted'
+  onlyDegraded?: boolean
+  onlyHumanReview?: boolean
+}

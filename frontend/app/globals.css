@@ -17,3 +17,32 @@ body {
   font-family: var(--font-sans);
   color: #0F172A;
 }
+
+/* ── Admin Debug Console: LangGraph topology edge animations ────────────── */
+
+@keyframes wj-edge-flow-dash {
+  to {
+    stroke-dashoffset: -18;
+  }
+}
+
+.wj-edge-flow {
+  stroke: #2563EB !important;
+  stroke-dasharray: 6, 4;
+  animation: wj-edge-flow-dash 0.6s linear infinite;
+}
+
+@keyframes wj-edge-flash-anim {
+  0%, 100% {
+    stroke: #7C3AED;
+    stroke-width: 2;
+  }
+  50% {
+    stroke: #C4B5FD;
+    stroke-width: 3.5;
+  }
+}
+
+.wj-edge-flash {
+  animation: wj-edge-flash-anim 0.5s ease-in-out 2;
+}

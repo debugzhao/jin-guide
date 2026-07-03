@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { ChatMessage, PlanType } from '@/types'
+import type { ChatMessage, DebugEvent, DebugNodeState, DebugRunFilter, PlanType } from '@/types'
 
 const uuidv4 = () =>
   typeof crypto !== 'undefined' && crypto.randomUUID
@@ -26,6 +26,9 @@ interface ChatSlice {
   streamingContent: string
   isStreaming: boolean
   dailyLimitReached: boolean
+  dailyLimitMessage: string | null
+  /** Last failed user message, kept around so the "重试" button can resend it */
+  lastFailedMessage: string | null
 
   openChatPanel: (reportId: string) => void
   closeChatPanel: () => void
@@ -36,13 +39,54 @@ interface ChatSlice {
   appendStreamToken: (token: string) => void
   /** Called on SSE done — commits the streaming message */
   commitStreamingMessage: (citations?: { source_id: string; text: string }[]) => void
-  setDailyLimitReached: (reached: boolean) => void
+  setDailyLimitReached: (reached: boolean, message?: string) => void
+  setLastFailedMessage: (message: string | null) => void
   clearChat: () => void
+}
+
+// ── Debug slice (Admin Debug Console — /admin/debug only) ──────────────────────
+
+/** The 7 real LangGraph nodes (HITL/profile_agent/deliver removed in v1.1 — see CLAUDE.md) */
+export const DEBUG_NODE_NAMES = [
+  'data_resolver',
+  'retrieval_agent',
+  'policy_rule_agent',
+  'recommendation',
+  'risk',
+  'report',
+  'reflection',
+] as const
+
+function initialNodeStates(): Record<string, DebugNodeState> {
+  return Object.fromEntries(DEBUG_NODE_NAMES.map((n) => [n, { status: 'pending' as const }]))
+}
+
+const DEBUG_EVENTS_CAP = 1000
+
+interface DebugSlice {
+  selectedRunId: string | null
+  isLiveFollowing: boolean
+  debugRunFilter: DebugRunFilter
+  nodeStates: Record<string, DebugNodeState>
+  debugEvents: DebugEvent[]
+  timelineFilter: 'all' | 'node' | 'tool' | 'error'
+  isAutoScroll: boolean
+
+  setSelectedRunId: (runId: string | null) => void
+  setIsLiveFollowing: (live: boolean) => void
+  setDebugRunFilter: (filter: DebugRunFilter) => void
+  /** Feed one parsed SSE debug event in; updates nodeStates + appends to debugEvents */
+  applyDebugEvent: (type: string, data: Record<string, unknown>) => void
+  /** Mark any node still "running" as failed — called on debug:stream_end when run.status === 'failed' */
+  markRunningNodesFailed: () => void
+  resetDebugState: () => void
+  setTimelineFilter: (filter: DebugSlice['timelineFilter']) => void
+  setAutoScroll: (auto: boolean) => void
 }
 
 // ── App store ─────────────────────────────────────────────────────────────────
 
-interface AppStore extends ChatSlice {
+interface AppStore extends ChatSlice, DebugSlice {
   profileId: string | null
   setProfileId: (id: string) => void
   currentTab: PlanType
@@ -73,6 +117,8 @@ export const useAppStore = create<AppStore>()(
       streamingContent: '',
       isStreaming: false,
       dailyLimitReached: false,
+      dailyLimitMessage: null,
+      lastFailedMessage: null,
 
       openChatPanel: (reportId) => {
         const { activeReportId } = get()
@@ -122,10 +168,102 @@ export const useAppStore = create<AppStore>()(
         }))
       },
 
-      setDailyLimitReached: (reached) => set({ dailyLimitReached: reached }),
+      setDailyLimitReached: (reached, message) =>
+        set({ dailyLimitReached: reached, dailyLimitMessage: reached ? message ?? null : null }),
+
+      setLastFailedMessage: (message) => set({ lastFailedMessage: message }),
 
       clearChat: () =>
-        set({ messages: [], streamingContent: '', isStreaming: false, dailyLimitReached: false }),
+        set({
+          messages: [],
+          streamingContent: '',
+          isStreaming: false,
+          dailyLimitReached: false,
+          dailyLimitMessage: null,
+          lastFailedMessage: null,
+        }),
+
+      // ── debug slice ──
+      selectedRunId: null,
+      isLiveFollowing: true,
+      debugRunFilter: {},
+      nodeStates: initialNodeStates(),
+      debugEvents: [],
+      timelineFilter: 'all',
+      isAutoScroll: true,
+
+      setSelectedRunId: (runId) =>
+        set({ selectedRunId: runId, nodeStates: initialNodeStates(), debugEvents: [] }),
+
+      setIsLiveFollowing: (live) => set({ isLiveFollowing: live }),
+
+      setDebugRunFilter: (filter) => set({ debugRunFilter: filter }),
+
+      applyDebugEvent: (type, data) => {
+        const event: DebugEvent = {
+          id: uuidv4(),
+          type,
+          ts: typeof data.ts === 'number' ? data.ts : Date.now() / 1000,
+          node: typeof data.node === 'string' ? data.node : undefined,
+          raw: data,
+        }
+
+        set((s) => {
+          const nodeStates = { ...s.nodeStates }
+          const node = event.node
+
+          if (node) {
+            const prev = nodeStates[node] ?? { status: 'pending' as const }
+            if (type === 'node_started') {
+              nodeStates[node] = {
+                ...prev,
+                status: 'running',
+                iteration: typeof data.iteration === 'number' ? data.iteration : prev.iteration,
+              }
+            } else if (type === 'node_completed') {
+              nodeStates[node] = {
+                ...prev,
+                // A prior `degraded` event for this node wins over the generic "completed"
+                // status the graph wrapper always sends on node exit.
+                status: prev.status === 'degraded' ? 'degraded' : 'completed',
+                latencyMs: typeof data.latency_ms === 'number' ? data.latency_ms : prev.latencyMs,
+              }
+            } else if (type === 'degraded') {
+              nodeStates[node] = { ...prev, status: 'degraded' }
+            }
+          }
+
+          // reflection_iteration doesn't carry a `node` field — target it explicitly.
+          if (type === 'reflection_iteration' && typeof data.iteration === 'number') {
+            const prev = nodeStates['reflection'] ?? { status: 'pending' as const }
+            nodeStates['reflection'] = { ...prev, iteration: data.iteration }
+          }
+
+          return {
+            nodeStates,
+            debugEvents: [...s.debugEvents, event].slice(-DEBUG_EVENTS_CAP),
+          }
+        })
+      },
+
+      markRunningNodesFailed: () => {
+        set((s) => {
+          const nodeStates = { ...s.nodeStates }
+          for (const [name, node] of Object.entries(nodeStates)) {
+            if (node.status === 'running') {
+              nodeStates[name] = { ...node, status: 'failed' }
+            }
+          }
+          return { nodeStates }
+        })
+      },
+
+      resetDebugState: () =>
+        set({ nodeStates: initialNodeStates(), debugEvents: [], isAutoScroll: true }),
+
+      setTimelineFilter: (filter) => set({ timelineFilter: filter }),
+
+      setAutoScroll: (auto) => set({ isAutoScroll: auto }),
     }),
     {
       name: 'wenjin-store',

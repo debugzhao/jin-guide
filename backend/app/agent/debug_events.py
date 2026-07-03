@@ -72,10 +72,46 @@ async def emit_debug_event(
                 "data": json.dumps(payload, ensure_ascii=False, default=str),
             },
         )
-        # Keep stream alive for 2 hours (same as user events)
-        await redis_client.expire(stream_key, 7200)
+        # Keep stream alive for 7 days (matches Admin Debug console replay window)
+        await redis_client.expire(stream_key, 604800)
     except Exception:
         # Debug emission is best-effort — never propagate errors into the Agent
         pass
     finally:
         await redis_client.aclose()
+
+
+# ── Convenience wrappers for common debug event shapes ─────────────────────────
+
+async def emit_tool_called(
+    run_id: str,
+    node: str,
+    tool: str,
+    status: str,
+    latency_ms: float,
+    **extra,
+) -> None:
+    """Record a single tool invocation (vector_search, cohere_rerank, rule checks, ...)."""
+    await emit_debug_event(
+        run_id,
+        "tool_called",
+        {"node": node, "tool": tool, "status": status, "latency_ms": latency_ms, **extra},
+    )
+
+
+async def emit_circuit_breaker(run_id: str, node: str, tool: str, state: str, **extra) -> None:
+    """Record a CircuitBreaker state transition (CLOSED/OPEN/HALF_OPEN)."""
+    await emit_debug_event(
+        run_id,
+        "circuit_breaker",
+        {"node": node, "tool": tool, "state": state, **extra},
+    )
+
+
+async def emit_degraded(run_id: str, node: str, from_tool: str, to_tool: str, reason: str) -> None:
+    """Record a graceful-degradation fallback (e.g. vector_search → sql_search)."""
+    await emit_debug_event(
+        run_id,
+        "degraded",
+        {"node": node, "from": from_tool, "to": to_tool, "reason": reason},
+    )

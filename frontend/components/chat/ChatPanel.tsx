@@ -1,13 +1,15 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
-import { X, AlertCircle, RefreshCw } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { X, AlertCircle, RefreshCw, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/lib/store'
 import { chatApi } from '@/lib/api'
 import ChatMessageBubble, { ChatStreamingBubble } from './ChatMessageBubble'
 import ChatSuggestedQuestions from './ChatSuggestedQuestions'
 import ChatInput from './ChatInput'
 import type { ChatMessage } from '@/types'
+
+const HISTORY_WARNING_THRESHOLD = 40
 
 interface Props {
   reportId: string
@@ -22,14 +24,19 @@ export default function ChatPanel({ reportId }: Props) {
     streamingContent,
     isStreaming,
     dailyLimitReached,
+    dailyLimitMessage,
+    lastFailedMessage,
     appendUserMessage,
     appendStreamToken,
     commitStreamingMessage,
     setDailyLimitReached,
+    setLastFailedMessage,
+    clearChat,
   } = useAppStore()
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<(() => void) | null>(null)
+  const [confirmingClear, setConfirmingClear] = useState(false)
 
   // Load history when panel opens
   useEffect(() => {
@@ -63,6 +70,7 @@ export default function ChatPanel({ reportId }: Props) {
 
   const handleSend = (message: string) => {
     if (isStreaming) return
+    setLastFailedMessage(null)
     appendUserMessage(message)
 
     const abort = chatApi.streamMessage(reportId, message, {
@@ -72,14 +80,36 @@ export default function ChatPanel({ reportId }: Props) {
       onComplianceWarning: () => {},
       onError: (msg) => {
         commitStreamingMessage()
+        setLastFailedMessage(message)
         console.error('Chat error:', msg)
       },
-      onRateLimit: () => {
-        setDailyLimitReached(true)
+      onRateLimit: (msg) => {
+        setDailyLimitReached(true, msg)
         commitStreamingMessage()
       },
     })
     abortRef.current = abort
+  }
+
+  const handleRetry = () => {
+    if (!lastFailedMessage) return
+    const msg = lastFailedMessage
+    setLastFailedMessage(null)
+    handleSend(msg)
+  }
+
+  const handleClearChat = async () => {
+    if (!confirmingClear) {
+      setConfirmingClear(true)
+      return
+    }
+    setConfirmingClear(false)
+    try {
+      await chatApi.clearHistory(reportId)
+    } catch {
+      // best-effort — clear local state regardless so the UI doesn't feel stuck
+    }
+    clearChat()
   }
 
   if (!isChatPanelOpen) return null
@@ -108,13 +138,43 @@ export default function ChatPanel({ reportId }: Props) {
             <p className="text-sm font-semibold text-gray-900">问问 AI 助手</p>
             <p className="text-[10px] text-gray-400">基于你的志愿报告解答问题</p>
           </div>
-          <button
-            onClick={closeChatPanel}
-            className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
-            aria-label="关闭"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-1">
+            {messages.length > 0 && (
+              confirmingClear ? (
+                <div className="flex items-center gap-1.5 mr-1">
+                  <span className="text-[11px] text-gray-500">确定清除？</span>
+                  <button
+                    onClick={() => setConfirmingClear(false)}
+                    className="text-[11px] text-gray-400 hover:text-gray-600 px-1"
+                  >
+                    取消
+                  </button>
+                  <button
+                    onClick={handleClearChat}
+                    className="text-[11px] text-red-600 hover:text-red-700 font-medium px-1"
+                  >
+                    确定
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={handleClearChat}
+                  className="flex items-center gap-1 px-1.5 py-1 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                  aria-label="清除对话"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span className="text-[11px]">清除对话</span>
+                </button>
+              )
+            )}
+            <button
+              onClick={closeChatPanel}
+              className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+              aria-label="关闭"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* Messages area */}
@@ -123,6 +183,11 @@ export default function ChatPanel({ reportId }: Props) {
             <ChatSuggestedQuestions onSelect={handleSend} />
           ) : (
             <>
+              {messages.length > HISTORY_WARNING_THRESHOLD && (
+                <p className="text-center text-[11px] text-gray-400 py-1">
+                  对话已超过 {HISTORY_WARNING_THRESHOLD} 条，较早的内容可能影响回答的连贯性
+                </p>
+              )}
               {messages.map((msg) => (
                 <ChatMessageBubble key={msg.id} message={msg} />
               ))}
@@ -132,10 +197,25 @@ export default function ChatPanel({ reportId }: Props) {
             </>
           )}
 
+          {lastFailedMessage && !isStreaming && (
+            <div className="flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl bg-red-50 border border-red-200">
+              <p className="text-xs text-red-700">连接中断，消息未发送成功</p>
+              <button
+                onClick={handleRetry}
+                className="flex items-center gap-1 text-xs text-red-700 font-medium hover:text-red-800 flex-shrink-0"
+              >
+                <RefreshCw className="w-3 h-3" />
+                重试
+              </button>
+            </div>
+          )}
+
           {dailyLimitReached && (
             <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-amber-50 border border-amber-200">
               <AlertCircle className="w-4 h-4 text-amber-500 flex-shrink-0" />
-              <p className="text-xs text-amber-700">今日问答次数已达上限，明日 0 点重置</p>
+              <p className="text-xs text-amber-700">
+                {dailyLimitMessage || '今日问答次数已达上限，明日 0 点重置'}
+              </p>
             </div>
           )}
 

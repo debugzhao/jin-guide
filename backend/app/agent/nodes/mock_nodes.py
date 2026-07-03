@@ -29,7 +29,7 @@ async def _push_sse_event(run_id: str, event: str, data: dict) -> None:
             {"event": event, "data": json.dumps(data, ensure_ascii=False)},
         )
         # Auto-expire stream after 1 hour to avoid memory leak
-        await redis_client.expire(stream_key, 3600)
+        await redis_client.expire(stream_key, 604800)
     finally:
         await redis_client.aclose()
 

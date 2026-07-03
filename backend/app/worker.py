@@ -37,7 +37,7 @@ async def _push_run_sse(run_id: str, event: str, data: dict) -> None:
             f"sse:{run_id}",
             {"event": event, "data": json.dumps(data, ensure_ascii=False)},
         )
-        await redis_client.expire(f"sse:{run_id}", 3600)
+        await redis_client.expire(f"sse:{run_id}", 604800)
     finally:
         await redis_client.aclose()
 
@@ -68,8 +68,9 @@ async def _stream_graph(
     Returns a debug_summary dict for writing to agent_runs.debug_summary_json.
     """
     node_timings: dict[str, float] = {}
-    tool_call_counts: dict[str, int] = {}
     degraded_agents: list[str] = []
+    tool_call_entries: list[dict] = []
+    state_summary: dict = {}
     step_started_at = time.perf_counter()
 
     async for chunk in agent_graph.astream(graph_input, config=config, stream_mode="updates"):
@@ -84,19 +85,63 @@ async def _stream_graph(
                 stage="node_completed",
                 latency_ms=latency_ms,
             )
+            if not isinstance(node_state, dict):
+                continue
+
             # Collect degraded agents from state delta
-            if isinstance(node_state, dict):
-                for agent_name in node_state.get("degraded_agents", []):
-                    if agent_name not in degraded_agents:
-                        degraded_agents.append(agent_name)
+            for agent_name in node_state.get("degraded_agents", []):
+                if agent_name not in degraded_agents:
+                    degraded_agents.append(agent_name)
+
+            # Collect per-tool-call log entries (populated by retrieval_agent /
+            # policy_rule_agent) for tool_call_summary aggregation below.
+            tool_call_entries.extend(node_state.get("tool_call_log", []))
+
+            # Business state_summary fields, read straight off each node's own
+            # output delta (only the node that owns the field ever sets it).
+            if "evidence_list" in node_state:
+                state_summary["evidence_count"] = len(node_state["evidence_list"])
+            if "hard_blocked_items" in node_state:
+                state_summary["hard_blocked_count"] = len(node_state["hard_blocked_items"])
+            if "scored_candidates" in node_state:
+                state_summary["candidates_count"] = len(node_state["scored_candidates"])
+            if "reflection_iterations" in node_state:
+                state_summary["reflection_iterations"] = node_state["reflection_iterations"]
+
+    # Group tool_call_entries by tool name → count/success/error/avg_latency_ms
+    tool_stats: dict[str, dict] = {}
+    for entry in tool_call_entries:
+        tool = entry.get("tool", "unknown")
+        bucket = tool_stats.setdefault(
+            tool, {"tool": tool, "count": 0, "success": 0, "error": 0, "_latency_sum": 0.0}
+        )
+        bucket["count"] += 1
+        bucket["_latency_sum"] += entry.get("latency_ms", 0.0)
+        if str(entry.get("status", "")).upper() == "ERROR":
+            bucket["error"] += 1
+        else:
+            bucket["success"] += 1
+
+    tool_call_summary = []
+    for bucket in tool_stats.values():
+        count = bucket["count"]
+        tool_call_summary.append({
+            "tool": bucket["tool"],
+            "count": count,
+            "success": bucket["success"],
+            "error": bucket["error"],
+            "avg_latency_ms": round(bucket["_latency_sum"] / count, 1) if count else 0.0,
+        })
+
+    state_summary["nodes_completed"] = list(node_timings.keys())
 
     return {
         "node_timings": node_timings,
-        "tool_call_summary": [
-            {"node": n, "count": c} for n, c in tool_call_counts.items()
-        ],
-        "state_summary": {"nodes_completed": list(node_timings.keys())},
+        "tool_call_summary": tool_call_summary,
+        "state_summary": state_summary,
         "degraded_agents": degraded_agents,
+        # HITL was removed in v1.1 (see CLAUDE.md) — there is no code path that can
+        # trigger human review, so this is correctly always False, not a stub.
         "triggered_human_review": False,
     }
 
@@ -132,6 +177,7 @@ def _build_initial_state(run: AgentRun) -> VolunteerPlanState:
         completed_at=None,
         error=None,
         degraded_agents=[],
+        tool_call_log=[],
     )
 
 

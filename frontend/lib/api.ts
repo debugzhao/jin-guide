@@ -203,7 +203,7 @@ export const chatApi = {
       onDone: (citations: { source_id: string; text: string }[]) => void
       onComplianceWarning: (issues: string[]) => void
       onError: (msg: string) => void
-      onRateLimit: () => void
+      onRateLimit: (message?: string) => void
     }
   ): (() => void) => {
     const BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -221,7 +221,9 @@ export const chatApi = {
         })
 
         if (resp.status === 429) {
-          callbacks.onRateLimit()
+          const body = await resp.json().catch(() => ({}))
+          const detail = body?.detail
+          callbacks.onRateLimit(typeof detail === 'object' ? detail?.message : undefined)
           return
         }
         if (!resp.ok) {

@@ -22,7 +22,7 @@ async def _push_sse(run_id: str, event: str, data: dict) -> None:
             f"sse:{run_id}",
             {"event": event, "data": json.dumps(data, ensure_ascii=False)},
         )
-        await redis_client.expire(f"sse:{run_id}", 3600)
+        await redis_client.expire(f"sse:{run_id}", 604800)
     finally:
         await redis_client.aclose()
 
