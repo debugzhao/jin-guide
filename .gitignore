@@ -1,6 +1,7 @@
 # Claude Code 记忆目录，仅供 Agent 使用
 memory/
 .claude/
+.playwright-mcp/
 
 # Python / FastAPI
 __pycache__/
@@ -40,3 +41,5 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+
+*.png
