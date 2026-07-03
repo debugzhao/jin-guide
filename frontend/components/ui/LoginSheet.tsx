@@ -5,6 +5,7 @@ import { Eye, EyeOff } from 'lucide-react'
 import Modal from './Modal'
 import Button from './Button'
 import { api } from '@/lib/api'
+import { useAppStore } from '@/lib/store'
 
 type Mode = 'login' | 'register'
 
@@ -15,6 +16,7 @@ interface LoginSheetProps {
 }
 
 export default function LoginSheet({ isOpen, onClose, onSuccess }: LoginSheetProps) {
+  const setUser = useAppStore((s) => s.setUser)
   const [mode, setMode] = useState<Mode>('login')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -74,6 +76,8 @@ export default function LoginSheet({ isOpen, onClose, onSuccess }: LoginSheetPro
     setLoading(true)
     try {
       await api.login({ email, password })
+      const me = await api.me()
+      setUser(me)
       onSuccess?.()
       onClose()
     } catch (e: unknown) {
@@ -104,6 +108,8 @@ export default function LoginSheet({ isOpen, onClose, onSuccess }: LoginSheetPro
     setLoading(true)
     try {
       await api.register({ email, code, password })
+      const me = await api.me()
+      setUser(me)
       onSuccess?.()
       onClose()
     } catch (e: unknown) {

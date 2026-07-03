@@ -1,5 +1,6 @@
 """
-Admin Debug Console API — 仅 role=admin 可访问
+Admin Debug Console API — 面向任何访客开放（含未登录），无角色限制。
+数据本身不含 PII（省份/位次/分数等），仅暴露耗时/费用/工具调用等运维指标。
 
 Endpoints:
   GET  /admin/runs                   — list recent agent runs with debug summary
@@ -20,11 +21,9 @@ from pydantic import BaseModel
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import require_admin_role
 from app.config import settings
 from app.database import get_db
 from app.models.agent_run import AgentRun
-from app.models.user import User
 
 router = APIRouter()
 
@@ -107,7 +106,6 @@ async def list_admin_runs(
     limit: int = Query(50, ge=1, le=200),
     status: Optional[str] = Query(None, description="Filter by status"),
     db: AsyncSession = Depends(get_db),
-    _admin: User = Depends(require_admin_role),
 ):
     """
     Return the most recent agent runs with lightweight debug indicators.
@@ -148,7 +146,6 @@ async def list_admin_runs(
 async def get_admin_run(
     run_id: str,
     db: AsyncSession = Depends(get_db),
-    _admin: User = Depends(require_admin_role),
 ):
     """Return full debug metadata for a single run."""
     result = await db.execute(select(AgentRun).where(AgentRun.id == run_id))
@@ -178,7 +175,6 @@ async def stream_debug_events(
     run_id: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    _admin: User = Depends(require_admin_role),
 ):
     """
     Admin Debug SSE endpoint. Replays full event history from Redis Stream start (0-0),
@@ -245,7 +241,6 @@ async def stream_debug_events(
 @router.get("/metrics/summary", response_model=MetricsSummary)
 async def get_metrics_summary(
     db: AsyncSession = Depends(get_db),
-    _admin: User = Depends(require_admin_role),
 ):
     """
     Return real-time system metrics snapshot.

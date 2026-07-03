@@ -17,6 +17,24 @@ interface AssessFormData {
   hasPhysicalLimits?: boolean
 }
 
+// ── Auth slice ────────────────────────────────────────────────────────────────
+
+export interface CurrentUser {
+  user_id: string
+  email: string
+  role: string
+  email_verified: boolean
+}
+
+interface AuthSlice {
+  user: CurrentUser | null
+  /** True once an api.me() probe has completed (success or failure) — avoids
+   *  flashing the "登录" button before we know the real session state. */
+  authChecked: boolean
+  setUser: (user: CurrentUser | null) => void
+  clearUser: () => void
+}
+
 // ── Chat slice ────────────────────────────────────────────────────────────────
 
 interface ChatSlice {
@@ -64,6 +82,8 @@ function initialNodeStates(): Record<string, DebugNodeState> {
 const DEBUG_EVENTS_CAP = 1000
 
 interface DebugSlice {
+  /** Controls the homepage-triggered debug drawer — open to any visitor, no role check. */
+  isDebugDrawerOpen: boolean
   selectedRunId: string | null
   isLiveFollowing: boolean
   debugRunFilter: DebugRunFilter
@@ -72,6 +92,8 @@ interface DebugSlice {
   timelineFilter: 'all' | 'node' | 'tool' | 'error'
   isAutoScroll: boolean
 
+  openDebugDrawer: () => void
+  closeDebugDrawer: () => void
   setSelectedRunId: (runId: string | null) => void
   setIsLiveFollowing: (live: boolean) => void
   setDebugRunFilter: (filter: DebugRunFilter) => void
@@ -86,7 +108,7 @@ interface DebugSlice {
 
 // ── App store ─────────────────────────────────────────────────────────────────
 
-interface AppStore extends ChatSlice, DebugSlice {
+interface AppStore extends ChatSlice, DebugSlice, AuthSlice {
   profileId: string | null
   setProfileId: (id: string) => void
   currentTab: PlanType
@@ -183,7 +205,14 @@ export const useAppStore = create<AppStore>()(
           lastFailedMessage: null,
         }),
 
+      // ── auth slice ──
+      user: null,
+      authChecked: false,
+      setUser: (user) => set({ user, authChecked: true }),
+      clearUser: () => set({ user: null, authChecked: true }),
+
       // ── debug slice ──
+      isDebugDrawerOpen: false,
       selectedRunId: null,
       isLiveFollowing: true,
       debugRunFilter: {},
@@ -191,6 +220,9 @@ export const useAppStore = create<AppStore>()(
       debugEvents: [],
       timelineFilter: 'all',
       isAutoScroll: true,
+
+      openDebugDrawer: () => set({ isDebugDrawerOpen: true }),
+      closeDebugDrawer: () => set({ isDebugDrawerOpen: false }),
 
       setSelectedRunId: (runId) =>
         set({ selectedRunId: runId, nodeStates: initialNodeStates(), debugEvents: [] }),
