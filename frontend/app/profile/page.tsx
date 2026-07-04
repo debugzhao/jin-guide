@@ -25,7 +25,7 @@ const PROVINCES = ['北京', '上海', '天津', '重庆', '河北', '山西', '
   '江苏', '浙江', '安徽', '福建', '江西', '山东', '河南', '湖北', '湖南',
   '广东', '海南', '四川', '贵州', '云南', '陕西', '甘肃', '青海', '内蒙古',
   '广西', '西藏', '新疆', '宁夏']
-const SUBJECTS = ['语文', '数学', '英语', '物理', '化学', '生物', '历史', '地理', '政治']
+const SUBJECTS = ['物理', '历史', '化学', '生物', '地理', '政治']
 const MAJOR_GROUPS = ['计算机/软件', '数学/统计', '电子/通信', '机械/自动化', '医学/药学',
   '经济/金融', '法学', '中文/新闻', '外语', '艺术/设计', '师范/教育', '农林', '其他']
 const CITIES = ['北京', '上海', '广州', '深圳', '成都', '杭州', '武汉', '西安', '南京', '重庆',
@@ -35,7 +35,10 @@ const step1Schema = z.object({
   province: z.string().min(1, '请选择省份'),
   batch: z.string().min(1, '请选择批次'),
   score: z.number({ invalid_type_error: '请输入分数' }).int().min(0).max(750),
-  rank: z.number({ invalid_type_error: '请输入位次' }).int().min(1).optional(),
+  rank: z.preprocess(
+    (v) => (typeof v === 'number' && Number.isNaN(v) ? undefined : v),
+    z.number({ invalid_type_error: '请输入位次' }).int().min(1).optional()
+  ),
 })
 
 type Step1 = z.infer<typeof step1Schema>
@@ -137,7 +140,7 @@ export default function ProfilePage() {
             <div>
               <label className="wj-field-label block text-sm font-medium text-[#0F172A] mb-1.5">批次</label>
               <div className="wj-choice-row flex gap-2">
-                {['本科一批', '本科二批', '专科批'].map(b => (
+                {['本科批', '专科批'].map(b => (
                   <label key={b} className="wj-choice-card flex-1 flex items-center justify-center gap-1.5 border border-[#E2E8F0] rounded-btn py-2.5 text-sm cursor-pointer has-[:checked]:border-[#1E40AF] has-[:checked]:bg-[#EFF6FF] has-[:checked]:text-[#1E40AF]">
                     <input type="radio" {...register('batch')} value={b} className="sr-only" />
                     {b}
@@ -168,6 +171,7 @@ export default function ProfilePage() {
                 placeholder="例：12345"
                 className="wj-input w-full border border-[#E2E8F0] rounded-btn px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E40AF]/30"
               />
+              {errors.rank && <p className="text-xs text-[#DC2626] mt-1">{errors.rank.message}</p>}
             </div>
 
             <div className="wj-actions">

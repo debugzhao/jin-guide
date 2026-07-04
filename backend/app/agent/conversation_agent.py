@@ -180,6 +180,14 @@ async def stream_conversation_response(
         yield {"type": "token", "content": fallback}
         full_response = fallback
 
+    if not full_response.strip():
+        # Model returned a 200 with zero content tokens (seen with Moonshot under
+        # load) — treat as a failure instead of silently persisting an empty reply.
+        logger.warning("ConversationAgent received an empty completion")
+        fallback = "抱歉，AI 助手暂时无法生成回复，请稍后重试。"
+        yield {"type": "token", "content": fallback}
+        full_response = fallback
+
     # ── Compliance check on full assembled response ──
     passed, issues = _compliance_check(full_response)
     if not passed:

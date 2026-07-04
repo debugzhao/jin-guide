@@ -100,7 +100,11 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
-    command: arq app.worker.WorkerSettings
+    # arq has no built-in --reload; watchfiles (already pulled in by uvicorn[standard])
+    # restarts the worker process whenever a .py file under app/ changes, mirroring the
+    # backend service's --reload behavior. Without this, code changes to
+    # backend/app/agent/** silently have no effect until the container is restarted by hand.
+    command: sh -c "watchfiles --filter python 'arq app.worker.WorkerSettings' app"
 
   frontend:
     build:

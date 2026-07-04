@@ -67,7 +67,7 @@ export default function HomePage() {
           materials="已填好的志愿草稿"
           estimatedTime="约 5 分钟"
           actionLabel="上传志愿表"
-          href="/assess"
+          href="/volunteer-check"
         />
 
         <EntryCard

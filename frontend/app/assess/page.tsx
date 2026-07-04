@@ -18,7 +18,10 @@ const assessSchema = z.object({
   province: z.string().min(1, '请选择省份'),
   batch: z.string().min(1, '请选择批次'),
   score: z.coerce.number().min(100, '分数不低于100').max(750, '分数不超过750'),
-  rank: z.coerce.number().min(1).optional(),
+  rank: z.preprocess(
+    (v) => (v === '' || v === undefined || v === null ? undefined : v),
+    z.coerce.number().min(1, '位次需大于0').optional()
+  ),
   subjectType: z.enum(['physics', 'history'], { required_error: '请选择首选科目' }),
   electives: z.array(z.string()).optional(),
   gender: z.enum(['male', 'female'], { required_error: '请选择性别' }),
@@ -294,6 +297,7 @@ export default function AssessPage() {
               placeholder="如：32680"
               className="w-full border border-[#E2E8F0] rounded-btn px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E40AF]"
             />
+            {errors.rank && <p className="text-xs text-[#DC2626] mt-1">{errors.rank.message}</p>}
           </div>
         </Card>
 
