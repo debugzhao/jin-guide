@@ -1,11 +1,12 @@
 # 问津 Agent — 执行 Sprint 计划
 
-版本：v1.2  
-日期：2026-07-01  
+版本：v1.3  
+日期：2026-07-06  
 
+> **v1.3 更新**：新增 Phase 3 Sprint（P3 Day 1-6）——「AI 全程协作者」产品重构，规划来源见 [`docs/prd-redesign-ai-collaborator.md`](./prd-redesign-ai-collaborator.md)（已评审通过，Generative UI 混合形态）。核心变化：生成进度页从静态 checklist 升级为可见的 Agent 协作时间线、建档问诊从固定表单向导改为对话流+结构化控件、ConversationAgent 从纯问答升级为可操作报告画布的 tool-calling agent、新增方案对比能力。新增 Demo 案例 #8 / #9 / #10。  
 > **v1.2 更新**：新增 Phase 2 Sprint（P2 Day 1-3），包含两个新功能：① 报告问答 Chat Panel（ConversationAgent）② Admin Debug 控制台（LangGraph 实时拓扑图 + Debug 事件时间线）。新增 Demo 案例 #6 / #7。  
-> **v1.1 实现变更**：M3 的 HITL 复核闭环已取消；鉴权改为邮箱+密码。代码为准，本计划部分 Day 8-9 HITL 条目仅作历史参考。
-目标：**7-10 天完成三个里程碑，部署上线，可作为面试作品集展示**
+> **v1.1 实现变更**：M3 的 HITL 复核闭环已取消，未实现；鉴权改为邮箱+密码（非手机号）。以下 Day 8-9 已同步移除 HITL 相关任务，仅保留实际交付内容。
+目标：**7-10 天完成三个里程碑，部署上线，可作为面试作品集展示**；Phase 3 目标：**把黑盒的 Agent 编排能力和单向的报告交付，改造成用户可感知、可对话调整的协作体验**
 
 > 本文件是**执行索引**，不重复 PRD 内容。技术细节见：
 >
@@ -23,6 +24,7 @@
 | **M2：核心引擎**          | Day 4-7     | 真实业务逻辑，真实数据       | 三套方案用真实算法；RAG 证据检索；LangSmith trace                    |
 | **M3：Agent 深化 + 上线** | Day 8-10    | 完整 Agent 编排，部署线上    | Reflection 自检；邮箱鉴权；线上 URL 可访问（**HITL 已移除**）        |
 | **Phase 2：增强功能**     | P2 Day 1-3  | Chat Panel + Admin Debug     | 报告问答 AI 助手；LangGraph 实时拓扑图；Debug 事件时间线             |
+| **Phase 3：AI 协作者重构** | P3 Day 1-6  | 编排可视化前置 + 多轮交互能力 | 生成过程可见的协作时间线；建档 Generative UI 化；改约束重新生成 + 方案对比 |
 
 ---
 
@@ -40,7 +42,7 @@
 ✅ 建档问诊 6 步 Wizard 可完整填写，数据写入数据库
 ✅ 点击"生成方案" → ARQ Worker 收到任务 → SSE 进度条有响应
 ✅ 报告页三套方案 Tab 可切换（hardcode 数据即可）
-✅ 匿名会话创建正常，手机号登录流程可走通
+✅ 匿名会话创建正常，邮箱登录流程可走通
 ```
 
 ### Day 1：基础设施 + 项目骨架
@@ -67,7 +69,7 @@
 
 | 任务                                                                              | 类型    | 参考                         |
 | --------------------------------------------------------------------------------- | ------- | ---------------------------- |
-| Alembic 补全剩余表：`preferences / reports / human_reviews / chunks` 等           | backend | backend-prd Section 6.1      |
+| Alembic 补全剩余表：`preferences / reports / chunks` 等           | backend | backend-prd Section 6.1      |
 | `POST /api/v1/auth/session`：创建匿名会话                                         | backend | backend-prd Section 5.1      |
 | `POST /api/v1/profile`、`GET /api/v1/profile/{id}`：档案 CRUD                     | backend | backend-prd Section 5.1      |
 | `POST /api/v1/reports/generate`：创建 agent run，投入 ARQ 队列，返回 run_id       | backend | backend-prd Section 5.1, 5.3 |
@@ -91,7 +93,7 @@
 | 建档问诊（`/profile`）：6 步 Wizard，自动保存草稿，完整度进度条           | frontend | frontend-prd Section 8.4 |
 | 生成进度页（`/reports/generating`）：SSE 连接，纵向时间线节点状态         | frontend | frontend-prd Section 8.5 |
 | 报告详情页（`/reports/[id]`）：hardcode 三套方案 Tab + 推荐卡片（可展开） | frontend | frontend-prd Section 8.6 |
-| `LoginSheet` 组件：手机号 + 验证码，底部弹出                              | frontend | frontend-prd Section 7.4 |
+| `LoginModal` 组件：邮箱 + 验证码/密码，居中 Modal 弹出                    | frontend | frontend-prd Section 7.4 |
 | Next.js BFF Route Handler：转发 API 请求，注入 session cookie             | frontend | backend-prd Section 2    |
 | **M1 端到端冒烟测试**：走一遍完整流程，确认每页都无报错                   | QA       | —                        |
 
@@ -195,17 +197,14 @@
 
 ## M3：Agent 深化 + 上线（Day 8-10）
 
-**目标**：完整 Agent 编排（含 Reflection + HITL），线上部署，demo 准备就绪。
+**目标**：完整 Agent 编排（含 Reflection 自检），线上部署，demo 准备就绪。
 
 ### M3 DoD
 
 ```
-✅ Reflection Agent：正则禁词层 + LLM Judge 层，最多 3 轮自检，3 轮失败强制触发复核；LLM 输出 passed=true 时早退出
+✅ Reflection Agent：正则禁词层 + LLM Judge 层，最多 3 轮自检；LLM 输出 passed=true 时早退出；3 轮失败后 best-effort 直接交付
 ✅ ToolResponse 三态：所有工具返回 ToolResponse，PARTIAL 自动写 data_warnings，CircuitBreaker 对 3 个外部调用点生效
 ✅ ToolFilter：每个 Agent 节点只能看到各自权限范围内的工具（见 backend-prd Section 10.8）
-✅ HITL 完整闭环：interrupt() → human_reviews 记录 → 复核员提交 PATCH → resume() → 报告交付
-✅ 复核员工作台（/admin/reviews）：待复核队列 + 领取 + 提交结论
-✅ 用户侧复核等待页：复核状态展示 + 等待提示
 ✅ Railway 部署：FastAPI + ARQ Worker + LiteLLM + PostgreSQL + Redis 全部线上
 ✅ Vercel 部署：Next.js 前端线上，URL 可访问，可分享给面试官
 ✅ 生产环境 seed data 就位（河南省完整数据集）
@@ -213,33 +212,24 @@
 ✅ 面试 demo 演示脚本准备好
 ```
 
-### Day 8：Reflection Agent + HITL 后端
+### Day 8：Reflection Agent 后端
 
-**目标**：LangGraph 完整 Agent 链路跑通，包含 interrupt/resume。
+**目标**：LangGraph 完整 Agent 链路跑通，含 Reflection 自检回退。
 
 | 任务                                                                                                                                                                             | 类型    | 参考                           |
 | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- | ------------------------------ |
 | Reflection Agent 节点：`check_compliance`（正则层） + `llm_judge`（语义过度承诺检测）                                                                                            | backend | backend-prd Section 10.1, 12.1 |
 | Reflection 循环保护：`reflection_iterations` 计数器，3 轮上限；**实现"无需改进"早退出**（参考 HelloAgents ReflectionAgent，LLM 输出 `passed=true` 时立即 break，不等待剩余轮次） | backend | backend-prd Section 10.6       |
-| `human_review_node`：`render_review_draft` 生成底稿，`interrupt()` 暂停图执行                                                                                                    | backend | backend-prd Section 10.1, 11.2 |
-| `POST /api/v1/reviews`：创建复核任务                                                                                                                                             | backend | backend-prd Section 5.1        |
-| `PATCH /api/v1/reviews/{id}`：提交复核结论（approved/rejected），触发 run resume                                                                                                 | backend | backend-prd Section 5.1, 11.7  |
-| `POST /api/v1/agent/runs/{id}/resume`：将复核结论注入 State，恢复图执行                                                                                                          | backend | backend-prd Section 5.1        |
 | Profile Agent 节点：档案完整性检查，不足时返回追问列表                                                                                                                           | backend | backend-prd Section 10.1       |
-| `human_interrupt` SSE 事件推送到前端                                                                                                                                             | backend | backend-prd Section 5.3        |
 
 ---
 
-### Day 9：HITL 前端 + 可观测性 + 质量
+### Day 9：可观测性 + 质量
 
-**目标**：复核流程前端完整，可观测性确认，移动端适配验收。
+**目标**：可观测性确认，移动端适配验收。
 
 | 任务                                                                                   | 类型     | 参考                     |
 | -------------------------------------------------------------------------------------- | -------- | ------------------------ |
-| 人工复核页（`/reports/[id]/review`）：复核状态条 + AI 底稿折叠卡 + 风险清单 + 结论展示 | frontend | frontend-prd Section 8.7 |
-| 复核员工作台（`/admin/reviews`）：待复核队列 + 领取任务 + 提交通过/拒绝                | frontend | frontend-prd Section 6   |
-| 报告页 HITL 入口：高风险时展示"建议人工复核"橙色提示条 + 主按钮                        | frontend | frontend-prd Section 8.7 |
-| 生成进度页：收到 `human_interrupt` 事件后切换到"复核等待"状态                          | frontend | frontend-prd Section 8.5 |
 | 错误状态完善：所有页面的 loading/empty/error 状态（Skeleton、EmptyState、Toast）       | frontend | frontend-prd Section 9   |
 | LangSmith Dashboard 确认：成本追踪有记录，P95 延迟可见                                 | QA       | backend-prd Section 14   |
 | 结构化日志格式确认（run_id / node / event / latency_ms 字段完整）                      | QA       | backend-prd Section 14.2 |
@@ -268,12 +258,15 @@
 | #   | 案例类型               | 输入                                          | 预期输出                                             | 展示技术点                                         |
 | --- | ---------------------- | --------------------------------------------- | ---------------------------------------------------- | -------------------------------------------------- |
 | 1   | 正常流程               | 省份河南 / 分数 612 / 位次 32680 / 物理化学   | 三套方案，均衡型推荐 8 所，有证据链                  | 完整 Agent 链路、RAG 证据、LangSmith trace         |
-| 2   | 高风险触发复核         | 同上但保底只填 2 所                           | 报告生成后触发 HITL，展示复核等待页                  | interrupt/resume 机制                              |
+| 2   | 高风险方案展示         | 同上但保底只填 2 所                           | 报告生成后风险等级标红，风险总览卡片展示具体原因，不触发复核流程 | Risk Engine 确定性风险体检、RiskOverview 展示      |
 | 3   | 选科冲突               | 选历史，但填报了物理类专业                    | 规则过滤命中，报告标红，选科冲突风险项               | Rule Engine 确定性校验                             |
 | 4   | 合规拦截               | 在测试用例中注入"保证录取"表述                | Reflection Agent 拦截，report_draft 被修正           | Reflection + 合规自检                              |
-| 5   | 体检限制               | 填报临床医学，档案注明色觉异常                | 体检限制高风险标红，建议复核                         | 医学限制规则                                       |
+| 5   | 体检限制               | 填报临床医学，档案注明色觉异常                | 体检限制高风险标红，提示需重新确认目标专业           | 医学限制规则                                       |
 | 6   | 报告问答 Chat *(P2)*   | 报告生成后，用户提问"为什么推荐郑州大学？"    | ConversationAgent 流式回复，引用 2025 年招生数据     | ConversationAgent、RAG-over-report、行内引用标签   |
 | 7   | Admin Debug *(P2)*     | 管理员打开 `/admin/debug`，触发一条新 run     | 拓扑图节点实时着色，并行区高亮，时间线实时滚动       | Debug SSE 事件、静态拓扑图、节点着色动画           |
+| 8   | 协作时间线 *(P3)*      | 用户正常生成报告，观察生成进度页               | 并行任务分组展示、Reflection 迭代可见、降级安心文案  | 用户侧 SSE 事件转译、Generative UI 生成过程可视化  |
+| 9   | 建档 AI 追问 *(P3)*    | 选择物理但再选组合在目标省份无招生计划         | 对话流中立即插入 AI 追问气泡，可选择调整或继续       | 对话流外壳、结构化控件渲染器、确定性字段依赖图     |
+| 10  | 改约束+方案对比 *(P3)* | 报告页对话框输入"预算改到8万以内"，再要求对比方案 | Agent 确认后局部重跑生成新版本；对话触发对比视图展示差异 | ConversationAgent tool-calling、局部重跑、Generative UI 画布 |
 
 ---
 
@@ -339,7 +332,7 @@
 | 报告页"问一问"悬浮按钮（仅 run completed 时展示），点击打开 ChatPanel | frontend | frontend-prd Section 8.6 |
 | Zustand 新增 Chat 状态：`isChatPanelOpen` / `conversation_id` / 消息缓存 / `streamingToken` | frontend | frontend-prd Section 11.1 |
 | SSE 订阅 `POST /api/v1/reports/{id}/chat`：逐 token 追加到 `streamingToken`，收到 `done` 后提交为完整消息 | frontend | frontend-prd Section 8.6 |
-| `GET /api/v1/admin/runs`：返回最近 50 条 run 的调试摘要（含 province、耗时、cost_usd、degraded_agents、triggered_human_review） | backend | backend-prd Section 14.5 |
+| `GET /api/v1/admin/runs`：返回最近 50 条 run 的调试摘要（含 province、耗时、cost_usd、degraded_agents） | backend | backend-prd Section 14.5 |
 | `GET /api/v1/admin/runs/{id}`：返回 node_timings、tool_call_summary、state_summary、cost_breakdown（从 debug_summary_json 读取） | backend | backend-prd Section 14.5 |
 | `GET /api/v1/admin/metrics/summary`：从 Redis 计数器聚合返回指标快照 | backend | backend-prd Section 14.5 |
 | FastAPI `require_admin_role` Dependency 注入所有 `/api/v1/admin/*` 路由 | backend | backend-prd Section 14.5 |
@@ -361,8 +354,8 @@
 | `DebugRunList`：左侧 Run 列表，状态/耗时/费用/降级标记，实时跟随开关，三种筛选条件 | frontend | frontend-prd Section 8.11, 10 |
 | `GET /api/v1/admin/runs/{id}/debug-events`：Admin Debug SSE 端点，`XREAD 0-0` 历史回放，run 已完成时发送 `stream_end` 关闭连接 | backend | backend-prd Section 5.8, 14.5 |
 | `LangGraphTopology`：CSS Grid + 绝对定位 SVG 边线，10 节点固定布局 | frontend | frontend-prd Section 8.11, 10 |
-| `TopologyNode`：6 种状态颜色（pending/running/completed/degraded/failed/interrupted）+ 脉冲动画（running）+ 徽章（degraded/failed） | frontend | frontend-prd Section 8.11, 10 |
-| `TopologyEdge`：SVG 线条 4 种样式（主流程/并行/条件/interrupt）；`parallel_fan_out` 事件触发并行边流动动画，`fan_in` 后动画消失 | frontend | frontend-prd Section 8.11, 10 |
+| `TopologyNode`：5 种状态颜色（pending/running/completed/degraded/failed）+ 脉冲动画（running）+ 徽章（degraded/failed） | frontend | frontend-prd Section 8.11, 10 |
+| `TopologyEdge`：SVG 线条 3 种样式（主流程/并行/条件）；`parallel_fan_out` 事件触发并行边流动动画，`fan_in` 后动画消失 | frontend | frontend-prd Section 8.11, 10 |
 | Reflection 回退循环箭头：`reflection_iteration(passed=false)` 事件时闪烁，节点右侧展示 `N/3` 迭代计数 | frontend | frontend-prd Section 8.11 |
 | `NodeDetailPanel`：点击节点后展开，展示该节点工具调用列表（来自 `tool_called` 事件）、降级详情、Reflection 迭代状态 | frontend | frontend-prd Section 8.11, 10 |
 | Zustand Debug 状态：`selectedRunId` / `isLiveFollowing` / `nodeStates` Map / `debugEvents` 数组 / `timelineFilter` | frontend | frontend-prd Section 11.1 |
@@ -372,6 +365,106 @@
 | **Demo 案例 #7**：Admin Debug 演示（执行 run，实时观察拓扑图节点着色 → 并行边高亮 → 时间线事件） | demo | sprint-plan Demo #7 |
 
 **P2 Day 3 验收**：Phase 2 DoD 全部打勾；Demo #6 / #7 可现场演示。
+
+---
+
+## Phase 3 Sprint（P3 Day 1-6）：AI 全程协作者重构
+
+**目标**：解决"技术复杂度和产品体验脱节"的问题——LangGraph 并行编排、Reflection 自我修正、熔断降级目前只在 `/admin/debug` 可见，用户侧只有一条静态进度条；报告生成后是一次性交付，不能追问改约束、不能对比方案。完整设计见 [`docs/prd-redesign-ai-collaborator.md`](./prd-redesign-ai-collaborator.md)，产品形态决策为 **Generative UI 混合形态**（chat 是控制层，Tab/卡片/对比视图是呈现层，不做纯聊天式产品）。
+
+**范围对照**：本 Sprint 的 P3 Day 1-6 对应 redesign 文档 §5 的 Phase 2a-2e（该文档编号在合并进本文件时改为 P3 Day，避免与已完成的「Phase 2：增强功能」混淆）。
+
+### Phase 3 DoD
+
+```
+✅ 用户侧 SSE 新增 4 个事件（agents_parallel_started / agents_parallel_merged / self_check_round / degraded_notice），
+   走既有 sse:{run_id} Stream，不新增事件源
+✅ 生成进度页替换为「协作时间线」组件：并行任务显式分组展示、Reflection 轮次可见（类别化原因，不暴露原始违规文本/禁用词）、
+   降级转译为安心文案
+✅ 推荐卡片新增近两年历史投档位次并列 + 精确概率百分比（数据源复用 admission_scores 表，无需新数据管道）
+✅ 报告页新增「AI 是如何得出这份方案的」可折叠回放卡片（只读，复用生成过程数据，不重新调用 Agent）
+✅ 报告生成后展示 AI 条件点评（指出用户输入的张力/优化点），复用 report-agent 模型
+✅ 建档问诊改为对话流外壳 + Agent 渲染结构化控件，字段排序/跳过为确定性配置驱动（不调用 LLM），
+   仅矛盾/歧义项触发 Profile Agent 追问（最多 3 轮，沿用既有约束）
+✅ ConversationAgent 升级为 tool-calling 架构：UI 操作类工具（switch_tab/highlight_candidates/open_compare_view/
+   expand_risk_detail，纯前端状态变更）+ 数据变更类工具 regenerate_recommendations（触发局部重跑）
+✅ POST /api/v1/reports/{id}/refine 可用：轻量约束只重跑 Recommendation→Risk→Report（复用 evidence_list/rule_results），
+   重大约束（省份/选科/批次）提示需完整重新生成
+✅ reports 表新增 version / parent_report_id 字段，报告页支持版本切换
+✅ 方案对比视图：手动勾选或对话触发（open_compare_view），至少展示学校/专业/位次差/学费/风险等级 5 维度差异 + AI 取舍建议
+✅ Kimi k2.6 流式 + tool-calling 并存场景完成技术 spike 验证（本 Sprint 唯一高不确定性技术点）
+```
+
+### P3 Day 1：用户侧 SSE 事件扩展 + 生成进度页协作时间线
+
+**目标**：把 Debug 专属信号（并行执行、Reflection 迭代、降级）转译成用户可见事件，替换生成进度页的静态 checklist；同时顺手把推荐卡片数据密度提升一起做（复用度最高，边际成本低）。
+
+| 任务 | 类型 | 参考 |
+| --- | --- | --- |
+| 新增用户侧事件转译逻辑：`agents_parallel_started`/`agents_parallel_merged`（复用 `parallel_fan_out`/`fan_in`，剥离节点技术名） | backend | backend-prd Section 5.7、prd-redesign §2.3 |
+| 新增 `self_check_round` 事件：`reflection_iterations`/`compliance_issues` 转类别枚举（`over_promise`/`evidence_gap`/`none`），**不传原始违规文本** | backend | backend-prd Section 5.7、10.6 |
+| 新增 `degraded_notice` 事件：维护"技术降级原因 → 用户安心文案"映射表（如 `vector_search→sql_search` → "检索遇到延迟，已切换备用数据源"） | backend | backend-prd Section 5.7 |
+| 候选卡片数据扩展：从 `admission_scores` 读取近两年历史投档位次，评分模块补充精确概率百分比字段 | backend | backend-prd Section 8.1、prd-redesign §3.4-2 |
+| 生成进度页重构为 `AgentCollaborationTimeline` 组件：并行任务分组框、Reflection 轮次展示、失败/降级文案 | frontend | frontend-prd Section 8.5 |
+| 推荐卡片补充双年份历史位次 + 精确概率展示 | frontend | frontend-prd Section 8.6 |
+
+**P3 Day 1 验收**：走一遍生成流程能看到"正在并行处理"分组框同时展示两个子任务、Reflection 至少一次迭代时能看到"第 N 轮：类别化原因"提示；报告卡片展示两年历史位次和百分比概率。
+
+---
+
+### P3 Day 2：报告页「决策过程回放」卡片 + 生成后 AI 点评
+
+**目标**：把 Day 1 产生的过程数据沉淀成报告的一部分，另外加一段低成本的"AI 条件点评"（竞品借鉴，直接复用 report-agent 模型，无新增架构）。
+
+| 任务 | 类型 | 参考 |
+| --- | --- | --- |
+| Alembic 新增字段：`agent_runs.run_summary_json`（用户可见摘要，区别于已有 `debug_summary_json`） | backend | backend-prd Section 6.1、prd-redesign §2.4 |
+| ARQ Worker：run 完成后聚合协作时间线数据（并行任务、Reflection 轮次、是否降级），写入 `run_summary_json` | backend | backend-prd Section 10.9 |
+| Report Agent prompt 扩展：生成"条件点评"段落（指出用户输入条件的张力/优化点） | backend | backend-prd Section 10.1、prd-redesign §3.4-1 |
+| 报告页新增可折叠「AI 是如何得出这份方案的」卡片：只读回放 `run_summary_json`，不重新调用 Agent | frontend | frontend-prd Section 8.6 |
+| 报告页考生概况卡片下方展示 AI 条件点评文案 | frontend | frontend-prd Section 8.6 |
+
+**P3 Day 2 验收**：报告页能看到"决策过程回放"折叠卡片（展开后可见并行/Reflection/降级摘要）和一段 AI 条件点评。
+
+---
+
+### P3 Day 3-4：建档问诊 Generative UI 化
+
+**目标**：把现有「步骤 1/6」硬编码表单向导，改造成对话流外壳 + Agent 渲染结构化控件；字段排序/跳过走确定性配置，只有检测到矛盾才触发 Profile Agent 追问。这是本 Sprint 里前端改动最大的一块，独立于 Day 5-6 的 ConversationAgent 改造，可并行安排。
+
+| 任务 | 类型 | 参考 |
+| --- | --- | --- |
+| 定义字段依赖图配置（省份/批次/分数/位次/选科/个人信息之间的顺序与跳过规则，如专科批跳过本科限定字段） | backend | backend-prd Section 10.1、prd-redesign §3.1 |
+| 轻量前置校验接口：复用 Policy Rule Agent 现有规则工具（`check_subject_req`/`check_batch_eligibility`），命中矛盾时返回 `profile_pending_questions` | backend | backend-prd Section 10.1、10.4 |
+| `对话流外壳`组件：聊天容器承载逐条渲染的结构化控件 | frontend | frontend-prd Section 8.4 |
+| `结构化控件渲染器`：字段 schema → 控件类型映射（下拉/数字输入/多选 chip） | frontend | frontend-prd Section 8.4 |
+| 前端接入字段依赖图，实现跳过逻辑（纯配置驱动，不调用 LLM） | frontend | frontend-prd Section 8.4 |
+| 对话式追问卡片组件：命中 `profile_pending_questions` 时插入澄清气泡（"调整选科" / "仍按此继续"按钮） | frontend | frontend-prd Section 8.4 |
+| 动态进度百分比组件：替换固定的「步骤 1/6」 | frontend | frontend-prd Section 8.4 |
+| **QA**：至少走一遍会触发矛盾追问的建档流程（如选科组合无招生计划），确认追问轮数上限（3 轮）生效 | QA | — |
+
+**P3 Day 3-4 验收**：建档问诊呈现为连续对话流；专科批场景自动跳过本科限定字段（无 LLM 调用）；选科组合冲突时立即插入 AI 追问气泡而非等到最后统一提示。
+
+---
+
+### P3 Day 5-6：ConversationAgent 升级为 Agent 操作画布 + 方案对比
+
+**目标**：ConversationAgent 从纯 streaming completion 升级为 tool-calling agent，让报告页从静态展示变成 Agent 可操作的画布；新增方案对比能力。本阶段工作量和不确定性最大，**Day 5 上午先做技术 spike**，验证 Kimi k2.6 流式回复 + 工具调用同时开启的稳定性，不确定性高于本 Sprint 其他任务。
+
+| 任务 | 类型 | 参考 |
+| --- | --- | --- |
+| **技术 Spike（半天）**：验证 LiteLLM → Kimi k2.6 流式 + tool-calling 并存的可行性，若不稳定需评估 fallback（如先非流式判断工具调用，再流式吐文字） | backend | backend-prd Section 10.9、prd-redesign §3.2 技术风险 |
+| ConversationAgent 升级为 tool-calling 架构（LangGraph 工具调用范式，Retrieval/Policy Rule Agent 已验证可行） | backend | backend-prd Section 10.9 |
+| 定义 UI 操作类工具：`switch_tab` / `highlight_candidates` / `open_compare_view` / `expand_risk_detail`（纯前端状态变更，无需确认） | backend | backend-prd Section 10.9 |
+| 定义数据变更类工具：`regenerate_recommendations(patch)`，触发前需用户二次确认 | backend | backend-prd Section 10.9 |
+| `POST /api/v1/reports/{id}/refine`：轻量约束只重跑 Recommendation→Risk→Report（复用 evidence_list/rule_results）；重大约束（省份/选科/批次）提示需完整重新生成 | backend | backend-prd Section 5、10.9 |
+| Alembic 新增 `reports.version` / `reports.parent_report_id` 字段 | backend | backend-prd Section 6.1 |
+| 前端：ConversationAgent 工具调用执行器，UI 操作类工具直接执行并联动画布组件，数据变更类工具先展示确认卡片 | frontend | frontend-prd Section 8.6 |
+| 前端：报告页版本切换器（v1/v2...），聊天面板展示重新生成后的变化摘要 | frontend | frontend-prd Section 8.6 |
+| 方案对比视图组件（Bottom Sheet/Drawer）：学校/专业/位次差/学费/风险等级 5 维度差异高亮 + AI 取舍建议 | frontend | frontend-prd Section 8.6 |
+| **QA**：走查"改预算重新生成"和"对话触发对比视图"两条路径 | QA | — |
+
+**P3 Day 5-6 验收**：Phase 3 DoD 全部打勾；Demo #8/#9/#10 可现场演示。
 
 ---
 
@@ -385,8 +478,9 @@
 | ---------------- | ----------- | ----------------------------------------------- |
 | M1：骨架跑通     | Day 3       | 全链路联通，mock 数据可 demo                    |
 | M2：核心引擎     | Day 7       | 真实业务逻辑，RAG 检索，LangSmith trace         |
-| M3：上线         | Day 10      | HITL 闭环，线上部署，demo 就绪                  |
+| M3：上线         | Day 10      | Reflection 自检、线上部署、demo 就绪            |
 | Phase 2：增强功能 | P2 Day 3   | Chat Panel + Admin Debug 控制台交付              |
+| Phase 3：AI 协作者重构 | P3 Day 6 | 协作时间线、建档 Generative UI 化、改约束重新生成 + 方案对比交付 |
 
 ### Labels 设置
 
@@ -424,7 +518,6 @@ test        灰色   单元测试 / 集成测试
 | 志愿表文件上传 + OCR           | 与核心技术点无关，需额外文件解析服务        | 引入异步文件处理后实现                  |
 | 自托管 BGE embedding（需 GPU） | 只改 LiteLLM config 即可切换，无代码变更    | Railway 支持 GPU 实例后迁移             |
 | BM25 + RRF 混合检索            | SQL + 向量检索已满足 MVP                    | 向量检索效果验证后引入 BM25             |
-| HITL `need_more_info` 子流程   | 主干 approved/rejected 已完整，子流程是增量 | 复核员反馈收集后实现                    |
 | 黄金评测集 30-50 案例          | 5-10 个够 demo，大批量自动化是 CI 工作      | Phase 2 引入 LangSmith Dataset 自动评测 |
 | 多省份数据                     | 窄而深比宽而浅更有价值，1 省做透即可        | 验证河南省数据链路稳定后扩展            |
 | Chat LLM Judge 合规层          | 正则层先上，LLM Judge 是增量优化            | Chat 稳定后接入，参考 backend-prd 12.1  |
@@ -436,6 +529,7 @@ test        灰色   单元测试 / 集成测试
 | 债项                        | 影响                               | 处理方式                              |
 | --------------------------- | ---------------------------------- | ------------------------------------- |
 | Mock 数据替换               | 非河南省用户体验差                 | Phase 2 多省份数据接入                |
-| Redis LRU 驱逐 checkpoint   | 长 HITL 等待可能丢失 State         | 生产环境加 PostgreSQL checkpoint 双写 |
+| Redis LRU 驱逐 checkpoint   | 长时间等待用户输入（如 Profile Agent 多轮追问）可能丢失 State | 生产环境加 PostgreSQL checkpoint 双写 |
 | 正则禁词列表维护            | 新的违规表达需人工更新             | Phase 2 建立禁词管理后台              |
 | LangSmith 离线 Dataset 评测 | 目前只有 runtime trace，无自动回归 | Phase 2 接入 CI 自动运行评测集        |
+| ConversationAgent 流式+tool-calling 稳定性未验证 | Kimi k2.6 没有"流式回复+工具调用并存"的先例场景，若不稳定会影响 Phase 3d 的改约束/UI 操作体验 | P3 Day 5 上午先做技术 spike，验证不通过则 fallback 为"先非流式判断工具调用，再流式吐文字"两阶段方案 |
