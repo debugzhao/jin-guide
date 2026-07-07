@@ -66,6 +66,118 @@ flowchart TD
 - **模型网关层**：所有 LLM 调用统一经过 LiteLLM Proxy，虚拟模型名（`profile-agent`/`retrieval-agent`/`report-agent`/`reflection-agent`/`review-draft-agent`/`text-embedding-3-small`）全部路由到 `openai/kimi-k2.6`。改模型/加 provider 改 `litellm_config.yaml`，不改代码。
 - **事件枢纽**：单条 Redis Stream（`sse:{run_id}`）是 Agent 层唯一的对外广播介质，两个消费端（用户侧 SSE、Admin Debug SSE）按事件类型白名单差异化过滤，是**同一份数据的两种呈现粒度**，不是两套独立系统。
 
+### 2.1 端到端业务时序图
+
+上面的分层图是静态结构，下图补充**动态时序**——完整业务流程分三个阶段：对话式建档、报告生成（异步 Agent Run）、报告交付后的持续协作。三个阶段共用同一套 FE/BFF/API 分层和同一条 Redis Stream，不是三套割裂的机制。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor 用户
+    participant FE as 前端（Generative UI 画布）
+    participant BFF as Next.js BFF
+    participant API as FastAPI API 层
+    participant ARQ as ARQ Worker
+    participant LG as LangGraph Orchestrator
+    participant RE as 确定性引擎（Rule/Recommendation/Risk + SQL）
+    participant RAG as Retrieval Agent（SQL+pgvector+rerank）
+    participant LLM as LiteLLM → Kimi k2.6
+    participant Redis as Redis Stream（sse:{run_id}）
+    participant Conv as ConversationAgent
+
+    rect rgb(235,245,255)
+    note over 用户,RE: 阶段一 · 对话式建档（Generative UI，§5.6）
+    loop 逐字段提交
+        用户->>FE: 点选/输入结构化控件
+        FE->>BFF: POST /profile/field-check
+        BFF->>API: 转发
+        API->>RE: 字段依赖图 + 规则前置校验
+        alt 检测到矛盾或歧义
+            API-->>FE: needs_clarification + 追问选项
+            FE->>用户: 展示 AI 澄清追问气泡
+            用户->>FE: 选择/回答
+            FE->>API: POST /profile（含追问回答）
+            API->>LLM: Profile Agent 转自然语言 / 理解回应（≤3 轮）
+        else 无矛盾
+            API-->>FE: ok + next_fields
+        end
+    end
+    end
+
+    rect rgb(255,248,235)
+    note over 用户,Redis: 阶段二 · 报告生成（异步 Agent Run，§5.7）
+    用户->>FE: 建档完成，点击生成
+    FE->>API: POST /reports/generate
+    API->>ARQ: 创建 run，投入队列（幂等键 thread_id）
+    API-->>FE: 202 {run_id, stream_url}
+    FE->>BFF: GET /agent/runs/{id}/events（SSE 长连接）
+    BFF->>Redis: 订阅 sse:{run_id}
+
+    ARQ->>LG: Worker 拉取任务，启动 LangGraph
+    LG->>RE: Data Resolver 锁定数据版本
+    LG->>Redis: node_started / node_completed
+
+    par 并行分支（LangGraph Send API）
+        LG->>RAG: Retrieval Agent 检索证据
+    and
+        LG->>RE: Policy Rule Agent 规则校验
+    end
+    LG->>Redis: agents_parallel_started → agents_parallel_merged
+
+    LG->>RE: Recommendation Engine 候选生成 + 分层
+    LG->>RE: Risk Agent 志愿表体检
+    LG->>Redis: candidates_ready / risk_found
+    LG->>LLM: Report Agent 生成报告 + 条件点评
+
+    loop 最多 3 轮
+        LG->>LLM: Reflection Agent 合规自检
+        LG->>Redis: self_check_round {iteration, issue_category}
+        alt 未通过 且 迭代 < 3
+            LG->>LLM: 回退 Report Agent 定向修正
+        else 通过 或 已达 3 轮
+            LG->>RE: 写入 reports 表（best-effort 交付）
+        end
+    end
+
+    Redis-->>BFF: 转发协作时间线事件流
+    BFF-->>FE: SSE 转发（node_started/agents_parallel_*/self_check_round/degraded_notice…）
+    FE->>用户: 实时渲染"Agent 协作时间线"
+    LG->>Redis: completed {report_id, risk_level}
+    Redis-->>FE: completed（经 BFF 转发）
+    FE->>用户: 展示报告（Generative UI 画布）
+    end
+
+    rect rgb(238,250,238)
+    note over 用户,Conv: 阶段三 · 报告交付后的持续协作（§5.9 / §5.10）
+    用户->>FE: 提问或表达修改意图（"预算改到8万以内"）
+    FE->>API: POST /reports/{id}/chat
+    API->>Conv: 转发消息（注入 plan_json + profile + 对话历史）
+    Conv->>LLM: tool-calling 推理，判定意图类型
+    alt 识别为 UI 操作类工具
+        Conv-->>API: ui_action {tool, args}
+        API-->>FE: SSE ui_action（无需确认）
+        FE->>用户: 立即联动画布（切 Tab / 高亮 / 打开对比）
+    else 识别为数据变更类工具
+        Conv-->>API: refine_confirm_required {patch_summary}
+        API-->>FE: SSE 事件，渲染确认卡片
+        用户->>FE: 确认
+        FE->>API: POST /reports/{id}/refine
+        API->>ARQ: 轻量约束 → 局部重跑（复用 evidence_list/rule_results）
+        ARQ->>LG: Recommendation → Risk → Report
+        LG->>RE: 写入新版本 reports（parent_report_id + version+1）
+        API-->>FE: {report_id, version, diff_summary}
+        FE->>用户: 展示新版本报告 + 差异摘要
+    end
+    end
+```
+
+**读图要点**：
+
+- 三个阶段共用同一套分层（FE→BFF→API），阶段二和阶段三还共用同一条 Redis Stream 和同一个 LangGraph 图定义——不是三套独立机制拼起来的。
+- 阶段一的"矛盾检测"和阶段二的"规则校验"复用的是同一批 Policy Rule Agent 工具（`check_subject_req` 等），只是调用时机不同：建档时做单字段前置校验，生成时做完整候选集校验。
+- 阶段二的 `par` 块是 §10.3 并行执行的时序体现；`loop` 块是 §10.6 Reflection 循环保护的时序体现。
+- 阶段三的 `alt` 分支对应 §10.9 两类工具的核心区别：UI 操作类不经过确认直接执行，数据变更类必须走确认卡片 + `/refine` 独立请求。
+
 ---
 
 ## 3. 模块职责
