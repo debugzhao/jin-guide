@@ -159,7 +159,7 @@
 
 | 类型 | 工具示例 | 效果 | 是否触发重新计算 |
 | --- | --- | --- | --- |
-| UI 操作类 | `switch_tab(tier)` / `highlight_candidates(ids)` / `open_compare_view(a, b)` / `expand_risk_detail(id)` | 纯前端状态变更，画布上对应组件联动 | 否，前端本地状态即可完成 |
+| UI 操作类 | `switch_tab(tier)` / `highlight_candidates(ids)` / `open_compare_view(target_a, target_b)` / `expand_risk_detail(id)` | 纯前端状态变更，画布上对应组件联动；`target` 统一为 `{ type: "plan" \| "candidate" \| "version", id: string }` | 否，前端本地状态即可完成 |
 | 数据变更类 | `regenerate_recommendations(patch)` | 后端重新计算候选/风险/报告 | 是，见下方局部重跑规则 |
 
 **交互流程**：
@@ -176,10 +176,10 @@
    确认后调用新接口 `POST /api/v1/reports/{report_id}/refine`（新增，补充 backend-prd.md §5）：
    - **轻量约束**（预算、城市偏好、排除某校/某专业）→ 只重跑 `Recommendation Agent → Risk Agent → Report Agent`，复用已有 `evidence_list` / `rule_results`，不重新检索、不重新跑规则校验，控制成本和延迟（预计 5-10 秒量级，不是完整 45 秒流程）。
    - **重大约束**（省份、选科、批次变更）→ 提示"这类修改会影响证据检索范围，需要重新生成完整报告"，走完整 Agent 流程。
-   - 返回新的 `report_version`（报告增加版本概念，`reports` 表新增 `parent_report_id` / `version` 字段，同一 `profile_id` 下的多个版本可追溯）。
+   - 接口立即返回 `202 + run_id`，前端订阅局部重新生成 SSE；完成后返回新的 `report_version`（报告增加版本概念，`reports` 表新增 `parent_report_id` / `version` 字段，同一 `profile_id` 下的多个版本可追溯）。
 4. 报告页顶部增加版本切换（`v1` / `v2` ...），聊天面板里对应给出反馈："已根据新预算重新生成，候选从 48 所变为 31 所，均衡型方案里新增 2 所"。
 
-**技术风险**：需验证 LiteLLM → Moonshot Kimi k2.6 在**流式回复 + tool calling 同时开启**场景下的稳定性（现有 Agent 节点的工具调用都是非流式的同步调用，ConversationAgent 是本系统里第一个"流式 + 工具调用"并存的场景），建议 Phase 2d 启动前先做小范围技术验证（spike），不确定性高于本文档其他改造点。
+**技术风险**：需验证 LiteLLM → Moonshot Kimi k2.6 在**流式回复 + tool calling 同时开启**场景下的稳定性（现有 Agent 节点的工具调用都是非流式的同步调用，ConversationAgent 是本系统里第一个"流式 + 工具调用"并存的场景），建议实现前先做小范围技术验证（spike），不确定性高于本文档其他改造点。
 
 **验收标准**：
 - **Given** 用户在聊天面板输入"预算超过 10 万的别推荐了"，**When** AI 识别为约束修改并经用户确认，**Then** 系统在 10 秒内返回基于新约束重新过滤/排序后的方案，且明确说明变化了什么。
@@ -195,10 +195,10 @@
 
 ### 3.4 结果呈现优化（竞品借鉴，来自千问高考分析）
 
-两点低成本高价值补充，风险低、复用度高，可并入 Phase 2a/2b 一起做，不必等到需要架构改造的 2c/2d：
+两点低成本高价值补充，风险低、复用度高，建议并入 v2 核心体验，不必等到 ConversationAgent tool-calling 改造完全落地：
 
 1. **生成后 AI 点评+收窄建议**：报告生成完成后，在考生概况卡片下方追加一段 AI 生成的"条件点评"，指出用户输入条件里的张力或可优化点（例如"你的地域偏好和预算存在冲突，如果放宽 XX，候选会更充分"）。这是"AI 主动澄清"思路成本最低的变体——不需要在建档阶段打断表单流程，事后一段话就能传达"AI 认真分析过你的输入，不是套模板"。复用 report-agent 模型生成，不新增架构。
-2. **候选卡片数据密度提升**：当前推荐卡片主要信息是"安全度数字+进度条"，参考竞品补充**近两年历史投档位次并列展示** + **概率精确到百分比**（而非只有冲/稳/保三档定性标签），让"综合评分"从抽象数字变成可追溯的历史依据，不影响现有 Tab/卡片结构，只是卡片内信息升级（补充 frontend-prd.md §8.6 推荐卡片规范）。
+2. **候选卡片数据密度提升**：当前推荐卡片主要信息是"安全度数字+进度条"，参考竞品补充**近两年历史投档位次并列展示** + **匹配置信分（如 78/100）**（而非只有冲/稳/保三档定性标签），让"综合评分"从抽象数字变成可追溯的历史依据，同时避免"录取概率 X%"这类合规风险表达。不影响现有 Tab/卡片结构，只是卡片内信息升级（补充 frontend-prd.md §8.6 推荐卡片规范）。
 
 ---
 
@@ -211,7 +211,7 @@
 | 建档问诊 Generative UI 化 | Profile Agent 追问机制、`profile_pending_questions` 字段、Policy Rule Agent 规则工具（字段级校验复用现有实现） | 对话流外壳组件、结构化控件渲染器（字段 schema → 控件类型的映射）、确定性字段依赖图/跳过逻辑（新配置，非 LLM）、动态进度百分比计算 |
 | 报告对话改约束 + Agent UI 操作 | ConversationAgent 框架、SSE 流式回复、LiteLLM `report-agent` 模型、LangGraph 工具调用范式（Retrieval/Policy Rule Agent 已验证可行） | ConversationAgent 从纯 streaming completion 升级为 tool-calling 架构（需验证 Kimi k2.6 流式+工具调用并存的稳定性，见 §3.2 技术风险）；UI 操作类工具（`switch_tab`/`highlight_candidates`/`open_compare_view`/`expand_risk_detail`，纯前端状态变更）；数据变更类工具 `regenerate_recommendations`（对应 `POST /reports/{id}/refine`，局部重跑 Recommendation→Risk→Report）；`reports` 表 `version`/`parent_report_id` 字段 |
 | 方案对比 | 报告数据结构、report-agent 模型、`open_compare_view` UI 工具（同上新增） | 对比视图组件、AI 取舍建议的 prompt 模板 |
-| 结果呈现优化（竞品借鉴） | report-agent 模型、现有推荐卡片组件 | "条件点评"生成 prompt、卡片新增历史位次/精确概率字段（数据源已在 `admission_scores` 表，无需新数据管道） |
+| 结果呈现优化（竞品借鉴） | report-agent 模型、现有推荐卡片组件 | "条件点评"生成 prompt、卡片新增历史位次/匹配置信分字段（数据源已在 `admission_scores` 表，无需新数据管道） |
 
 **明确不做**（避免范围蔓延）：
 - 不引入新的 LLM 供应商或模型（仍走 LiteLLM → Moonshot Kimi）。
@@ -222,13 +222,13 @@
 
 ## 5. 分期建议
 
+> 本提案中的 2a-2e 能力已经被 `frontend-prd-v2.md` / `backend-prd-v2.md` 吸收为 v2 核心设计，不再作为未来 Phase 2。当前 Phase 2 只保留一个明确产品方向：**学校/专业独立对比中心**。
+
 | 阶段 | 内容 | 理由 |
 | --- | --- | --- |
-| Phase 2a | 生成进度页「协作时间线」+ Reflection 可视化（§2.2、2.3）+ 候选卡片数据密度提升（§3.4-2） | 改动集中在事件转译层/展示层，复用度最高，见效最快，是"AI 全程可见"最直观的证明 |
-| Phase 2b | 报告页「决策过程回放」卡片（§2.4）+ 生成后 AI 点评（§3.4-1） | 直接复用 2a 产生的数据/模型调用，边际成本低 |
-| Phase 2c | 建档问诊 Generative UI 化（§3.1） | 需要新建"对话流外壳 + 结构化控件渲染器"组件体系并替换现有表单向导，工作量比 2a/2b 高，但不依赖 2d 的 ConversationAgent tool-calling 改造，可独立并行 |
-| Phase 2d | ConversationAgent 升级为 tool-calling 架构 + UI 操作类工具 + 改约束重新生成（§3.2） | 涉及 Kimi k2.6 流式+工具调用的技术验证、局部重跑、版本管理，工作量和不确定性最大，建议放最后，启动前先做技术 spike |
-| Phase 2e | 方案对比（§3.3） | 依赖 2d 的 `open_compare_view` 工具和版本概念（否则只能对比三套静态方案，价值打折） |
+| Phase 2 | 独立学校/专业对比中心（`/compare`）+ 后端 Compare Service | 当前 v2 已经支持报告内方案对比、版本对比和对话触发对比；Phase 2 只补一个独立入口，服务还没进入建档流程、但想先比较学校/专业/城市的用户 |
+
+**明确不做**：文件上传、OCR、志愿表自动解析。这类能力工程成本高，但对 Agent 架构作品集的展示价值低，当前产品坚持手动录入志愿表。
 
 ---
 
