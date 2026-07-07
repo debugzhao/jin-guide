@@ -87,8 +87,7 @@
       justify-content: center;
     }
 
-    .nav button,
-    .viewport-toggle button {
+    .nav button {
       background: var(--panel);
       color: var(--muted);
       border: 1px solid var(--line);
@@ -97,18 +96,10 @@
       padding: 0 12px;
     }
 
-    .nav button.active,
-    .viewport-toggle button.active {
+    .nav button.active {
       background: var(--blue);
       border-color: var(--blue);
       color: #fff;
-    }
-
-    .viewport-toggle {
-      display: flex;
-      gap: 8px;
-      min-width: 160px;
-      justify-content: flex-end;
     }
 
     .workspace {
@@ -127,18 +118,18 @@
       justify-content: center;
     }
 
-    .phone-frame {
-      width: min(100%, 430px);
+    .prototype-frame {
+      width: min(100%, 1180px);
       min-height: 780px;
       background: var(--panel);
       border: 1px solid var(--line);
-      border-radius: 22px;
+      border-radius: 14px;
       box-shadow: var(--shadow);
       overflow: hidden;
       position: relative;
     }
 
-    .desktop-mode .phone-frame {
+    .desktop-mode .prototype-frame {
       width: min(100%, 1180px);
       min-height: 780px;
       border-radius: 14px;
@@ -362,6 +353,44 @@
     .chat-flow {
       display: grid;
       gap: 12px;
+    }
+
+    .conversation-screen.active {
+      display: grid;
+      grid-template-rows: 1fr auto;
+      gap: 12px;
+      padding-bottom: 12px;
+    }
+
+    .conversation-scroll {
+      min-height: 0;
+      overflow: auto;
+      display: grid;
+      gap: 12px;
+      align-content: start;
+      padding-bottom: 4px;
+    }
+
+    .conversation-input {
+      position: sticky;
+      bottom: 0;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: #fff;
+      padding: 10px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+    }
+
+    .conversation-input input {
+      border: 0;
+      min-height: 36px;
+    }
+
+    .conversation-input input:focus {
+      outline: 0;
     }
 
     .bubble {
@@ -750,8 +779,7 @@
       gap: 8px;
     }
 
-    .drawer,
-    .chat-panel {
+    .drawer {
       position: absolute;
       z-index: 10;
       background: #fff;
@@ -760,22 +788,11 @@
       display: none;
     }
 
-    .drawer.open,
-    .chat-panel.open {
+    .drawer.open {
       display: block;
     }
 
     .drawer {
-      left: 0;
-      right: 0;
-      bottom: 0;
-      border-radius: 16px 16px 0 0;
-      max-height: 72%;
-      overflow: auto;
-      padding: 16px;
-    }
-
-    .desktop-mode .drawer {
       left: auto;
       width: 420px;
       top: 58px;
@@ -783,67 +800,8 @@
       bottom: 0;
       max-height: none;
       border-radius: 0;
-    }
-
-    .chat-panel {
-      left: 0;
-      right: 0;
-      bottom: 0;
-      border-radius: 16px 16px 0 0;
-      height: 70%;
-      padding: 0;
-      overflow: hidden;
-    }
-
-    .desktop-mode .chat-panel {
-      left: auto;
-      top: 56px;
-      right: 0;
-      bottom: 0;
-      height: auto;
-      width: 380px;
-      border-radius: 0;
-    }
-
-    .chat-header {
-      padding: 12px 14px;
-      border-bottom: 1px solid var(--line);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 10px;
-    }
-
-    .chat-body {
-      height: calc(100% - 118px);
       overflow: auto;
-      padding: 14px;
-      display: grid;
-      gap: 10px;
-      align-content: start;
-      background: var(--bg);
-    }
-
-    .chat-input {
-      height: 62px;
-      border-top: 1px solid var(--line);
-      display: grid;
-      grid-template-columns: 1fr auto;
-      gap: 8px;
-      padding: 10px;
-      background: #fff;
-    }
-
-    .floating-chat {
-      position: absolute;
-      right: 16px;
-      bottom: 16px;
-      z-index: 8;
-      box-shadow: 0 10px 24px rgba(30, 64, 175, 0.22);
-    }
-
-    .desktop-mode .floating-chat {
-      display: none;
+      padding: 16px;
     }
 
     .overlay-note {
@@ -894,9 +852,6 @@
         display: grid;
         justify-items: stretch;
       }
-      .viewport-toggle {
-        justify-content: start;
-      }
       .workspace {
         grid-template-columns: 1fr;
       }
@@ -907,7 +862,7 @@
   </style>
 </head>
 <body>
-  <div class="app-shell" id="prototypeRoot">
+  <div class="app-shell desktop-mode" id="prototypeRoot">
     <header class="prototype-topbar">
       <div class="topbar-inner">
         <div class="brand">
@@ -915,204 +870,120 @@
           <div class="brand-subtitle">Generative UI 状态流验证，不是视觉终稿</div>
         </div>
         <nav class="nav" aria-label="原型页面导航">
-          <button class="active" data-screen="home">入口</button>
-          <button data-screen="assess">快速测算</button>
-          <button data-screen="profile">建档问诊</button>
-          <button data-screen="generating">生成进度</button>
+          <button class="active" data-screen="conversation">AI 对话建档</button>
           <button data-screen="report">报告详情</button>
         </nav>
-        <div class="viewport-toggle" aria-label="视口切换">
-          <button class="active" data-viewport="mobile">移动端</button>
-          <button data-viewport="desktop">桌面端</button>
-        </div>
       </div>
     </header>
 
     <main class="workspace">
       <section class="canvas-wrap">
-        <div class="phone-frame" id="phoneFrame">
+        <div class="prototype-frame">
           <div class="app-header">
             <button class="back-btn" type="button" data-action="back">‹</button>
-            <div class="app-title" id="appTitle">问津志愿规划</div>
+            <div class="app-title" id="appTitle">AI 对话建档</div>
             <button class="login-chip" type="button">登录</button>
           </div>
 
-          <section class="screen active" data-screen-panel="home">
-            <div class="card">
-              <div class="card-title">你现在处在哪一步？</div>
-              <div class="card-subtitle">原型只保留当前版本两个入口：没思路测算、已有志愿表体检。</div>
-            </div>
-            <div class="stack" style="margin-top: 12px;">
-              <div class="card entry-card">
-                <div class="icon-box">测</div>
-                <div>
-                  <div class="card-title">我还没思路</div>
-                  <div class="card-subtitle">先看风险画像，再补全档案生成三套方案。</div>
+          <section class="screen conversation-screen active" data-screen-panel="conversation">
+            <div class="conversation-scroll">
+              <div class="chat-flow" id="conversationFlow">
+                <div class="bubble ai">
+                  <div class="bubble-label">问津助手</div>
+                  我会用对话方式帮你完成快速测算和建档。你不用跳到独立表单页，所有字段都会在聊天里以结构化控件出现。
                 </div>
-                <button class="primary" data-goto="assess">开始</button>
-              </div>
-              <div class="card entry-card">
-                <div class="icon-box">检</div>
-                <div>
-                  <div class="card-title">我已有志愿表</div>
-                  <div class="card-subtitle">手动录入志愿草稿，检查梯度、保底、选科和体检风险。</div>
+                <div class="bubble ai">
+                  <div class="bubble-label">问津助手</div>
+                  先做一个快速测算。请确认你的省份、批次、分数和位次。
+                  <div class="card" style="margin-top: 10px;">
+                    <div class="field-grid">
+                      <label>省份
+                        <select>
+                          <option>河南</option>
+                          <option>山东</option>
+                          <option>广东</option>
+                        </select>
+                      </label>
+                      <label>批次
+                        <select>
+                          <option>本科批</option>
+                          <option>专科批</option>
+                        </select>
+                      </label>
+                      <label>高考分数
+                        <input value="612" inputmode="numeric" />
+                      </label>
+                      <label>全省位次
+                        <input value="32680" inputmode="numeric" />
+                      </label>
+                    </div>
+                    <div style="margin-top: 12px;">
+                      <button class="primary" data-action="showRisk">在对话中生成风险画像</button>
+                    </div>
+                  </div>
                 </div>
-                <button class="secondary" data-goto="profile">体检</button>
-              </div>
-              <div class="card">
-                <div class="card-title">历史报告</div>
-                <div class="card-subtitle">登录后展示最近生成的报告。当前原型直接进入示例报告。</div>
-                <div style="margin-top: 12px;">
-                  <button class="ghost" data-goto="report">查看示例报告</button>
+                <div class="bubble user">河南，本科批，612 分，位次 32680。</div>
+                <div class="bubble ai tool hidden" id="riskPreview">
+                  <div class="bubble-label">即时风险画像</div>
+                  <div class="risk-preview">
+                    <div class="risk-meter">中</div>
+                    <div>
+                      <div class="card-title">当前条件可生成初步方案</div>
+                      <div class="card-subtitle">位次信息完整，建议继续补充选科、预算、城市和专业偏好。</div>
+                      <div class="progress-bar" style="--value: 48%;"><span></span></div>
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
-          </section>
-
-          <section class="screen" data-screen-panel="assess">
-            <div class="card">
-              <div class="card-title">快速测算</div>
-              <div class="page-lead">先收集最少信息，给出即时风险画像，再引导补全档案。</div>
-              <div class="field-grid">
-                <label>省份
-                  <select>
-                    <option>河南</option>
-                    <option>山东</option>
-                    <option>广东</option>
-                  </select>
-                </label>
-                <label>批次
-                  <select>
-                    <option>本科批</option>
-                    <option>专科批</option>
-                  </select>
-                </label>
-                <label>高考分数
-                  <input value="612" inputmode="numeric" />
-                </label>
-                <label>全省位次
-                  <input value="32680" inputmode="numeric" />
-                </label>
-              </div>
-              <div class="chips" style="margin-top: 12px;">
-                <button class="chip active">物理</button>
-                <button class="chip active">化学</button>
-                <button class="chip">生物</button>
-                <button class="chip">政治</button>
-                <button class="chip">地理</button>
-              </div>
-              <div style="margin-top: 14px;">
-                <button class="primary" data-action="showRisk">生成即时风险画像</button>
-              </div>
-            </div>
-
-            <div class="card risk-preview hidden" id="riskPreview">
-              <div class="risk-meter">中</div>
-              <div>
-                <div class="card-title">当前条件可生成初步方案</div>
-                <div class="card-subtitle">位次信息完整，建议补充城市、预算、专业偏好后生成三套方案。</div>
-                <div class="progress-bar" style="--value: 48%;"><span></span></div>
-                <div class="row-actions" style="margin-top: 12px;">
-                  <button class="primary" data-goto="profile">补全档案</button>
-                  <button class="ghost" data-goto="generating">跳过原型直接生成</button>
+                <div class="bubble ai">
+                  <div class="bubble-label">问津助手</div>
+                  接下来补全档案。你选择的科目是？
+                  <div class="chips" style="margin-top: 10px;">
+                    <button class="chip active">物理</button>
+                    <button class="chip active">化学</button>
+                    <button class="chip active">生物</button>
+                  </div>
                 </div>
-              </div>
-            </div>
-          </section>
-
-          <section class="screen" data-screen-panel="profile">
-            <div class="card">
-              <div class="card-title">建档问诊</div>
-              <div class="card-subtitle">对话是外壳，字段仍然用结构化控件；只有矛盾和歧义才触发 Agent 追问。</div>
-              <div class="progress-bar" style="--value: 62%;"><span></span></div>
-            </div>
-            <div class="chat-flow" style="margin-top: 12px;">
-              <div class="bubble ai">
-                <div class="bubble-label">问津助手</div>
-                你在哪个省份参加高考？
-                <div style="margin-top: 10px;">
-                  <select>
-                    <option>河南</option>
-                  </select>
+                <div class="bubble ai tool">
+                  <div class="bubble-label">规则前置校验</div>
+                  该组合可以进入当前批次规则校验，但部分医学类专业可能需要额外体检条件。是否有体检限制？
+                  <div class="row-actions" style="margin-top: 10px;">
+                    <button class="secondary">无体检限制</button>
+                    <button class="ghost">有，稍后补充</button>
+                  </div>
                 </div>
-              </div>
-              <div class="bubble user">河南，本科批，612 分，位次 32680。</div>
-              <div class="bubble ai">
-                <div class="bubble-label">问津助手</div>
-                你选择的科目是？
-                <div class="chips" style="margin-top: 10px;">
-                  <button class="chip active">物理</button>
-                  <button class="chip active">化学</button>
-                  <button class="chip active">生物</button>
+                <div class="bubble ai">
+                  <div class="bubble-label">问津助手</div>
+                  年学费上限大概是多少？
+                  <div style="margin-top: 10px;">
+                    <input value="80000" inputmode="numeric" />
+                  </div>
                 </div>
-              </div>
-              <div class="bubble ai tool">
-                <div class="bubble-label">规则前置校验</div>
-                该组合可以进入当前批次规则校验，但部分医学类专业可能需要额外体检条件。是否有体检限制？
-                <div class="row-actions" style="margin-top: 10px;">
-                  <button class="secondary">无体检限制</button>
-                  <button class="ghost">有，稍后补充</button>
+                <div class="bubble ai">
+                  <div class="bubble-label">问津助手</div>
+                  城市和专业偏好可以直接点选，也可以稍后通过对话继续改。
+                  <div class="chips" style="margin-top: 10px;">
+                    <button class="chip active">省内优先</button>
+                    <button class="chip">长三角可接受</button>
+                    <button class="chip active">计算机</button>
+                    <button class="chip">自动化</button>
+                    <button class="chip">不接受护理</button>
+                  </div>
                 </div>
-              </div>
-              <div class="bubble ai">
-                <div class="bubble-label">问津助手</div>
-                年学费上限大概是多少？
-                <div style="margin-top: 10px;">
-                  <input value="80000" inputmode="numeric" />
-                </div>
-              </div>
-              <div class="bubble ai">
-                <div class="bubble-label">档案摘要</div>
-                <div class="summary-row"><span>基础信息</span><strong>完整</strong></div>
-                <div class="summary-row"><span>预算偏好</span><strong>已填写</strong></div>
-                <div class="summary-row"><span>城市/专业偏好</span><strong>可继续补充</strong></div>
-                <div class="row-actions" style="margin-top: 12px;">
-                  <button class="primary" data-goto="generating">开始生成方案</button>
-                  <button class="ghost">继续补充</button>
+                <div class="bubble ai">
+                  <div class="bubble-label">档案摘要</div>
+                  <div class="summary-row"><span>基础信息</span><strong>完整</strong></div>
+                  <div class="summary-row"><span>预算偏好</span><strong>已填写</strong></div>
+                  <div class="summary-row"><span>城市/专业偏好</span><strong>已生成初版</strong></div>
+                  <div class="row-actions" style="margin-top: 12px;">
+                    <button class="primary" data-action="generateReportInline">开始生成方案</button>
+                    <button class="ghost">继续补充</button>
+                  </div>
                 </div>
               </div>
             </div>
-          </section>
-
-          <section class="screen" data-screen-panel="generating">
-            <div class="card">
-              <div class="card-title">正在生成三套方案</div>
-              <div class="card-subtitle">河南 · 612 分 · 位次 32680 · 物理/化学/生物</div>
-              <div class="progress-bar" style="--value: 84%;"><span></span></div>
-            </div>
-            <div class="timeline" style="margin-top: 12px;">
-              <div class="timeline-item done">
-                <strong>档案检查 · 已完成</strong>
-                <span class="card-subtitle">必填字段完整，预算与批次有效。</span>
-              </div>
-              <div class="timeline-item done">
-                <strong>数据版本锁定 · 已完成</strong>
-                <span class="card-subtitle">河南 2026 本科批数据版本 henan_2026_v1。</span>
-              </div>
-              <div class="parallel-box">
-                <strong>正在并行处理</strong>
-                <div class="agent-line"><span>检索招生数据与政策依据</span><span>已完成</span></div>
-                <div class="agent-line"><span>校验选科/体检/批次规则</span><span>已完成</span></div>
-                <div class="tag target">并行合并完成：证据 8 条，规则风险 1 项</div>
-              </div>
-              <div class="timeline-item done">
-                <strong>候选方案生成 · 已完成</strong>
-                <span class="card-subtitle">共 48 个候选，按保守/均衡/进取分层。</span>
-              </div>
-              <div class="self-check-box">
-                <strong>AI 正在自我检查</strong>
-                <div class="agent-line"><span>第 1 轮：发现表述可能过度承诺</span><span>已修正</span></div>
-                <div class="agent-line"><span>第 2 轮：证据覆盖检查</span><span>通过</span></div>
-              </div>
-              <div class="timeline-item warn">
-                <strong>检索降级提示</strong>
-                <span class="card-subtitle">检索遇到延迟，已切换备用数据源，不影响当前报告生成。</span>
-              </div>
-              <div class="timeline-item running">
-                <strong>报告即将完成</strong>
-                <span class="card-subtitle">预计剩余 5 秒。</span>
-                <button class="primary" data-goto="report">查看生成结果</button>
-              </div>
+            <div class="conversation-input">
+              <input id="conversationText" placeholder="继续补充城市、专业、预算或已有志愿草稿" maxlength="200" />
+              <button class="primary" data-action="sendConversation">发送</button>
             </div>
           </section>
 
@@ -1133,7 +1004,7 @@
                     <div class="bubble-label">问津助手</div>
                     我将为你生成一份完整的志愿方案。在此过程中你可以继续提问，不会影响志愿方案的生成结果。
                     <div class="row-actions" style="margin-top: 10px;">
-                      <button class="ghost" data-goto="generating">查看生成过程</button>
+                      <button class="ghost" data-action="showProcessCard">查看生成过程</button>
                     </div>
                   </div>
                   <div class="chat-time">13:30</div>
@@ -1238,7 +1109,6 @@
 
             </div>
 
-            <button class="primary floating-chat" data-action="openChat">问一问</button>
             <div class="overlay-note" id="overlay"></div>
 
             <div class="drawer" id="evidenceDrawer">
@@ -1262,7 +1132,7 @@
               <div class="candidate-head">
                 <div>
                   <div class="card-title">方案对比</div>
-                  <div class="card-subtitle">同一组件支持手动、版本、对话触发三种入口。</div>
+                  <div class="card-subtitle">同一组件支持手动、版本、对话触发三种方式。</div>
                 </div>
                 <button class="ghost" data-action="closeDrawers">关闭</button>
               </div>
@@ -1277,27 +1147,6 @@
               </div>
             </div>
 
-            <div class="chat-panel" id="chatPanel">
-              <div class="chat-header">
-                <strong>报告问答</strong>
-                <button class="ghost" data-action="closeChat">关闭</button>
-              </div>
-              <div class="chat-body" id="chatBody">
-                <div class="bubble ai">
-                  <div class="bubble-label">问津助手</div>
-                  可以问我任何关于这份报告的问题，也可以让我帮你调整方案。
-                  <div class="stack" style="margin-top: 10px;">
-                    <button class="ghost" data-chat="why">推荐的学校是怎么筛选出来的？</button>
-                    <button class="ghost" data-chat="compare">帮我对比均衡型和进取型</button>
-                    <button class="ghost" data-chat="budget">预算超过 8 万的别推荐了</button>
-                  </div>
-                </div>
-              </div>
-              <div class="chat-input">
-                <input id="chatText" placeholder="输入你的问题或调整意图" maxlength="200" />
-                <button class="primary" data-action="sendChat">发送</button>
-              </div>
-            </div>
           </section>
         </div>
       </section>
@@ -1307,9 +1156,9 @@
           <div class="card-title">原型覆盖范围</div>
           <ul class="note-list">
             <li>验证 Generative UI：Chat 控制层 + 结构化画布。</li>
-            <li>覆盖移动端和桌面端布局差异。</li>
-            <li>覆盖 SSE 生成过程、并行分组、自检、降级提示。</li>
-            <li>覆盖报告内证据链、方案对比、Chat Panel、局部重生成确认。</li>
+            <li>聚焦桌面端左侧对话 + 右侧报告的核心体验。</li>
+            <li>覆盖对话内 SSE 生成过程、并行分组、自检、降级提示。</li>
+            <li>覆盖报告内证据链、方案对比、局部重生成确认。</li>
           </ul>
         </div>
         <div class="card">
@@ -1325,10 +1174,10 @@
         <div class="card">
           <div class="card-title">使用方式</div>
           <ul class="note-list">
-            <li>从顶部导航直接跳页面，或从入口页按流程点击。</li>
-            <li>在报告页点击“问一问”，试试预设问题。</li>
+            <li>默认进入 AI 对话建档，通过结构化控件持续收集信息。</li>
+            <li>点击“开始生成方案”，在对话中查看生成过程卡片。</li>
             <li>点击“预算超过 8 万的别推荐了”，查看确认卡片和 v2 版本变化。</li>
-            <li>点击桌面端按钮，检查左侧对话 + 右侧实时报告的双栏形态。</li>
+            <li>进入报告详情，检查左侧对话 + 右侧实时报告的双栏形态。</li>
           </ul>
         </div>
       </aside>
@@ -1338,23 +1187,19 @@
   <script>
     const root = document.getElementById("prototypeRoot");
     const appTitle = document.getElementById("appTitle");
-    const phoneFrame = document.getElementById("phoneFrame");
     const screens = Array.from(document.querySelectorAll("[data-screen-panel]"));
     const navButtons = Array.from(document.querySelectorAll(".nav button"));
     const overlay = document.getElementById("overlay");
     const evidenceDrawer = document.getElementById("evidenceDrawer");
     const compareDrawer = document.getElementById("compareDrawer");
-    const chatPanel = document.getElementById("chatPanel");
-    const chatBody = document.getElementById("chatBody");
     const desktopChatBody = document.getElementById("desktopChatBody");
+    const conversationFlow = document.getElementById("conversationFlow");
+    const conversationScroll = document.querySelector(".conversation-scroll");
     const candidateList = document.getElementById("candidateList");
     const versionNumber = document.getElementById("versionNumber");
 
     const titleMap = {
-      home: "问津志愿规划",
-      assess: "快速测算",
-      profile: "建档问诊",
-      generating: "方案生成进度",
+      conversation: "AI 对话建档",
       report: "完整报告"
     };
 
@@ -1381,7 +1226,7 @@
       ]
     };
 
-    let currentScreen = "home";
+    let currentScreen = "conversation";
     let currentPlan = "balanced";
     let reportVersion = 1;
 
@@ -1391,15 +1236,7 @@
       navButtons.forEach(btn => btn.classList.toggle("active", btn.dataset.screen === screen));
       appTitle.textContent = titleMap[screen] || "问津志愿规划";
       closeDrawers();
-      closeChat();
       if (screen === "report") renderCandidates();
-    }
-
-    function setViewport(viewport) {
-      root.classList.toggle("desktop-mode", viewport === "desktop");
-      document.querySelectorAll("[data-viewport]").forEach(btn => {
-        btn.classList.toggle("active", btn.dataset.viewport === viewport);
-      });
     }
 
     function renderCandidates() {
@@ -1435,7 +1272,6 @@
     }
 
     function openDrawer(drawer) {
-      closeChat();
       overlay.classList.add("open");
       drawer.classList.add("open");
     }
@@ -1446,26 +1282,96 @@
       compareDrawer.classList.remove("open");
     }
 
-    function openChat() {
-      closeDrawers();
-      overlay.classList.add("open");
-      chatPanel.classList.add("open");
-    }
-
-    function closeChat() {
-      chatPanel.classList.remove("open");
-      if (!evidenceDrawer.classList.contains("open") && !compareDrawer.classList.contains("open")) {
-        overlay.classList.remove("open");
-      }
-    }
-
     function addChat(role, html, variant = "") {
       const bubble = document.createElement("div");
       bubble.className = `bubble ${role} ${variant}`;
       bubble.innerHTML = html;
-      const targetBody = root.classList.contains("desktop-mode") && currentScreen === "report" ? desktopChatBody : chatBody;
-      targetBody.appendChild(bubble);
-      targetBody.scrollTop = targetBody.scrollHeight;
+      desktopChatBody.appendChild(bubble);
+      desktopChatBody.scrollTop = desktopChatBody.scrollHeight;
+    }
+
+    function addConversation(role, html, variant = "") {
+      const bubble = document.createElement("div");
+      bubble.className = `bubble ${role} ${variant}`;
+      bubble.innerHTML = html;
+      conversationFlow.appendChild(bubble);
+      conversationScroll.scrollTop = conversationScroll.scrollHeight;
+    }
+
+    function processCardHtml(includeReportButton = false) {
+      return `
+        <div class='bubble-label'>方案生成过程</div>
+        <div class='timeline'>
+          <div class='timeline-item done'>
+            <strong>档案检查 · 已完成</strong>
+            <span class='card-subtitle'>必填字段完整，预算、批次、选科均可进入规则校验。</span>
+          </div>
+          <div class='timeline-item done'>
+            <strong>数据版本锁定 · 已完成</strong>
+            <span class='card-subtitle'>河南 2026 本科批数据版本 henan_2026_v1。</span>
+          </div>
+          <div class='parallel-box'>
+            <strong>并行处理完成</strong>
+            <div class='agent-line'><span>招生数据与政策依据检索</span><span>8 条证据</span></div>
+            <div class='agent-line'><span>选科/体检/批次规则校验</span><span>1 项风险</span></div>
+            <span class='tag target'>冲稳保候选已分层</span>
+          </div>
+          <div class='self-check-box'>
+            <strong>AI 自我检查通过</strong>
+            <div class='agent-line'><span>去除过度承诺表述</span><span>已修正</span></div>
+            <div class='agent-line'><span>证据覆盖检查</span><span>通过</span></div>
+          </div>
+        </div>
+        ${includeReportButton ? "<div class='row-actions' style='margin-top:12px;'><button class='primary' data-goto='report'>查看最终志愿报告</button><button class='ghost'>继续补充约束</button></div>" : ""}
+      `;
+    }
+
+    function generateReportInline() {
+      addConversation("user", "开始生成方案");
+      addConversation("ai", processCardHtml(false), "tool");
+      window.setTimeout(() => {
+        addConversation("ai", `
+          <div class='bubble-label'>问津助手</div>
+          已生成河南本科批志愿报告：共 48 个候选，按保守、均衡、进取分为三套方案。你可以先查看报告，也可以继续在这里补充约束。
+          <div class='card' style='margin-top:10px;'>
+            <div class='candidate-head'>
+              <div>
+                <div class='candidate-title'>志愿报告 2026-0707</div>
+                <div class='card-subtitle'>河南 · 612 分 · 32680 位 · 物化生</div>
+              </div>
+              <span class='tag target'>已生成</span>
+            </div>
+            <div class='row-actions' style='margin-top:12px;'>
+              <button class='primary' data-goto='report'>查看最终志愿报告</button>
+              <button class='ghost'>继续追问</button>
+            </div>
+          </div>
+        `, "tool");
+      }, 700);
+    }
+
+    function showProcessCard() {
+      if (currentScreen === "conversation") {
+        addConversation("ai", processCardHtml(true), "tool");
+        return;
+      }
+      addChat("ai", processCardHtml(false), "tool");
+    }
+
+    function sendConversation() {
+      const input = document.getElementById("conversationText");
+      const text = input.value.trim();
+      if (!text) return;
+      addConversation("user", text);
+      addConversation("ai", `
+        <div class='bubble-label'>问津助手</div>
+        已记录这条偏好。我会把它加入档案约束，并在生成报告时同步影响城市、专业和预算排序。
+        <div class='row-actions' style='margin-top:10px;'>
+          <button class='primary' data-action='generateReportInline'>基于当前档案生成报告</button>
+          <button class='ghost'>继续补充</button>
+        </div>
+      `);
+      input.value = "";
     }
 
     function handleChatIntent(intent) {
@@ -1514,9 +1420,6 @@
       if (target.dataset.goto) {
         setScreen(target.dataset.goto);
       }
-      if (target.dataset.viewport) {
-        setViewport(target.dataset.viewport);
-      }
       if (target.dataset.plan) {
         currentPlan = target.dataset.plan;
         renderCandidates();
@@ -1526,23 +1429,16 @@
       }
 
       const action = target.dataset.action;
-      if (action === "back") setScreen(currentScreen === "home" ? "home" : "home");
+      if (action === "back") setScreen("conversation");
       if (action === "showRisk") document.getElementById("riskPreview").classList.remove("hidden");
+      if (action === "generateReportInline") generateReportInline();
+      if (action === "showProcessCard") showProcessCard();
       if (action === "toggleReplay") document.getElementById("replayBlock").classList.toggle("hidden");
       if (action === "expandRisk") openDrawer(compareDrawer);
       if (action === "openEvidence") openDrawer(evidenceDrawer);
       if (action === "openCompare") openDrawer(compareDrawer);
       if (action === "closeDrawers") closeDrawers();
-      if (action === "openChat") openChat();
-      if (action === "closeChat") closeChat();
-      if (action === "sendChat") {
-        const input = document.getElementById("chatText");
-        const text = input.value.trim();
-        if (!text) return;
-        addChat("user", text);
-        addChat("ai", "<div class='bubble-label'>问津助手</div>收到。这个原型里建议使用预设问题测试 UI 操作、对比和重新生成状态。");
-        input.value = "";
-      }
+      if (action === "sendConversation") sendConversation();
       if (action === "sendDesktopChat") {
         const input = document.getElementById("desktopChatText");
         const text = input.value.trim();
@@ -1556,6 +1452,19 @@
         reportVersion = reportVersion === 1 ? 2 : 1;
         versionNumber.textContent = String(reportVersion);
         target.textContent = `v${reportVersion}`;
+      }
+    });
+
+    document.addEventListener("keydown", event => {
+      if (event.key !== "Enter" || event.isComposing) return;
+      const target = event.target;
+      if (target.id === "conversationText") {
+        event.preventDefault();
+        sendConversation();
+      }
+      if (target.id === "desktopChatText") {
+        event.preventDefault();
+        document.querySelector("[data-action='sendDesktopChat']").click();
       }
     });
 
