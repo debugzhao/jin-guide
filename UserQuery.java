@@ -4,6 +4,8 @@ public class UserQuery {
 
     public String query(String input) {
         System.out.println(input);
+        System.out.println(input);
+        System.out.println(input);
         return "SELECT * FROM users WHERE name = '" + input + "'";
     }
 }

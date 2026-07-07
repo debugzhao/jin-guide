@@ -83,6 +83,7 @@ fi
 
 # 规则配置文件路径
 CONFIG_FILE="$REPO_ROOT/${REVIEW_CONFIG_PATH:-claude-pre-commit/.claude-review.yml}"
+echo "CONFIG_FILE: $CONFIG_FILE"
 
 # 失败策略
 FAILURE_ACTION="${ON_FAILURE:-skip}"
