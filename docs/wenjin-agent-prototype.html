@@ -356,10 +356,30 @@
     }
 
     .conversation-screen.active {
+      display: block;
+      padding: 0;
+      min-height: 724px;
+      background: #fff;
+    }
+
+    .conversation-workbench {
+      display: grid;
+      grid-template-columns: minmax(360px, 0.72fr) minmax(520px, 1.28fr);
+      min-height: 724px;
+      position: relative;
+      transition: grid-template-columns 180ms ease;
+    }
+
+    .conversation-workbench.report-collapsed {
+      grid-template-columns: minmax(0, 1fr) 0;
+    }
+
+    .conversation-panel {
       display: grid;
       grid-template-rows: 1fr auto;
-      gap: 12px;
-      padding-bottom: 12px;
+      min-height: 724px;
+      border-right: 1px solid var(--line);
+      background: var(--bg);
     }
 
     .conversation-scroll {
@@ -368,12 +388,13 @@
       display: grid;
       gap: 12px;
       align-content: start;
-      padding-bottom: 4px;
+      padding: 18px 18px 8px;
     }
 
     .conversation-input {
       position: sticky;
       bottom: 0;
+      margin: 0 18px 18px;
       border: 1px solid var(--line);
       border-radius: 18px;
       background: #fff;
@@ -391,6 +412,95 @@
 
     .conversation-input input:focus {
       outline: 0;
+    }
+
+    .live-report-panel {
+      height: 724px;
+      overflow: auto;
+      padding: 26px 44px 64px;
+      background: #fff;
+      min-width: 0;
+      transition: opacity 160ms ease;
+    }
+
+    .conversation-workbench.report-collapsed .live-report-panel {
+      opacity: 0;
+      pointer-events: none;
+      padding-left: 0;
+      padding-right: 0;
+      overflow: hidden;
+    }
+
+    .live-report-toolbar {
+      position: sticky;
+      top: -26px;
+      z-index: 4;
+      margin: -26px -44px 20px;
+      padding: 12px 20px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.96);
+      backdrop-filter: blur(10px);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .live-report-toolbar strong {
+      font-size: 14px;
+    }
+
+    .report-toggle-rail {
+      display: none;
+      position: absolute;
+      top: 18px;
+      right: 18px;
+      z-index: 6;
+      box-shadow: 0 8px 20px rgba(15, 23, 42, 0.12);
+    }
+
+    .conversation-workbench.has-report.report-collapsed .report-toggle-rail {
+      display: inline-flex;
+    }
+
+    .live-report-empty {
+      min-height: 560px;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+    }
+
+    .live-report-empty .card {
+      max-width: 460px;
+      text-align: center;
+    }
+
+    .live-report-panel .card {
+      border: 0;
+      border-radius: 0;
+      padding: 20px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .live-report-panel .card:first-child {
+      padding-top: 0;
+    }
+
+    .live-report-title {
+      text-align: center;
+      margin: 4px 0 24px;
+    }
+
+    .live-report-title h1 {
+      font-size: 27px;
+      line-height: 1.2;
+      margin: 0;
+    }
+
+    .live-report-title p {
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 13px;
     }
 
     .bubble {
@@ -465,7 +575,7 @@
 
     .mini-grid {
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
       gap: 8px;
       margin-top: 10px;
     }
@@ -912,7 +1022,7 @@
         </div>
         <nav class="nav" aria-label="原型页面导航">
           <button class="active" data-screen="conversation">AI 对话建档</button>
-          <button data-screen="report">报告详情</button>
+          <button data-screen="report">报告画布</button>
         </nav>
       </div>
     </header>
@@ -927,117 +1037,169 @@
           </div>
 
           <section class="screen conversation-screen active" data-screen-panel="conversation">
-            <div class="conversation-scroll">
-              <div class="chat-flow" id="conversationFlow">
-                <div class="bubble ai">
-                  <div class="bubble-label">问津助手</div>
-                  我会用对话方式帮你完成快速测算和建档。你不用跳到独立表单页，所有字段都会在聊天里以结构化控件出现。
-                </div>
-                <div class="bubble ai capture">
-                  <div class="bubble-label">问津助手</div>
-                  先做一个快速测算。请确认你的省份、批次、分数和位次。
-                  <div class="card" style="margin-top: 10px;">
-                    <div class="card-caption">
-                      <strong>快速测算信息</strong>
-                      <span class="tag target">待确认</span>
+            <div class="conversation-workbench report-collapsed" id="liveWorkbench">
+              <div class="conversation-panel">
+                <div class="conversation-scroll">
+                  <div class="chat-flow" id="conversationFlow">
+                    <div class="bubble ai">
+                      <div class="bubble-label">问津助手</div>
+                      我会用对话方式帮你完成建档。左侧收集信息，右侧实时渲染志愿报告；后续补充城市、专业或学费偏好时，右侧报告会继续更新。
                     </div>
-                    <div class="field-grid">
-                      <label>省份
-                        <select>
-                          <option>河南</option>
-                          <option>山东</option>
-                          <option>广东</option>
-                        </select>
-                      </label>
-                      <label>批次
-                        <select>
-                          <option>本科批</option>
-                          <option>专科批</option>
-                        </select>
-                      </label>
-                      <label>高考分数
-                        <input value="612" inputmode="numeric" />
-                      </label>
-                      <label>全省位次
-                        <input value="32680" inputmode="numeric" />
-                      </label>
+                    <div class="bubble ai capture">
+                      <div class="bubble-label">问津助手</div>
+                      先填写生成志愿报告必须依赖的基础信息。这里不完整时，我只能做快速答疑，不能渲染右侧报告。
+                      <div class="card" style="margin-top: 10px;">
+                        <div class="card-caption">
+                          <strong>基础建档信息</strong>
+                          <span class="tag risk">必填</span>
+                        </div>
+                        <div class="field-grid">
+                          <label>省份
+                            <select>
+                              <option>河南</option>
+                              <option>山东</option>
+                              <option>广东</option>
+                            </select>
+                          </label>
+                          <label>年份
+                            <select>
+                              <option>2026</option>
+                              <option>2025</option>
+                              <option>2024</option>
+                            </select>
+                          </label>
+                          <label>批次
+                            <select>
+                              <option>本科批</option>
+                              <option>专科批</option>
+                            </select>
+                          </label>
+                          <label>科类 / 文理科
+                            <select>
+                              <option>理科 / 物理类</option>
+                              <option>文科 / 历史类</option>
+                            </select>
+                          </label>
+                          <label>高考分数
+                            <input value="612" inputmode="numeric" />
+                          </label>
+                          <label>全省位次
+                            <input value="32680" inputmode="numeric" />
+                          </label>
+                        </div>
+                        <div class="card-subtitle" style="margin-top: 8px;">分数和位次至少填写一个；同时有位次时，匹配会优先使用位次。</div>
+                        <div style="margin-top: 12px;">
+                          <button class="primary" data-action="showRisk">确认基础信息并渲染报告</button>
+                        </div>
+                      </div>
                     </div>
-                    <div style="margin-top: 12px;">
-                      <button class="primary" data-action="showRisk">确认并生成风险画像</button>
+                    <div class="bubble ai state">
+                      <div class="bubble-label">已采集信息</div>
+                      这些不是用户手动发送的聊天内容，而是 Agent 从上方 Generative UI 中沉淀出的结构化档案。
+                      <div class="mini-grid">
+                        <div class="mini-field">省份<strong>河南</strong></div>
+                        <div class="mini-field">年份<strong>2026</strong></div>
+                        <div class="mini-field">批次<strong>本科批</strong></div>
+                        <div class="mini-field">科类<strong>理科 / 物理类</strong></div>
+                        <div class="mini-field">高考分数<strong>612</strong></div>
+                        <div class="mini-field">全省位次<strong>32680</strong></div>
+                      </div>
+                    </div>
+                    <div class="bubble ai tool hidden" id="riskPreview">
+                      <div class="bubble-label">实时报告状态</div>
+                      <div class="risk-preview">
+                        <div class="risk-meter">中</div>
+                        <div>
+                          <div class="card-title">右侧报告已根据基础信息渲染</div>
+                          <div class="card-subtitle">当前报告是覆盖更广的通用版本；输入城市、专业或学费偏好后，会更新同一份报告。</div>
+                          <div class="progress-bar" style="--value: 48%;"><span></span></div>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="bubble ai">
+                      <div class="bubble-label">档案摘要</div>
+                      <div class="summary-row"><span>基础建档信息</span><strong>完整，可渲染</strong></div>
+                      <div class="summary-row"><span>城市/专业/学费偏好</span><strong>等待用户自然输入</strong></div>
+                      <div class="summary-row"><span>右侧报告状态</span><strong>基础版</strong></div>
+                      <div class="card-subtitle" style="margin-top: 10px;">基础信息确认后，右侧会立即出现志愿报告；之后在输入框说“想去上海”“优先计算机”“学费 8 万以内”，我会渲染偏好卡并更新右侧报告。</div>
                     </div>
                   </div>
                 </div>
-                <div class="bubble ai state">
-                  <div class="bubble-label">已采集信息</div>
-                  这些不是用户手动发送的聊天内容，而是 Agent 从上方 Generative UI 中沉淀出的结构化档案。
-                  <div class="mini-grid">
-                    <div class="mini-field">省份<strong>河南</strong></div>
-                    <div class="mini-field">批次<strong>本科批</strong></div>
-                    <div class="mini-field">高考分数<strong>612</strong></div>
-                    <div class="mini-field">全省位次<strong>32680</strong></div>
-                  </div>
-                </div>
-                <div class="bubble ai tool hidden" id="riskPreview">
-                  <div class="bubble-label">即时风险画像</div>
-                  <div class="risk-preview">
-                    <div class="risk-meter">中</div>
-                    <div>
-                      <div class="card-title">当前条件可生成初步方案</div>
-                      <div class="card-subtitle">位次信息完整，建议继续补充选科、预算、城市和专业偏好。</div>
-                      <div class="progress-bar" style="--value: 48%;"><span></span></div>
-                    </div>
-                  </div>
-                </div>
-                <div class="bubble ai">
-                  <div class="bubble-label">问津助手</div>
-                  接下来补全档案。你选择的科目是？
-                  <div class="chips" style="margin-top: 10px;">
-                    <button class="chip active">物理</button>
-                    <button class="chip active">化学</button>
-                    <button class="chip active">生物</button>
-                  </div>
-                </div>
-                <div class="bubble ai tool">
-                  <div class="bubble-label">规则前置校验</div>
-                  该组合可以进入当前批次规则校验，但部分医学类专业可能需要额外体检条件。是否有体检限制？
-                  <div class="row-actions" style="margin-top: 10px;">
-                    <button class="secondary">无体检限制</button>
-                    <button class="ghost">有，稍后补充</button>
-                  </div>
-                </div>
-                <div class="bubble ai">
-                  <div class="bubble-label">问津助手</div>
-                  年学费上限大概是多少？
-                  <div style="margin-top: 10px;">
-                    <input value="80000" inputmode="numeric" />
-                  </div>
-                </div>
-                <div class="bubble ai">
-                  <div class="bubble-label">问津助手</div>
-                  城市和专业偏好可以直接点选，也可以稍后通过对话继续改。
-                  <div class="chips" style="margin-top: 10px;">
-                    <button class="chip active">省内优先</button>
-                    <button class="chip">长三角可接受</button>
-                    <button class="chip active">计算机</button>
-                    <button class="chip">自动化</button>
-                    <button class="chip">不接受护理</button>
-                  </div>
-                </div>
-                <div class="bubble ai">
-                  <div class="bubble-label">档案摘要</div>
-                  <div class="summary-row"><span>基础信息</span><strong>完整</strong></div>
-                  <div class="summary-row"><span>预算偏好</span><strong>已填写</strong></div>
-                  <div class="summary-row"><span>城市/专业偏好</span><strong>已生成初版</strong></div>
-                  <div class="row-actions" style="margin-top: 12px;">
-                    <button class="primary" data-action="generateReportInline">开始生成方案</button>
-                    <button class="ghost">继续补充</button>
-                  </div>
+                <div class="conversation-input">
+                  <input id="conversationText" placeholder="继续补充城市、专业、学费偏好或已有志愿草稿" maxlength="200" />
+                  <button class="primary" data-action="sendConversation">发送</button>
                 </div>
               </div>
-            </div>
-            <div class="conversation-input">
-              <input id="conversationText" placeholder="继续补充城市、专业、预算或已有志愿草稿" maxlength="200" />
-              <button class="primary" data-action="sendConversation">发送</button>
+
+              <button class="secondary report-toggle-rail" data-action="toggleLiveReport">展开报告</button>
+
+              <aside class="live-report-panel" id="liveReportPanel">
+                <div class="live-report-toolbar">
+                  <div>
+                    <strong>实时志愿报告</strong>
+                    <div class="card-subtitle">随左侧建档和偏好输入更新</div>
+                  </div>
+                  <button class="ghost" data-action="toggleLiveReport">收起报告</button>
+                </div>
+                <div class="live-report-empty" id="liveReportEmpty">
+                  <div class="card">
+                    <div class="card-title">等待基础建档信息</div>
+                    <div class="card-subtitle">填写并确认左侧必填信息后，这里会直接渲染志愿报告。后续对话不会跳到另一份报告，只会持续更新这份报告。</div>
+                  </div>
+                </div>
+                <div class="hidden" id="liveReportGenerated">
+                  <div class="live-report-title">
+                    <h1>志愿报告 2026-0707</h1>
+                    <p id="liveReportTime">已根据基础建档信息渲染 · 河南 2026 本科批数据版本</p>
+                  </div>
+                  <div class="card">
+                    <div class="candidate-head">
+                      <div>
+                        <div class="card-title">河南本科批志愿规划报告</div>
+                        <div class="card-subtitle" id="liveReportSummary">基础版 · 48 个候选 · 保守/均衡/进取三套方案</div>
+                      </div>
+                      <span class="tag target" id="liveReportMode">基础版</span>
+                    </div>
+                  </div>
+                  <div class="card">
+                    <div class="card-title">考生概况</div>
+                    <div class="status-grid">
+                      <div class="status-tile"><span class="card-subtitle">分数</span><div class="status-number">612</div></div>
+                      <div class="status-tile"><span class="card-subtitle">位次</span><div class="status-number">32680</div></div>
+                      <div class="status-tile"><span class="card-subtitle">科类</span><div class="status-number" style="font-size: 15px;">理科 / 物理类</div></div>
+                    </div>
+                  </div>
+                  <div class="card hidden" id="liveReportPreferenceBlock">
+                    <div class="card-title">已纳入偏好</div>
+                    <div class="card-subtitle" id="liveReportPreferenceText">城市：上海优先；专业：计算机；年学费：8 万以内。</div>
+                  </div>
+                  <div class="card">
+                    <div class="card-title">AI 条件点评</div>
+                    <div class="card-subtitle" id="liveReportComment">目前只有基础建档信息，报告会先覆盖更多候选，避免过早收窄。</div>
+                  </div>
+                  <div class="card">
+                    <div class="candidate-head">
+                      <div>
+                        <div class="card-title">风险总览</div>
+                        <div class="card-subtitle" id="liveReportRisk">整体风险：中。重点关注保底数量和热门专业扎堆。</div>
+                      </div>
+                      <span class="tag warn">中风险</span>
+                    </div>
+                  </div>
+                  <div class="card">
+                    <div class="candidate-head">
+                      <div class="card-title">三套方案</div>
+                      <button class="secondary" data-action="openCompare">对比</button>
+                    </div>
+                    <div class="tabs" style="margin: 12px 0;">
+                      <button data-plan="conservative">保守型</button>
+                      <button class="active" data-plan="balanced">均衡型</button>
+                      <button data-plan="aggressive">进取型</button>
+                    </div>
+                    <div class="stack" id="liveCandidateList"></div>
+                  </div>
+                </div>
+              </aside>
             </div>
           </section>
 
@@ -1056,7 +1218,7 @@
                   <div class="bubble user">根据我的档案信息，帮我生成一份志愿报告</div>
                   <div class="bubble ai">
                     <div class="bubble-label">问津助手</div>
-                    我将为你生成一份完整的志愿方案。在此过程中你可以继续提问，不会影响志愿方案的生成结果。
+                    我会在右侧报告画布渲染志愿方案。在此过程中你可以继续提问，新的偏好会更新同一份报告。
                     <div class="row-actions" style="margin-top: 10px;">
                       <button class="ghost" data-action="showProcessCard">查看生成过程</button>
                     </div>
@@ -1064,12 +1226,12 @@
                   <div class="chat-time">13:30</div>
                   <div class="bubble ai">
                     <div class="bubble-label">问津助手</div>
-                    好的，我已经为你生成了一份完整的志愿报告。右侧报告会随着你的调整实时更新。
+                    好的，右侧志愿报告已经渲染。它会随着你的调整实时更新。
                     <div class="card" style="margin-top: 10px;">
                       <div class="candidate-head">
                         <div>
                           <div class="candidate-title">志愿报告 2026-0707</div>
-                          <div class="card-subtitle">河南 · 物化生 · 612 分</div>
+                          <div class="card-subtitle">河南 · 理科 / 物理类 · 612 分</div>
                         </div>
                         <span class="tag target">已生成</span>
                       </div>
@@ -1110,7 +1272,7 @@
                   <div class="status-grid">
                     <div class="status-tile"><span class="card-subtitle">分数</span><div class="status-number">612</div></div>
                     <div class="status-tile"><span class="card-subtitle">位次</span><div class="status-number">32680</div></div>
-                    <div class="status-tile"><span class="card-subtitle">选科</span><div class="status-number" style="font-size: 15px;">物化生</div></div>
+                    <div class="status-tile"><span class="card-subtitle">科类</span><div class="status-number" style="font-size: 15px;">理科 / 物理类</div></div>
                   </div>
                 </div>
 
@@ -1175,7 +1337,7 @@
               </div>
               <div class="stack" style="margin-top: 12px;">
                 <div class="card">
-                  <div class="summary-row"><span>关键字段</span><strong>专业组、计划数、学费、选科</strong></div>
+                  <div class="summary-row"><span>关键字段</span><strong>专业组、计划数、学费、科类</strong></div>
                   <div class="summary-row"><span>历史位次</span><strong>2025: 38500 / 2024: 37200</strong></div>
                   <div class="card-subtitle">引用摘要不超过合规长度，仅展示字段级证据。</div>
                 </div>
@@ -1231,7 +1393,7 @@
             <li>默认进入 AI 对话建档，通过结构化控件持续收集信息。</li>
             <li>点击“开始生成方案”，在对话中查看生成过程卡片。</li>
             <li>点击“预算超过 8 万的别推荐了”，查看确认卡片和 v2 版本变化。</li>
-            <li>进入报告详情，检查左侧对话 + 右侧实时报告的双栏形态。</li>
+            <li>检查左侧对话 + 右侧实时报告的双栏形态。</li>
           </ul>
         </div>
       </aside>
@@ -1250,11 +1412,22 @@
     const conversationFlow = document.getElementById("conversationFlow");
     const conversationScroll = document.querySelector(".conversation-scroll");
     const candidateList = document.getElementById("candidateList");
+    const liveWorkbench = document.getElementById("liveWorkbench");
+    const liveCandidateList = document.getElementById("liveCandidateList");
+    const liveReportEmpty = document.getElementById("liveReportEmpty");
+    const liveReportGenerated = document.getElementById("liveReportGenerated");
+    const liveReportMode = document.getElementById("liveReportMode");
+    const liveReportSummary = document.getElementById("liveReportSummary");
+    const liveReportTime = document.getElementById("liveReportTime");
+    const liveReportComment = document.getElementById("liveReportComment");
+    const liveReportRisk = document.getElementById("liveReportRisk");
+    const liveReportPreferenceBlock = document.getElementById("liveReportPreferenceBlock");
+    const liveReportPreferenceText = document.getElementById("liveReportPreferenceText");
     const versionNumber = document.getElementById("versionNumber");
 
     const titleMap = {
       conversation: "AI 对话建档",
-      report: "完整报告"
+      report: "实时报告"
     };
 
     const planLabels = {
@@ -1283,6 +1456,7 @@
     let currentScreen = "conversation";
     let currentPlan = "balanced";
     let reportVersion = 1;
+    let hasLiveReport = false;
 
     function setScreen(screen) {
       currentScreen = screen;
@@ -1293,9 +1467,9 @@
       if (screen === "report") renderCandidates();
     }
 
-    function renderCandidates() {
-      if (!candidateList) return;
-      candidateList.innerHTML = "";
+    function renderCandidateCards(container) {
+      if (!container) return;
+      container.innerHTML = "";
       candidates[currentPlan].forEach((item, index) => {
         const [school, major, tier, score, ranks] = item;
         const tierClass = tier === "保" ? "safe" : tier === "稳" ? "target" : "rush";
@@ -1318,11 +1492,51 @@
             <button class="ghost" data-action="openCompare">加入对比</button>
           </div>
         `;
-        candidateList.appendChild(card);
+        container.appendChild(card);
       });
+    }
+
+    function renderCandidates() {
+      renderCandidateCards(candidateList);
+      renderCandidateCards(liveCandidateList);
       document.querySelectorAll("[data-plan]").forEach(btn => {
         btn.classList.toggle("active", btn.dataset.plan === currentPlan);
       });
+    }
+
+    function setLiveReportOpen(open) {
+      if (!liveWorkbench) return;
+      if (open && !hasLiveReport) return;
+      liveWorkbench.classList.toggle("report-collapsed", !open);
+    }
+
+    function renderLiveReport(isDetailed = false, preferenceText = "") {
+      if (!liveReportEmpty || !liveReportGenerated) return;
+      hasLiveReport = true;
+      liveWorkbench.classList.add("has-report");
+      liveReportEmpty.classList.add("hidden");
+      liveReportGenerated.classList.remove("hidden");
+      liveReportMode.textContent = isDetailed ? "偏好更新版" : "基础版";
+      liveReportMode.className = `tag ${isDetailed ? "safe" : "target"}`;
+      liveReportSummary.textContent = isDetailed
+        ? "偏好更新版 · 31 个候选 · 上海/计算机方向权重提高"
+        : "基础版 · 48 个候选 · 保守/均衡/进取三套方案";
+      liveReportTime.textContent = isDetailed
+        ? "已根据新增偏好更新 · 河南 2026 本科批数据版本"
+        : "已根据基础建档信息渲染 · 河南 2026 本科批数据版本";
+      liveReportComment.textContent = isDetailed
+        ? "已把城市、专业和学费偏好纳入排序，候选范围从通用覆盖转为更贴近目标方向。"
+        : "目前只有基础建档信息，报告会先覆盖更多候选，避免过早收窄。";
+      liveReportRisk.textContent = isDetailed
+        ? "整体风险：中。上海和计算机方向竞争更强，需要保留省内保底候选。"
+        : "整体风险：中。重点关注保底数量和热门专业扎堆。";
+      liveReportPreferenceBlock.classList.toggle("hidden", !isDetailed);
+      if (isDetailed && preferenceText) {
+        liveReportPreferenceText.textContent = preferenceText;
+      }
+      currentPlan = "balanced";
+      renderCandidates();
+      setLiveReportOpen(true);
     }
 
     function openDrawer(drawer) {
@@ -1352,13 +1566,65 @@
       conversationScroll.scrollTop = conversationScroll.scrollHeight;
     }
 
+    function escapeHtml(text) {
+      return text.replace(/[&<>"']/g, char => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        "\"": "&quot;",
+        "'": "&#39;"
+      })[char]);
+    }
+
+    function preferenceFormHtml(text) {
+      const safeText = escapeHtml(text);
+      return `
+        <div class='bubble-label'>问津助手</div>
+        我识别到你在补充城市、专业或学费偏好。下面这张偏好卡不会改变基础建档，只会让推荐报告更精细。
+        <div class='card' style='margin-top:10px;'>
+          <div class='card-caption'>
+            <strong>推荐偏好</strong>
+            <span class='tag target'>按需生成</span>
+          </div>
+          <div class='card-subtitle'>来自你的输入：${safeText}</div>
+          <div style='margin-top:12px;'>
+            <label>城市偏好</label>
+            <div class='chips' style='margin-top:8px;'>
+              <button class='chip active'>上海优先</button>
+              <button class='chip'>长三角可接受</button>
+              <button class='chip'>省内保底</button>
+              <button class='chip'>城市不限</button>
+            </div>
+          </div>
+          <div style='margin-top:12px;'>
+            <label>专业偏好</label>
+            <div class='chips' style='margin-top:8px;'>
+              <button class='chip active'>计算机</button>
+              <button class='chip'>电子信息</button>
+              <button class='chip'>自动化</button>
+              <button class='chip'>专业不限</button>
+            </div>
+          </div>
+          <div style='margin-top:12px;'>
+            <label>年学费上限
+              <input value='80000' inputmode='numeric' />
+            </label>
+          </div>
+          <div class='row-actions' style='margin-top:12px;'>
+            <button class='secondary'>保存为报告约束</button>
+            <button class='primary' data-action='generateDetailedReportInline'>生成更详细报告</button>
+          </div>
+        </div>
+      `;
+    }
+
     function processCardHtml(includeReportButton = false) {
       return `
         <div class='bubble-label'>方案生成过程</div>
         <div class='timeline'>
           <div class='timeline-item done'>
             <strong>档案检查 · 已完成</strong>
-            <span class='card-subtitle'>必填字段完整，预算、批次、选科均可进入规则校验。</span>
+            <span class='card-subtitle'>必填字段完整，省份、年份、批次、科类和分数/位次均可进入规则校验。</span>
           </div>
           <div class='timeline-item done'>
             <strong>数据版本锁定 · 已完成</strong>
@@ -1367,7 +1633,7 @@
           <div class='parallel-box'>
             <strong>并行处理完成</strong>
             <div class='agent-line'><span>招生数据与政策依据检索</span><span>8 条证据</span></div>
-            <div class='agent-line'><span>选科/体检/批次规则校验</span><span>1 项风险</span></div>
+            <div class='agent-line'><span>科类/体检/批次规则校验</span><span>1 项风险</span></div>
             <span class='tag target'>冲稳保候选已分层</span>
           </div>
           <div class='self-check-box'>
@@ -1376,28 +1642,25 @@
             <div class='agent-line'><span>证据覆盖检查</span><span>通过</span></div>
           </div>
         </div>
-        ${includeReportButton ? "<div class='row-actions' style='margin-top:12px;'><button class='primary' data-goto='report'>查看最终志愿报告</button><button class='ghost'>继续补充约束</button></div>" : ""}
+        ${includeReportButton ? "<div class='row-actions' style='margin-top:12px;'><button class='primary' data-action='renderBaseReport'>刷新右侧报告</button><button class='ghost'>继续补充约束</button></div>" : ""}
       `;
     }
 
-    function generateReportInline() {
-      addConversation("user", "开始生成方案");
+    function generateReportInline(isDetailed = false) {
+      renderLiveReport(isDetailed, "城市：上海优先；专业：计算机；年学费：8 万以内。");
+      addConversation("user", isDetailed ? "基于偏好更新右侧报告" : "刷新右侧志愿报告");
       addConversation("ai", processCardHtml(false), "tool");
       window.setTimeout(() => {
         addConversation("ai", `
           <div class='bubble-label'>问津助手</div>
-          已生成河南本科批志愿报告：共 48 个候选，按保守、均衡、进取分为三套方案。你可以先查看报告，也可以继续在这里补充约束。
+          ${isDetailed ? "右侧报告已基于城市、专业和学费偏好更新：候选从 48 个收敛到 31 个，并提高了上海/计算机方向权重。" : "右侧报告已根据基础建档信息渲染：共 48 个候选，按保守、均衡、进取分为三套方案。"}你可以继续补充约束，我会更新同一份报告。
           <div class='card' style='margin-top:10px;'>
             <div class='candidate-head'>
               <div>
-                <div class='candidate-title'>志愿报告 2026-0707</div>
-                <div class='card-subtitle'>河南 · 612 分 · 32680 位 · 物化生</div>
+                <div class='candidate-title'>右侧志愿报告已更新</div>
+                <div class='card-subtitle'>河南 · 612 分 · 32680 位 · 理科 / 物理类</div>
               </div>
-              <span class='tag target'>已生成</span>
-            </div>
-            <div class='row-actions' style='margin-top:12px;'>
-              <button class='primary' data-goto='report'>查看最终志愿报告</button>
-              <button class='ghost'>继续追问</button>
+              <span class='tag target'>实时更新</span>
             </div>
           </div>
         `, "tool");
@@ -1417,14 +1680,19 @@
       const text = input.value.trim();
       if (!text) return;
       addConversation("user", text);
-      addConversation("ai", `
-        <div class='bubble-label'>问津助手</div>
-        已记录这条偏好。我会把它加入档案约束，并在生成报告时同步影响城市、专业和预算排序。
-        <div class='row-actions' style='margin-top:10px;'>
-          <button class='primary' data-action='generateReportInline'>基于当前档案生成报告</button>
-          <button class='ghost'>继续补充</button>
-        </div>
-      `);
+      const preferenceIntent = /(城市|上海|北京|广州|深圳|杭州|南京|长三角|省内|专业|计算机|自动化|电子|学费|预算|费用|8万|八万|护理|医学)/.test(text);
+      if (preferenceIntent) {
+        addConversation("ai", preferenceFormHtml(text), "capture");
+        renderLiveReport(true, `来自对话：${text}`);
+      } else {
+        addConversation("ai", `
+          <div class='bubble-label'>问津助手</div>
+          我会继续按当前基础档案维护右侧报告。你也可以补充城市、专业或学费偏好，我会渲染偏好卡并更新右侧报告。
+          <div class='row-actions' style='margin-top:10px;'>
+            <button class='primary' data-action='renderBaseReport'>刷新右侧报告</button>
+          </div>
+        `);
+      }
       input.value = "";
     }
 
@@ -1450,7 +1718,7 @@
       }
 
       addChat("user", "推荐的学校是怎么筛选出来的？");
-      addChat("ai", "<div class='bubble-label'>问津助手</div>先用位次和选科做硬过滤，再结合预算、城市、专业偏好排序。关键结论都能点开数据来源。<div class='card-subtitle' style='margin-top:8px;'>以上分析基于报告数据，最终填报请以省级考试院为准。</div>");
+      addChat("ai", "<div class='bubble-label'>问津助手</div>先用位次和科类做硬过滤，再结合学费、城市、专业偏好排序。关键结论都能点开数据来源。<div class='card-subtitle' style='margin-top:8px;'>以上分析基于报告数据，最终填报请以省级考试院为准。</div>");
     }
 
     function confirmRefine() {
@@ -1484,8 +1752,16 @@
 
       const action = target.dataset.action;
       if (action === "back") setScreen("conversation");
-      if (action === "showRisk") document.getElementById("riskPreview").classList.remove("hidden");
+      if (action === "showRisk") {
+        document.getElementById("riskPreview").classList.remove("hidden");
+        renderLiveReport(false);
+      }
+      if (action === "renderBaseReport") renderLiveReport(false);
+      if (action === "toggleLiveReport") {
+        setLiveReportOpen(liveWorkbench.classList.contains("report-collapsed"));
+      }
       if (action === "generateReportInline") generateReportInline();
+      if (action === "generateDetailedReportInline") generateReportInline(true);
       if (action === "showProcessCard") showProcessCard();
       if (action === "toggleReplay") document.getElementById("replayBlock").classList.toggle("hidden");
       if (action === "expandRisk") openDrawer(compareDrawer);
