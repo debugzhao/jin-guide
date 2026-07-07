@@ -17,11 +17,11 @@
 具体支撑：
 
 - **对话式建档**：以确定性字段依赖图驱动的结构化控件序列，Agent 只在检测到矛盾或歧义时介入追问。
-- **风险画像与志愿表体检**：同步接口，规则引擎直接给结论。
+- **风险画像与志愿草稿体检**：同步接口，规则引擎直接给结论；前端以对话内 Generative UI 卡片呈现，不作为独立页面。
 - **冲稳保方案生成**：确定性推荐算法生成候选、评分、分层。
 - **证据链检索**：RAG 检索 + 结构化数据联合产出，报告结论必须可追溯到具体来源。
 - **报告生成与持续协作**：报告不是终点，用户可以通过对话继续追问、修改约束触发局部重新生成、对比多个方案版本。
-- **Agent 运行过程可观测**：同一套事件基础设施对外呈现两层——终端用户看到的"协作时间线"（友好文案、脱敏）和管理员看到的"Debug 事件流 + LangGraph 拓扑图"（完整技术细节）。
+- **Agent 运行过程可观测**：同一套事件基础设施对外呈现两层——终端用户看到的"对话内生成过程卡片/报告决策回放"（友好文案、脱敏）和管理员看到的"Debug 事件流 + LangGraph 拓扑图"（完整技术细节）。
 
 当前版本不实现订单、支付、套餐、会员权益、付费回调、退款等商业化能力，也不实现任何形式的人工审核/人工介入流程——报告生成后由规则引擎和 Agent 共同产出结论，高风险信息直接展示给用户，由用户自主决策。
 
@@ -31,7 +31,7 @@
 
 ```mermaid
 flowchart TD
-  FE["问津 Agent Web<br/>Next.js · Generative UI 画布<br/>(对话式建档 / 协作时间线 / 报告画布)"] --> BFF["Next.js BFF<br/>Route Handler / 轻量鉴权 / SSE 转发"]
+  FE["问津 Agent Web<br/>Next.js · 桌面 Generative UI 工作台<br/>(AI 对话建档 / 对话内生成过程 / 报告画布)"] --> BFF["Next.js BFF<br/>Route Handler / 轻量鉴权 / SSE 转发"]
   BFF --> API["FastAPI API Layer"]
   API --> AUTH["Auth / Session<br/>邮箱 + 密码"]
   API --> PROFILE["Profile Service"]
@@ -49,7 +49,7 @@ flowchart TD
   TOOLS --> SQL
   TOOLS --> VDB["pgvector 向量检索"]
   AGENT --> STREAM["Redis Stream<br/>sse:{run_id}"]
-  STREAM --> USEREVT["用户侧协作时间线<br/>白名单事件"]
+  STREAM --> USEREVT["用户侧生成过程卡片<br/>白名单事件"]
   STREAM --> DEBUGEVT["Admin Debug 事件流<br/>全量事件 + LangGraph 拓扑"]
   API --> REDIS["Redis<br/>cache / session / rate limit / SSE"]
   AGENT --> TRACE["LangSmith Trace"]
@@ -105,8 +105,8 @@ sequenceDiagram
     end
 
     rect rgb(255,248,235)
-    note over 用户,Redis: 阶段二 · 报告生成（异步 Agent Run，§5.7）
-    用户->>FE: 建档完成，点击生成
+    note over 用户,Redis: 阶段二 · 对话内报告生成（异步 Agent Run，§5.7）
+    用户->>FE: 建档完成，在对话中点击生成
     FE->>API: POST /reports/generate
     API->>ARQ: 创建 run，投入队列（幂等键 thread_id）
     API-->>FE: 202 {run_id, stream_url}
@@ -139,12 +139,12 @@ sequenceDiagram
         end
     end
 
-    Redis-->>BFF: 转发协作时间线事件流
+    Redis-->>BFF: 转发用户侧生成过程事件流
     BFF-->>FE: SSE 转发（node_started/agents_parallel_*/self_check_round/degraded_notice…）
-    FE->>用户: 实时渲染"Agent 协作时间线"
+    FE->>用户: 在当前对话流实时渲染"生成过程卡片"
     LG->>Redis: completed {report_id, risk_level}
     Redis-->>FE: completed（经 BFF 转发）
-    FE->>用户: 展示报告（Generative UI 画布）
+    FE->>用户: 展示报告预览卡片，并进入报告工作台
     end
 
     rect rgb(238,250,238)
@@ -173,7 +173,7 @@ sequenceDiagram
 
 **读图要点**：
 
-- 三个阶段共用同一套分层（FE→BFF→API），阶段二和阶段三还共用同一条 Redis Stream 和同一个 LangGraph 图定义——不是三套独立机制拼起来的。
+- 三个阶段共用同一套分层（FE→BFF→API），阶段二和阶段三还共用同一条 Redis Stream 和同一个 LangGraph 图定义——不是三套独立机制拼起来的。阶段二在产品上表现为**对话内生成过程卡片**，不需要独立生成进度页。
 - 阶段一的"矛盾检测"和阶段二的"规则校验"复用的是同一批 Policy Rule Agent 工具（`check_subject_req` 等），只是调用时机不同：建档时做单字段前置校验，生成时做完整候选集校验。
 - 阶段二的 `par` 块是 §10.3 并行执行的时序体现；`loop` 块是 §10.6 Reflection 循环保护的时序体现。
 - 阶段三的 `alt` 分支对应 §10.9 两类工具的核心区别：UI 操作类不经过确认直接执行，数据变更类必须走确认卡片 + `/refine` 独立请求。
@@ -253,7 +253,7 @@ sequenceDiagram
 | POST   | `/api/v1/profile/field-check`           | 建档单字段实时校验，命中矛盾/歧义时返回结构化追问               |
 | GET    | `/api/v1/data/availability`             | 查询省份数据可用性和版本状态                                    |
 | POST   | `/api/v1/risk/preview`                  | 生成风险画像（同步，< 2s）                                      |
-| POST   | `/api/v1/volunteer/check`               | 志愿表风险体检（同步，< 5s）                                    |
+| POST   | `/api/v1/volunteer/check`               | 志愿草稿风险体检（同步，< 5s），由对话内志愿草稿卡片调用；不支持上传/OCR 自动解析 |
 | POST   | `/api/v1/reports/generate`              | 触发报告生成（创建 Agent run）                                  |
 | GET    | `/api/v1/reports/{id}`                  | 获取报告                                                        |
 | GET    | `/api/v1/reports`                       | 获取当前用户报告历史（游标分页）                                |
@@ -277,7 +277,7 @@ sequenceDiagram
 
 **匿名会话说明**：用户首次进入前端时，BFF 调用 `POST /api/v1/auth/anonymous-session` 创建匿名会话并种下 `anonymous_id` / `session_token` Cookie。匿名用户可以完成测算、建档和生成前准备；尝试查看完整报告、保存档案或分享报告时触发登录/注册。注册或登录成功后，后端把同一匿名会话下的 `student_profiles`、未完成 `agent_runs`、草稿志愿表和报告记录绑定到正式 `user_id`，绑定过程幂等，避免重复创建档案。
 
-**`/api/v1/reports/generate` 说明**：面向前端的语义化入口，内部等价于 `POST /api/v1/agent/runs`（`task_type=generate_report`）。
+**`/api/v1/reports/generate` 说明**：面向前端的语义化入口，内部等价于 `POST /api/v1/agent/runs`（`task_type=generate_report`）。前端收到 `run_id` 后在当前 AI 对话建档页追加/更新生成过程卡片；当前版本不提供独立 `/reports/generating` 页面。
 
 **`agent_runs.status` 状态枚举**：`queued` / `running` / `completed` / `failed` / `timeout`。
 
@@ -406,7 +406,7 @@ POST /api/v1/agent/runs
 { "run_id": "run_123", "status": "queued", "stream_url": "/api/v1/agent/runs/run_123/events" }
 ```
 
-用户侧 SSE 事件白名单（`GET /api/v1/agent/runs/{id}/events`，走 `sse:{run_id}` Stream）：
+用户侧 SSE 事件白名单（`GET /api/v1/agent/runs/{id}/events`，走 `sse:{run_id}` Stream）。前端消费这些事件时，应更新 AI 对话建档页中的**生成过程卡片**，报告页只读回放使用 `reports.run_summary_json`：
 
 ```text
 event: node_started
@@ -460,7 +460,7 @@ data: {"severity": "critical", "message": "数据检索失败，请稍后重试"
 | `completed` | run 完成 | 无 PII |
 | `error` | 错误 | 无 PII |
 
-> 这套白名单和下方 §5.8 的 Admin 全量事件流**共用同一条 Redis Stream 上的同一份原始事件**，用户侧生成器只是做了一次"技术事件 → 友好文案"的转译再转发，不是两套独立的埋点。
+> 这套白名单和下方 §5.8 的 Admin 全量事件流**共用同一条 Redis Stream 上的同一份原始事件**，用户侧生成器只是做了一次"技术事件 → 友好文案"的转译再转发，不是两套独立的埋点。产品层不再需要独立生成进度页，事件落点是对话内卡片和报告决策回放。
 
 ### 5.8 Debug SSE 事件规范（Admin 专属）
 
@@ -522,7 +522,7 @@ POST /api/v1/reports/{report_id}/refine
 1. 判断 `patch` 涉及**轻量约束**还是**重大约束**：
    - 轻量约束（预算、城市偏好、排除院校/专业等不影响证据检索范围的字段）→ 创建异步 refine run，只重跑 `Recommendation Agent → Risk Agent → Report Agent`，复用当前报告 checkpoint 中的 `evidence_list`/`rule_results`，不重新走 Data Resolver/Retrieval/Policy Rule，预计 5-10 秒完成。
    - 重大约束（省份、选科、批次变更）→ 返回 `422 requires_full_regenerate`，引导前端走完整的 `POST /api/v1/reports/generate`。
-2. 轻量约束请求校验通过后立即返回 `202 Accepted`，前端用返回的 `run_id` 订阅 SSE，在聊天面板内展示局部重新生成状态。
+2. 轻量约束请求校验通过后立即返回 `202 Accepted`，前端用返回的 `run_id` 订阅 SSE，在报告工作台左侧对话栏展示局部重新生成状态。
 3. Worker 完成轻量重跑后创建新的 `reports` 记录：`parent_report_id` 指向原报告，`version` 在同一血缘链内递增，并通过 `completed` SSE 返回新 `report_id`。
 4. 响应：
 
@@ -583,7 +583,7 @@ event: done
 data: {"conversation_id": "conv_abc", "message_id": "msg_007", "total_tokens": 1240}
 ```
 
-`ui_action` 在 ConversationAgent 判定为 UI 操作类工具调用时立即发送，前端收到后直接执行本地状态变更，不等待 `done`。`refine_confirm_required` 在识别到数据变更意图时发送，前端渲染确认卡片，用户确认后由前端另行调用 §5.9 的 `/refine` 接口——本次 chat 请求正常以 `done` 结束，不自动触发重新生成。详细设计见 §10.9。
+`ui_action` 在 ConversationAgent 判定为 UI 操作类工具调用时立即发送，前端收到后直接执行报告画布本地状态变更，不等待 `done`。`refine_confirm_required` 在识别到数据变更意图时发送，前端在左侧对话栏渲染确认卡片，用户确认后由前端另行调用 §5.9 的 `/refine` 接口——本次 chat 请求正常以 `done` 结束，不自动触发重新生成。详细设计见 §10.9。
 
 `GET /api/v1/reports/{id}/chat/history`、`DELETE /api/v1/reports/{id}/chat` 分别读取/清空对话历史（Redis 热层 + PostgreSQL 冷层，见 §6.1 `report_conversations`）。
 
@@ -1201,7 +1201,7 @@ Prompt 注入防护（RAG 文档作为数据，不允许覆盖系统规则）；
 
 同一套 Redis Stream 事件基础设施，对外呈现**两个层次**——这是一个设计，不是两个系统：
 
-- **用户侧协作时间线**：§5.7 白名单事件（`agents_parallel_started/merged`、`self_check_round`、`degraded_notice` 等），友好文案、脱敏、面向决策者。
+- **用户侧生成过程卡片/决策回放**：§5.7 白名单事件（`agents_parallel_started/merged`、`self_check_round`、`degraded_notice` 等），友好文案、脱敏、面向决策者。
 - **Admin Debug 事件流**：§5.8 全量事件 + LangGraph 拓扑图，面向调试和面试展示，技术细节完整、同样脱敏 PII。
 
 ### 13.1 LangSmith Trace
@@ -1283,7 +1283,7 @@ Prompt 注入防护（RAG 文档作为数据，不允许覆盖系统规则）；
 | 指标 | 目标 |
 | --- | ---: |
 | 风险画像 P95 延迟 | < 2s |
-| 志愿表体检 P95 延迟 | < 5s |
+| 志愿草稿体检 P95 延迟 | < 5s |
 | 报告生成 P95 延迟 | < 45s |
 | 局部重新生成 P95 延迟 | < 10s |
 | RAG citation 覆盖率 | 95%+ |
