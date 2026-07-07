@@ -139,9 +139,18 @@
     }
 
     .desktop-mode .phone-frame {
-      width: min(100%, 920px);
-      min-height: 760px;
+      width: min(100%, 1180px);
+      min-height: 780px;
       border-radius: 14px;
+    }
+
+    .desktop-mode .workspace {
+      grid-template-columns: 1fr;
+      max-width: 1240px;
+    }
+
+    .desktop-mode .prototype-notes {
+      display: none;
     }
 
     .app-header {
@@ -195,6 +204,12 @@
 
     .desktop-mode .screen {
       padding: 20px 26px;
+    }
+
+    .desktop-mode .screen[data-screen-panel="report"] {
+      padding: 0;
+      background: #fff;
+      min-height: 724px;
     }
 
     .page-lead {
@@ -462,8 +477,11 @@
     }
 
     .desktop-mode .report-layout {
-      grid-template-columns: minmax(0, 1fr) 310px;
-      align-items: start;
+      grid-template-columns: minmax(360px, 0.92fr) minmax(520px, 1.08fr);
+      gap: 0;
+      min-height: 724px;
+      max-width: none;
+      margin: 0;
     }
 
     .report-main {
@@ -471,15 +489,143 @@
       gap: 12px;
     }
 
-    .report-side {
+    .desktop-mode .report-main {
+      display: block;
+      height: 724px;
+      overflow: auto;
+      padding: 26px 52px 64px;
+      background: #fff;
+    }
+
+    .desktop-chat-column {
       display: none;
     }
 
-    .desktop-mode .report-side {
+    .desktop-mode .desktop-chat-column {
       display: grid;
+      grid-template-rows: auto 1fr auto;
+      min-height: 724px;
+      border-right: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .desktop-chat-head {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
       gap: 12px;
-      position: sticky;
-      top: 76px;
+      align-items: center;
+    }
+
+    .desktop-chat-title {
+      font-weight: 750;
+    }
+
+    .desktop-chat-body {
+      overflow: auto;
+      padding: 26px 24px 18px;
+      display: grid;
+      gap: 22px;
+      align-content: start;
+    }
+
+    .desktop-chat-input {
+      margin: 0 24px 20px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 10px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+    }
+
+    .desktop-chat-input input {
+      border: 0;
+      min-height: 36px;
+    }
+
+    .desktop-chat-input input:focus {
+      outline: 0;
+    }
+
+    .chat-time {
+      text-align: center;
+      color: #94a3b8;
+      font-size: 12px;
+      margin: 4px 0 -8px;
+    }
+
+    .report-doc-title {
+      display: none;
+    }
+
+    .desktop-mode .report-doc-title {
+      display: block;
+      text-align: center;
+      margin: 18px 0 28px;
+    }
+
+    .desktop-mode .report-doc-title h1 {
+      font-size: 28px;
+      line-height: 1.2;
+      margin: 0;
+    }
+
+    .desktop-mode .report-doc-title p {
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .desktop-mode .report-main .card {
+      border: 0;
+      border-radius: 0;
+      padding: 22px 0;
+      box-shadow: none;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .desktop-mode .report-main .card:first-child {
+      display: none;
+    }
+
+    .desktop-mode .report-main .card-title {
+      font-size: 22px;
+      margin-bottom: 12px;
+    }
+
+    .desktop-mode .report-main .card-subtitle {
+      font-size: 14px;
+      line-height: 1.75;
+    }
+
+    .desktop-mode .status-grid {
+      background: #f8fbff;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .desktop-mode .status-tile {
+      border: 0;
+      border-right: 1px solid var(--line);
+      border-radius: 0;
+      background: transparent;
+      text-align: center;
+    }
+
+    .desktop-mode .status-tile:last-child {
+      border-right: 0;
+    }
+
+    .desktop-mode .candidate {
+      border: 1px solid var(--line) !important;
+      border-radius: 8px !important;
+      padding: 14px !important;
+      margin-bottom: 12px;
     }
 
     .status-grid {
@@ -693,6 +839,11 @@
       right: 16px;
       bottom: 16px;
       z-index: 8;
+      box-shadow: 0 10px 24px rgba(30, 64, 175, 0.22);
+    }
+
+    .desktop-mode .floating-chat {
+      display: none;
     }
 
     .overlay-note {
@@ -967,7 +1118,58 @@
 
           <section class="screen" data-screen-panel="report">
             <div class="report-layout">
+              <aside class="desktop-chat-column">
+                <div class="desktop-chat-head">
+                  <div>
+                    <div class="desktop-chat-title">问津 Agent</div>
+                    <div class="card-subtitle">左侧持续对话，右侧实时渲染报告</div>
+                  </div>
+                  <span class="tag target">可追问</span>
+                </div>
+                <div class="desktop-chat-body" id="desktopChatBody">
+                  <div class="chat-time">13:28</div>
+                  <div class="bubble user">根据我的档案信息，帮我生成一份志愿报告</div>
+                  <div class="bubble ai">
+                    <div class="bubble-label">问津助手</div>
+                    我将为你生成一份完整的志愿方案。在此过程中你可以继续提问，不会影响志愿方案的生成结果。
+                    <div class="row-actions" style="margin-top: 10px;">
+                      <button class="ghost" data-goto="generating">查看生成过程</button>
+                    </div>
+                  </div>
+                  <div class="chat-time">13:30</div>
+                  <div class="bubble ai">
+                    <div class="bubble-label">问津助手</div>
+                    好的，我已经为你生成了一份完整的志愿报告。右侧报告会随着你的调整实时更新。
+                    <div class="card" style="margin-top: 10px;">
+                      <div class="candidate-head">
+                        <div>
+                          <div class="candidate-title">志愿报告 2026-0707</div>
+                          <div class="card-subtitle">河南 · 物化生 · 612 分</div>
+                        </div>
+                        <span class="tag target">已生成</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="bubble ai">
+                    <div class="bubble-label">你可以继续这样问</div>
+                    <div class="stack" style="margin-top: 10px;">
+                      <button class="ghost" data-chat="why">推荐的学校是怎么筛选出来的？</button>
+                      <button class="ghost" data-chat="compare">帮我对比均衡型和进取型</button>
+                      <button class="ghost" data-chat="budget">预算超过 8 万的别推荐了</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="desktop-chat-input">
+                  <input id="desktopChatText" placeholder="问问报告、调整约束或打开对比" maxlength="200" />
+                  <button class="primary" data-action="sendDesktopChat">发送</button>
+                </div>
+              </aside>
+
               <div class="report-main">
+                <div class="report-doc-title">
+                  <h1>志愿报告 2026-0707</h1>
+                  <p>生成时间：2026-07-07 14:30 · 基于河南 2026 本科批数据版本</p>
+                </div>
                 <div class="card">
                   <div class="candidate-head">
                     <div>
@@ -1034,15 +1236,6 @@
                 </div>
               </div>
 
-              <aside class="report-side">
-                <div class="card">
-                  <div class="card-title">侧边摘要</div>
-                  <div class="summary-row"><span>当前 Tab</span><strong id="sidePlan">均衡型</strong></div>
-                  <div class="summary-row"><span>证据来源</span><strong>8 条</strong></div>
-                  <div class="summary-row"><span>对话状态</span><strong>可继续调整</strong></div>
-                </div>
-                <button class="primary" data-action="openChat">问一问</button>
-              </aside>
             </div>
 
             <button class="primary floating-chat" data-action="openChat">问一问</button>
@@ -1135,7 +1328,7 @@
             <li>从顶部导航直接跳页面，或从入口页按流程点击。</li>
             <li>在报告页点击“问一问”，试试预设问题。</li>
             <li>点击“预算超过 8 万的别推荐了”，查看确认卡片和 v2 版本变化。</li>
-            <li>点击桌面端按钮，检查 Chat Panel 右侧 Drawer 形态。</li>
+            <li>点击桌面端按钮，检查左侧对话 + 右侧实时报告的双栏形态。</li>
           </ul>
         </div>
       </aside>
@@ -1153,8 +1346,8 @@
     const compareDrawer = document.getElementById("compareDrawer");
     const chatPanel = document.getElementById("chatPanel");
     const chatBody = document.getElementById("chatBody");
+    const desktopChatBody = document.getElementById("desktopChatBody");
     const candidateList = document.getElementById("candidateList");
-    const sidePlan = document.getElementById("sidePlan");
     const versionNumber = document.getElementById("versionNumber");
 
     const titleMap = {
@@ -1236,7 +1429,6 @@
         `;
         candidateList.appendChild(card);
       });
-      if (sidePlan) sidePlan.textContent = planLabels[currentPlan];
       document.querySelectorAll("[data-plan]").forEach(btn => {
         btn.classList.toggle("active", btn.dataset.plan === currentPlan);
       });
@@ -1271,8 +1463,9 @@
       const bubble = document.createElement("div");
       bubble.className = `bubble ${role} ${variant}`;
       bubble.innerHTML = html;
-      chatBody.appendChild(bubble);
-      chatBody.scrollTop = chatBody.scrollHeight;
+      const targetBody = root.classList.contains("desktop-mode") && currentScreen === "report" ? desktopChatBody : chatBody;
+      targetBody.appendChild(bubble);
+      targetBody.scrollTop = targetBody.scrollHeight;
     }
 
     function handleChatIntent(intent) {
@@ -1348,6 +1541,14 @@
         if (!text) return;
         addChat("user", text);
         addChat("ai", "<div class='bubble-label'>问津助手</div>收到。这个原型里建议使用预设问题测试 UI 操作、对比和重新生成状态。");
+        input.value = "";
+      }
+      if (action === "sendDesktopChat") {
+        const input = document.getElementById("desktopChatText");
+        const text = input.value.trim();
+        if (!text) return;
+        addChat("user", text);
+        addChat("ai", "<div class='bubble-label'>问津助手</div>收到。你可以试试左侧预设问题，查看右侧报告如何联动。");
         input.value = "";
       }
       if (action === "confirmRefine") confirmRefine();
