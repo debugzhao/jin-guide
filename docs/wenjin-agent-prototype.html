@@ -418,6 +418,16 @@
       border-color: #bbf7d0;
     }
 
+    .bubble.capture {
+      background: #fff;
+      border-color: #bfdbfe;
+    }
+
+    .bubble.state {
+      background: var(--blue-soft);
+      border-color: #bfdbfe;
+    }
+
     .bubble-label {
       font-size: 12px;
       color: var(--muted);
@@ -451,6 +461,37 @@
 
     .summary-row:last-child {
       border-bottom: 0;
+    }
+
+    .mini-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .mini-field {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 9px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .mini-field strong {
+      display: block;
+      color: var(--text);
+      font-size: 15px;
+      margin-top: 2px;
+    }
+
+    .card-caption {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
     }
 
     .timeline {
@@ -892,10 +933,14 @@
                   <div class="bubble-label">问津助手</div>
                   我会用对话方式帮你完成快速测算和建档。你不用跳到独立表单页，所有字段都会在聊天里以结构化控件出现。
                 </div>
-                <div class="bubble ai">
+                <div class="bubble ai capture">
                   <div class="bubble-label">问津助手</div>
                   先做一个快速测算。请确认你的省份、批次、分数和位次。
                   <div class="card" style="margin-top: 10px;">
+                    <div class="card-caption">
+                      <strong>快速测算信息</strong>
+                      <span class="tag target">待确认</span>
+                    </div>
                     <div class="field-grid">
                       <label>省份
                         <select>
@@ -918,11 +963,20 @@
                       </label>
                     </div>
                     <div style="margin-top: 12px;">
-                      <button class="primary" data-action="showRisk">在对话中生成风险画像</button>
+                      <button class="primary" data-action="showRisk">确认并生成风险画像</button>
                     </div>
                   </div>
                 </div>
-                <div class="bubble user">河南，本科批，612 分，位次 32680。</div>
+                <div class="bubble ai state">
+                  <div class="bubble-label">已采集信息</div>
+                  这些不是用户手动发送的聊天内容，而是 Agent 从上方 Generative UI 中沉淀出的结构化档案。
+                  <div class="mini-grid">
+                    <div class="mini-field">省份<strong>河南</strong></div>
+                    <div class="mini-field">批次<strong>本科批</strong></div>
+                    <div class="mini-field">高考分数<strong>612</strong></div>
+                    <div class="mini-field">全省位次<strong>32680</strong></div>
+                  </div>
+                </div>
                 <div class="bubble ai tool hidden" id="riskPreview">
                   <div class="bubble-label">即时风险画像</div>
                   <div class="risk-preview">

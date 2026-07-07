@@ -1,0 +1,192 @@
+# ============================================================================
+# Claude Code 安全审查规则配置
+# 放置在项目根目录下，hook 会自动读取
+# ============================================================================
+
+# 审查严格程度: strict | moderate | relaxed
+severity: strict
+
+# 输出语言: 中文 | English
+language: 中文
+
+# Diff 行数上限（超过则跳过审查，避免超时）
+max_diff_lines: 500
+
+# Claude 调用超时（秒）
+timeout: 90
+
+# ============================================================================
+# 审查规则
+# enabled: 是否启用
+# block: true=阻断提交 / false=仅警告
+# ============================================================================
+rules:
+  # ==========================================================================
+  # 一、安全漏洞（阻断提交）
+  # ==========================================================================
+
+  # 1. SQL Injection
+  - name: SQL注入
+    enabled: true
+    block: true
+    description: 检查字符串拼接SQL、未使用参数化查询、ORM raw query未转义、动态表名/列名未白名单校验
+
+  # 2. XSS
+  - name: XSS (跨站脚本)
+    enabled: true
+    block: true
+    description: 检查未转义的用户输入直接输出到HTML、innerHTML赋值、dangerouslySetInnerHTML、模板引擎未转义输出
+
+  # 3. SSRF
+  - name: SSRF (服务端请求伪造)
+    enabled: true
+    block: true
+    description: 检查用户可控的URL直接用于服务端HTTP请求、未校验内网IP/域名白名单、DNS重绑定风险
+
+  # 4. Command Injection
+  - name: 命令注入
+    enabled: true
+    block: true
+    description: 检查os.system/subprocess拼接用户输入、eval/exec、child_process.exec拼接、Runtime.exec参数拼接
+
+  # 5. Path Traversal
+  - name: 路径遍历
+    enabled: true
+    block: true
+    description: 检查文件操作中未校验/过滤用户输入的路径、../穿越、符号链接跟随、zip slip漏洞
+
+  # 6. XXE
+  - name: XXE (XML外部实体注入)
+    enabled: true
+    block: true
+    description: 检查XML解析器未禁用外部实体/DTD处理、DocumentBuilderFactory/SAXParser/XMLReader未设置安全特性、libxml未禁用LIBXML_NOENT
+
+  # 7. Authentication
+  - name: 认证缺陷
+    enabled: true
+    block: true
+    description: 检查缺少认证中间件、硬编码绕过条件、JWT未验证签名/过期、session固定、凭据明文传输、弱密码策略、缺少多因素验证关键路径
+
+  # 8. Authorization
+  - name: 授权缺陷
+    enabled: true
+    block: true
+    description: 检查缺少权限校验、越权访问(水平/垂直越权)、IDOR直接对象引用、角色检查遗漏、前端隐藏代替后端鉴权
+
+  # 9. Sensitive Data Leakage
+  - name: 敏感数据泄露
+    enabled: true
+    block: true
+    description: 检查密码/身份证/信用卡/API Key/Token/私钥硬编码或未加密存储、敏感信息写入日志、响应体包含多余敏感字段
+
+  # ==========================================================================
+  # 二、并发与可靠性（阻断提交）
+  # ==========================================================================
+
+  # 10. Race Condition
+  - name: 竞态条件
+    enabled: true
+    block: true
+    description: 检查TOCTOU漏洞、check-then-act非原子操作、共享可变状态无同步保护、并发集合误用、double-checked locking错误实现
+
+  # 11. Deadlock
+  - name: 死锁
+    enabled: true
+    block: true
+    description: 检查多锁不一致获取顺序、嵌套synchronized、持锁调用外部方法/IO、数据库事务交叉锁定、await在锁内
+
+  # 12. Null Pointer
+  - name: 空指针/空引用
+    enabled: true
+    block: true
+    description: 检查未做null/undefined/None检查直接访问属性、Optional未判空、可能返回null的方法链式调用、解构可能为空的对象
+
+  # 13. Resource Leak
+  - name: 资源泄漏
+    enabled: true
+    block: true
+    description: 检查文件句柄/数据库连接/网络连接/Stream未关闭、缺少try-with-resources/using/finally释放、异常路径资源未清理
+
+  # 14. Memory Leak
+  - name: 内存泄漏
+    enabled: true
+    block: true
+    description: 检查事件监听器未移除、闭包持有大对象引用、缓存无上限无淘汰策略、static集合无界增长、定时器未清除
+
+  # 15. Transaction Problems
+  - name: 事务问题
+    enabled: true
+    block: true
+    description: 检查事务未提交/回滚、长事务持锁过久、事务中调用外部服务/HTTP、嵌套事务语义错误、异常后事务状态不一致、@Transactional在private方法
+
+  # ==========================================================================
+  # 三、API与性能（警告，不阻断）
+  # ==========================================================================
+
+  # 16. API Compatibility
+  - name: API兼容性
+    enabled: true
+    block: false
+    description: 检查公共API签名变更(参数删除/类型修改)、返回值结构变更、移除已发布接口、破坏性变更未升版本号、DTO字段删除/重命名
+
+  # 17. Performance Regression
+  - name: 性能退化
+    enabled: true
+    block: false
+    description: 检查循环内数据库查询(N+1)、未分页的全量查询、同步阻塞在异步路径、O(n²)及以上新增逻辑、大对象频繁拷贝、缺少索引的新查询条件
+
+  # ==========================================================================
+  # 四、其他安全警告（不阻断）
+  # ==========================================================================
+
+  - name: 不安全的反序列化
+    enabled: true
+    block: false
+    description: 检查pickle.loads、yaml.load(无Loader)、Java ObjectInputStream、JSON.parse未验证来源
+
+  - name: 不安全的随机数
+    enabled: true
+    block: false
+    description: 检查Math.random/random用于安全场景（应使用crypto安全随机）
+
+  - name: 异常信息泄露
+    enabled: true
+    block: false
+    description: 检查向客户端返回完整堆栈信息、数据库错误详情
+
+  - name: CORS配置
+    enabled: true
+    block: false
+    description: 检查Access-Control-Allow-Origin设为*、过于宽泛的CORS策略
+
+  - name: HTTP明文传输
+    enabled: true
+    block: false
+    description: 检查敏感数据通过HTTP而非HTTPS传输
+
+# ============================================================================
+# 忽略文件模式（正则表达式）
+# 匹配的文件不会被审查
+# ============================================================================
+ignore:
+  - ".*\\.test\\."
+  - ".*\\.spec\\."
+  - ".*__tests__.*"
+  - ".*\\.md$"
+  - ".*\\.txt$"
+  - "package-lock\\.json"
+  - "yarn\\.lock"
+  - "pnpm-lock\\.yaml"
+  - ".*\\.min\\.js$"
+  - "dist/.*"
+  - "build/.*"
+  - "node_modules/.*"
+
+# ============================================================================
+# 审查时忽略的问题类别
+# 以下类型的问题不在审查范围内，Claude 不应报告这些问题
+# ============================================================================
+ignore_categories:
+  - Naming        # 变量/函数命名风格，不审查
+  - Style         # 代码风格（缩进、空格、括号位置等），不审查
+  - Formatting    # 代码格式化问题，不审查
