@@ -21,7 +21,7 @@ CLAUDE_MODEL="claude-haiku-4-5-20251001"
 # Git Bash 路径（仅 Windows 需要，Git hook 运行依赖 Git Bash）
 # 留空 = 自动从 git 安装目录推断；如果自动检测失败请手动指定
 # macOS/Linux 无需配置此项
-CLAUDE_GIT_BASH_PATH="C:\\dev_tools\\Git\\Git\\bin\\bash.exe"
+CLAUDE_GIT_BASH_PATH="/usr/bin/git"
 
 # ---------- 审查配置 ----------
 
