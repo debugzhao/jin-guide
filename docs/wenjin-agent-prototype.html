@@ -1,0 +1,1364 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>问津 Agent 低保真交互原型</title>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --panel: #ffffff;
+      --text: #0f172a;
+      --muted: #64748b;
+      --line: #e2e8f0;
+      --blue: #1e40af;
+      --blue-soft: #eff6ff;
+      --green: #16a34a;
+      --green-soft: #f0fdf4;
+      --orange: #d97706;
+      --orange-soft: #fffbeb;
+      --red: #dc2626;
+      --red-soft: #fef2f2;
+      --shadow: 0 10px 30px rgba(15, 23, 42, 0.10);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", "Helvetica Neue", Arial, sans-serif;
+      line-height: 1.45;
+    }
+
+    button, input, select, textarea {
+      font: inherit;
+    }
+
+    button {
+      border: 0;
+      cursor: pointer;
+    }
+
+    .app-shell {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .prototype-topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      background: rgba(248, 250, 252, 0.94);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .topbar-inner {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 14px 16px;
+      display: flex;
+      gap: 14px;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .brand {
+      min-width: 180px;
+    }
+
+    .brand-title {
+      font-weight: 700;
+      font-size: 17px;
+    }
+
+    .brand-subtitle {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 2px;
+    }
+
+    .nav {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .nav button,
+    .viewport-toggle button {
+      background: var(--panel);
+      color: var(--muted);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      min-height: 36px;
+      padding: 0 12px;
+    }
+
+    .nav button.active,
+    .viewport-toggle button.active {
+      background: var(--blue);
+      border-color: var(--blue);
+      color: #fff;
+    }
+
+    .viewport-toggle {
+      display: flex;
+      gap: 8px;
+      min-width: 160px;
+      justify-content: flex-end;
+    }
+
+    .workspace {
+      max-width: 1180px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 22px 16px 40px;
+      display: grid;
+      grid-template-columns: 1fr 300px;
+      gap: 18px;
+      align-items: start;
+    }
+
+    .canvas-wrap {
+      display: flex;
+      justify-content: center;
+    }
+
+    .phone-frame {
+      width: min(100%, 430px);
+      min-height: 780px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      position: relative;
+    }
+
+    .desktop-mode .phone-frame {
+      width: min(100%, 920px);
+      min-height: 760px;
+      border-radius: 14px;
+    }
+
+    .app-header {
+      height: 56px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 16px;
+      background: #fff;
+      position: sticky;
+      top: 0;
+      z-index: 5;
+    }
+
+    .back-btn {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--line);
+    }
+
+    .app-title {
+      flex: 1;
+      font-size: 16px;
+      font-weight: 700;
+    }
+
+    .login-chip,
+    .version-chip {
+      border: 1px solid var(--line);
+      background: var(--bg);
+      border-radius: 999px;
+      padding: 6px 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .screen {
+      display: none;
+      padding: 16px;
+      min-height: 724px;
+      background: var(--bg);
+    }
+
+    .screen.active {
+      display: block;
+    }
+
+    .desktop-mode .screen {
+      padding: 20px 26px;
+    }
+
+    .page-lead {
+      color: var(--muted);
+      font-size: 13px;
+      margin: 4px 0 16px;
+    }
+
+    .stack {
+      display: grid;
+      gap: 12px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+    }
+
+    .card-title {
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+
+    .card-subtitle {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .entry-card {
+      display: grid;
+      grid-template-columns: 42px 1fr auto;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .icon-box {
+      width: 42px;
+      height: 42px;
+      border-radius: 8px;
+      background: var(--blue-soft);
+      color: var(--blue);
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+    }
+
+    .primary,
+    .secondary,
+    .ghost,
+    .danger {
+      min-height: 38px;
+      padding: 0 14px;
+      border-radius: 8px;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+
+    .primary {
+      background: var(--blue);
+      color: #fff;
+    }
+
+    .secondary {
+      background: var(--blue-soft);
+      color: var(--blue);
+      border: 1px solid #bfdbfe;
+    }
+
+    .ghost {
+      background: #fff;
+      color: var(--text);
+      border: 1px solid var(--line);
+    }
+
+    .danger {
+      background: var(--red-soft);
+      color: var(--red);
+      border: 1px solid #fecaca;
+    }
+
+    .field-grid {
+      display: grid;
+      gap: 12px;
+    }
+
+    .desktop-mode .field-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      min-height: 40px;
+      padding: 8px 10px;
+      color: var(--text);
+      background: #fff;
+    }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .chip {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--muted);
+      border-radius: 999px;
+      padding: 7px 11px;
+      font-size: 13px;
+    }
+
+    .chip.active {
+      color: var(--blue);
+      border-color: #93c5fd;
+      background: var(--blue-soft);
+      font-weight: 650;
+    }
+
+    .risk-preview {
+      display: grid;
+      grid-template-columns: 88px 1fr;
+      gap: 14px;
+      align-items: center;
+    }
+
+    .risk-meter {
+      width: 78px;
+      height: 78px;
+      border-radius: 50%;
+      border: 9px solid #fed7aa;
+      display: grid;
+      place-items: center;
+      color: var(--orange);
+      font-weight: 800;
+    }
+
+    .chat-flow {
+      display: grid;
+      gap: 12px;
+    }
+
+    .bubble {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 12px;
+      max-width: 94%;
+    }
+
+    .bubble.user {
+      justify-self: end;
+      background: var(--blue-soft);
+      border-color: #bfdbfe;
+      border-bottom-right-radius: 6px;
+    }
+
+    .bubble.ai {
+      justify-self: start;
+      border-bottom-left-radius: 6px;
+    }
+
+    .bubble.tool {
+      background: var(--green-soft);
+      border-color: #bbf7d0;
+    }
+
+    .bubble-label {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+
+    .progress-bar {
+      height: 8px;
+      background: #e5e7eb;
+      border-radius: 999px;
+      overflow: hidden;
+      margin-top: 8px;
+    }
+
+    .progress-bar span {
+      display: block;
+      height: 100%;
+      background: var(--blue);
+      width: var(--value, 40%);
+    }
+
+    .summary-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 13px;
+      padding: 8px 0;
+      border-bottom: 1px dashed var(--line);
+    }
+
+    .summary-row:last-child {
+      border-bottom: 0;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 10px;
+    }
+
+    .timeline-item {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      display: grid;
+      gap: 6px;
+    }
+
+    .timeline-item.running {
+      border-color: #93c5fd;
+      background: var(--blue-soft);
+    }
+
+    .timeline-item.done {
+      border-color: #bbf7d0;
+      background: var(--green-soft);
+    }
+
+    .timeline-item.warn {
+      border-color: #fed7aa;
+      background: var(--orange-soft);
+    }
+
+    .parallel-box,
+    .self-check-box {
+      border: 1px dashed #93c5fd;
+      background: #fff;
+      border-radius: 8px;
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .agent-line {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .report-layout {
+      display: grid;
+      gap: 12px;
+    }
+
+    .desktop-mode .report-layout {
+      grid-template-columns: minmax(0, 1fr) 310px;
+      align-items: start;
+    }
+
+    .report-main {
+      display: grid;
+      gap: 12px;
+    }
+
+    .report-side {
+      display: none;
+    }
+
+    .desktop-mode .report-side {
+      display: grid;
+      gap: 12px;
+      position: sticky;
+      top: 76px;
+    }
+
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .status-tile {
+      border-radius: 8px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .status-number {
+      font-size: 20px;
+      font-weight: 800;
+    }
+
+    .tabs {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .tabs button {
+      min-height: 38px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--muted);
+    }
+
+    .tabs button.active {
+      color: var(--blue);
+      background: var(--blue-soft);
+      border-color: #93c5fd;
+      font-weight: 700;
+    }
+
+    .candidate {
+      display: grid;
+      gap: 10px;
+    }
+
+    .candidate-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: start;
+    }
+
+    .candidate-title {
+      font-weight: 750;
+      font-size: 15px;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      border-radius: 4px;
+      padding: 0 8px;
+      font-size: 12px;
+      font-weight: 650;
+      background: var(--bg);
+      color: var(--muted);
+      border: 1px solid var(--line);
+    }
+
+    .tag.safe {
+      color: var(--green);
+      background: var(--green-soft);
+      border-color: #bbf7d0;
+    }
+
+    .tag.target {
+      color: var(--blue);
+      background: var(--blue-soft);
+      border-color: #bfdbfe;
+    }
+
+    .tag.rush,
+    .tag.warn {
+      color: var(--orange);
+      background: var(--orange-soft);
+      border-color: #fed7aa;
+    }
+
+    .tag.risk {
+      color: var(--red);
+      background: var(--red-soft);
+      border-color: #fecaca;
+    }
+
+    .candidate-meta {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .meta-box {
+      background: var(--bg);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 9px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .meta-box strong {
+      display: block;
+      color: var(--text);
+      font-size: 15px;
+      margin-top: 2px;
+    }
+
+    .row-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .drawer,
+    .chat-panel {
+      position: absolute;
+      z-index: 10;
+      background: #fff;
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+      display: none;
+    }
+
+    .drawer.open,
+    .chat-panel.open {
+      display: block;
+    }
+
+    .drawer {
+      left: 0;
+      right: 0;
+      bottom: 0;
+      border-radius: 16px 16px 0 0;
+      max-height: 72%;
+      overflow: auto;
+      padding: 16px;
+    }
+
+    .desktop-mode .drawer {
+      left: auto;
+      width: 420px;
+      top: 58px;
+      right: 0;
+      bottom: 0;
+      max-height: none;
+      border-radius: 0;
+    }
+
+    .chat-panel {
+      left: 0;
+      right: 0;
+      bottom: 0;
+      border-radius: 16px 16px 0 0;
+      height: 70%;
+      padding: 0;
+      overflow: hidden;
+    }
+
+    .desktop-mode .chat-panel {
+      left: auto;
+      top: 56px;
+      right: 0;
+      bottom: 0;
+      height: auto;
+      width: 380px;
+      border-radius: 0;
+    }
+
+    .chat-header {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .chat-body {
+      height: calc(100% - 118px);
+      overflow: auto;
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+      align-content: start;
+      background: var(--bg);
+    }
+
+    .chat-input {
+      height: 62px;
+      border-top: 1px solid var(--line);
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      padding: 10px;
+      background: #fff;
+    }
+
+    .floating-chat {
+      position: absolute;
+      right: 16px;
+      bottom: 16px;
+      z-index: 8;
+    }
+
+    .overlay-note {
+      position: absolute;
+      inset: 56px 0 0;
+      background: rgba(15, 23, 42, 0.25);
+      z-index: 9;
+      display: none;
+    }
+
+    .overlay-note.open {
+      display: block;
+    }
+
+    .prototype-notes {
+      display: grid;
+      gap: 12px;
+    }
+
+    .note-list {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .note-list li {
+      margin: 7px 0;
+    }
+
+    .state-pill {
+      display: inline-flex;
+      border-radius: 999px;
+      background: var(--blue-soft);
+      color: var(--blue);
+      padding: 5px 9px;
+      font-size: 12px;
+      font-weight: 700;
+      margin: 2px;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    @media (max-width: 920px) {
+      .topbar-inner {
+        display: grid;
+        justify-items: stretch;
+      }
+      .viewport-toggle {
+        justify-content: start;
+      }
+      .workspace {
+        grid-template-columns: 1fr;
+      }
+      .prototype-notes {
+        order: -1;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell" id="prototypeRoot">
+    <header class="prototype-topbar">
+      <div class="topbar-inner">
+        <div class="brand">
+          <div class="brand-title">问津 Agent 低保真原型</div>
+          <div class="brand-subtitle">Generative UI 状态流验证，不是视觉终稿</div>
+        </div>
+        <nav class="nav" aria-label="原型页面导航">
+          <button class="active" data-screen="home">入口</button>
+          <button data-screen="assess">快速测算</button>
+          <button data-screen="profile">建档问诊</button>
+          <button data-screen="generating">生成进度</button>
+          <button data-screen="report">报告详情</button>
+        </nav>
+        <div class="viewport-toggle" aria-label="视口切换">
+          <button class="active" data-viewport="mobile">移动端</button>
+          <button data-viewport="desktop">桌面端</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="canvas-wrap">
+        <div class="phone-frame" id="phoneFrame">
+          <div class="app-header">
+            <button class="back-btn" type="button" data-action="back">‹</button>
+            <div class="app-title" id="appTitle">问津志愿规划</div>
+            <button class="login-chip" type="button">登录</button>
+          </div>
+
+          <section class="screen active" data-screen-panel="home">
+            <div class="card">
+              <div class="card-title">你现在处在哪一步？</div>
+              <div class="card-subtitle">原型只保留当前版本两个入口：没思路测算、已有志愿表体检。</div>
+            </div>
+            <div class="stack" style="margin-top: 12px;">
+              <div class="card entry-card">
+                <div class="icon-box">测</div>
+                <div>
+                  <div class="card-title">我还没思路</div>
+                  <div class="card-subtitle">先看风险画像，再补全档案生成三套方案。</div>
+                </div>
+                <button class="primary" data-goto="assess">开始</button>
+              </div>
+              <div class="card entry-card">
+                <div class="icon-box">检</div>
+                <div>
+                  <div class="card-title">我已有志愿表</div>
+                  <div class="card-subtitle">手动录入志愿草稿，检查梯度、保底、选科和体检风险。</div>
+                </div>
+                <button class="secondary" data-goto="profile">体检</button>
+              </div>
+              <div class="card">
+                <div class="card-title">历史报告</div>
+                <div class="card-subtitle">登录后展示最近生成的报告。当前原型直接进入示例报告。</div>
+                <div style="margin-top: 12px;">
+                  <button class="ghost" data-goto="report">查看示例报告</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="screen" data-screen-panel="assess">
+            <div class="card">
+              <div class="card-title">快速测算</div>
+              <div class="page-lead">先收集最少信息，给出即时风险画像，再引导补全档案。</div>
+              <div class="field-grid">
+                <label>省份
+                  <select>
+                    <option>河南</option>
+                    <option>山东</option>
+                    <option>广东</option>
+                  </select>
+                </label>
+                <label>批次
+                  <select>
+                    <option>本科批</option>
+                    <option>专科批</option>
+                  </select>
+                </label>
+                <label>高考分数
+                  <input value="612" inputmode="numeric" />
+                </label>
+                <label>全省位次
+                  <input value="32680" inputmode="numeric" />
+                </label>
+              </div>
+              <div class="chips" style="margin-top: 12px;">
+                <button class="chip active">物理</button>
+                <button class="chip active">化学</button>
+                <button class="chip">生物</button>
+                <button class="chip">政治</button>
+                <button class="chip">地理</button>
+              </div>
+              <div style="margin-top: 14px;">
+                <button class="primary" data-action="showRisk">生成即时风险画像</button>
+              </div>
+            </div>
+
+            <div class="card risk-preview hidden" id="riskPreview">
+              <div class="risk-meter">中</div>
+              <div>
+                <div class="card-title">当前条件可生成初步方案</div>
+                <div class="card-subtitle">位次信息完整，建议补充城市、预算、专业偏好后生成三套方案。</div>
+                <div class="progress-bar" style="--value: 48%;"><span></span></div>
+                <div class="row-actions" style="margin-top: 12px;">
+                  <button class="primary" data-goto="profile">补全档案</button>
+                  <button class="ghost" data-goto="generating">跳过原型直接生成</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="screen" data-screen-panel="profile">
+            <div class="card">
+              <div class="card-title">建档问诊</div>
+              <div class="card-subtitle">对话是外壳，字段仍然用结构化控件；只有矛盾和歧义才触发 Agent 追问。</div>
+              <div class="progress-bar" style="--value: 62%;"><span></span></div>
+            </div>
+            <div class="chat-flow" style="margin-top: 12px;">
+              <div class="bubble ai">
+                <div class="bubble-label">问津助手</div>
+                你在哪个省份参加高考？
+                <div style="margin-top: 10px;">
+                  <select>
+                    <option>河南</option>
+                  </select>
+                </div>
+              </div>
+              <div class="bubble user">河南，本科批，612 分，位次 32680。</div>
+              <div class="bubble ai">
+                <div class="bubble-label">问津助手</div>
+                你选择的科目是？
+                <div class="chips" style="margin-top: 10px;">
+                  <button class="chip active">物理</button>
+                  <button class="chip active">化学</button>
+                  <button class="chip active">生物</button>
+                </div>
+              </div>
+              <div class="bubble ai tool">
+                <div class="bubble-label">规则前置校验</div>
+                该组合可以进入当前批次规则校验，但部分医学类专业可能需要额外体检条件。是否有体检限制？
+                <div class="row-actions" style="margin-top: 10px;">
+                  <button class="secondary">无体检限制</button>
+                  <button class="ghost">有，稍后补充</button>
+                </div>
+              </div>
+              <div class="bubble ai">
+                <div class="bubble-label">问津助手</div>
+                年学费上限大概是多少？
+                <div style="margin-top: 10px;">
+                  <input value="80000" inputmode="numeric" />
+                </div>
+              </div>
+              <div class="bubble ai">
+                <div class="bubble-label">档案摘要</div>
+                <div class="summary-row"><span>基础信息</span><strong>完整</strong></div>
+                <div class="summary-row"><span>预算偏好</span><strong>已填写</strong></div>
+                <div class="summary-row"><span>城市/专业偏好</span><strong>可继续补充</strong></div>
+                <div class="row-actions" style="margin-top: 12px;">
+                  <button class="primary" data-goto="generating">开始生成方案</button>
+                  <button class="ghost">继续补充</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="screen" data-screen-panel="generating">
+            <div class="card">
+              <div class="card-title">正在生成三套方案</div>
+              <div class="card-subtitle">河南 · 612 分 · 位次 32680 · 物理/化学/生物</div>
+              <div class="progress-bar" style="--value: 84%;"><span></span></div>
+            </div>
+            <div class="timeline" style="margin-top: 12px;">
+              <div class="timeline-item done">
+                <strong>档案检查 · 已完成</strong>
+                <span class="card-subtitle">必填字段完整，预算与批次有效。</span>
+              </div>
+              <div class="timeline-item done">
+                <strong>数据版本锁定 · 已完成</strong>
+                <span class="card-subtitle">河南 2026 本科批数据版本 henan_2026_v1。</span>
+              </div>
+              <div class="parallel-box">
+                <strong>正在并行处理</strong>
+                <div class="agent-line"><span>检索招生数据与政策依据</span><span>已完成</span></div>
+                <div class="agent-line"><span>校验选科/体检/批次规则</span><span>已完成</span></div>
+                <div class="tag target">并行合并完成：证据 8 条，规则风险 1 项</div>
+              </div>
+              <div class="timeline-item done">
+                <strong>候选方案生成 · 已完成</strong>
+                <span class="card-subtitle">共 48 个候选，按保守/均衡/进取分层。</span>
+              </div>
+              <div class="self-check-box">
+                <strong>AI 正在自我检查</strong>
+                <div class="agent-line"><span>第 1 轮：发现表述可能过度承诺</span><span>已修正</span></div>
+                <div class="agent-line"><span>第 2 轮：证据覆盖检查</span><span>通过</span></div>
+              </div>
+              <div class="timeline-item warn">
+                <strong>检索降级提示</strong>
+                <span class="card-subtitle">检索遇到延迟，已切换备用数据源，不影响当前报告生成。</span>
+              </div>
+              <div class="timeline-item running">
+                <strong>报告即将完成</strong>
+                <span class="card-subtitle">预计剩余 5 秒。</span>
+                <button class="primary" data-goto="report">查看生成结果</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="screen" data-screen-panel="report">
+            <div class="report-layout">
+              <div class="report-main">
+                <div class="card">
+                  <div class="candidate-head">
+                    <div>
+                      <div class="card-title">河南本科批志愿规划报告</div>
+                      <div class="card-subtitle">v<span id="versionNumber">1</span> · 生成时间 2026-07-07 14:30</div>
+                    </div>
+                    <button class="version-chip" data-action="switchVersion">v1</button>
+                  </div>
+                </div>
+
+                <div class="card">
+                  <div class="card-title">考生概况</div>
+                  <div class="status-grid">
+                    <div class="status-tile"><span class="card-subtitle">分数</span><div class="status-number">612</div></div>
+                    <div class="status-tile"><span class="card-subtitle">位次</span><div class="status-number">32680</div></div>
+                    <div class="status-tile"><span class="card-subtitle">选科</span><div class="status-number" style="font-size: 15px;">物化生</div></div>
+                  </div>
+                </div>
+
+                <div class="card">
+                  <div class="card-title">AI 条件点评</div>
+                  <div class="card-subtitle">你的预算上限较宽，但地域偏好集中在省内强校。若接受长三角城市，均衡型候选会更充分。</div>
+                </div>
+
+                <div class="card">
+                  <div class="candidate-head">
+                    <div>
+                      <div class="card-title">风险总览</div>
+                      <div class="card-subtitle">整体风险：中。重点关注保底数量和热门专业扎堆。</div>
+                    </div>
+                    <span class="tag warn">中风险</span>
+                  </div>
+                  <div class="row-actions" style="margin-top: 12px;">
+                    <button class="ghost" data-action="expandRisk">展开风险详情</button>
+                  </div>
+                </div>
+
+                <div class="card">
+                  <div class="candidate-head">
+                    <div>
+                      <div class="card-title">AI 是如何得出这份方案的</div>
+                      <div class="card-subtitle">默认折叠；展开后回放生成过程，不重新调用 Agent。</div>
+                    </div>
+                    <button class="ghost" data-action="toggleReplay">展开</button>
+                  </div>
+                  <div class="hidden" id="replayBlock" style="margin-top: 12px;">
+                    <div class="summary-row"><span>并行处理</span><strong>检索 + 规则校验</strong></div>
+                    <div class="summary-row"><span>自我检查</span><strong>2 轮，通过</strong></div>
+                    <div class="summary-row"><span>降级</span><strong>检索备用源</strong></div>
+                  </div>
+                </div>
+
+                <div class="card">
+                  <div class="candidate-head">
+                    <div class="card-title">三套方案</div>
+                    <button class="secondary" data-action="openCompare">对比</button>
+                  </div>
+                  <div class="tabs" style="margin: 12px 0;">
+                    <button data-plan="conservative">保守型</button>
+                    <button class="active" data-plan="balanced">均衡型</button>
+                    <button data-plan="aggressive">进取型</button>
+                  </div>
+                  <div class="stack" id="candidateList"></div>
+                </div>
+              </div>
+
+              <aside class="report-side">
+                <div class="card">
+                  <div class="card-title">侧边摘要</div>
+                  <div class="summary-row"><span>当前 Tab</span><strong id="sidePlan">均衡型</strong></div>
+                  <div class="summary-row"><span>证据来源</span><strong>8 条</strong></div>
+                  <div class="summary-row"><span>对话状态</span><strong>可继续调整</strong></div>
+                </div>
+                <button class="primary" data-action="openChat">问一问</button>
+              </aside>
+            </div>
+
+            <button class="primary floating-chat" data-action="openChat">问一问</button>
+            <div class="overlay-note" id="overlay"></div>
+
+            <div class="drawer" id="evidenceDrawer">
+              <div class="candidate-head">
+                <div>
+                  <div class="card-title">证据链抽屉</div>
+                  <div class="card-subtitle">河南省 2026 本科批招生计划 · 官方 · 数据版本 henan_2026_v1</div>
+                </div>
+                <button class="ghost" data-action="closeDrawers">关闭</button>
+              </div>
+              <div class="stack" style="margin-top: 12px;">
+                <div class="card">
+                  <div class="summary-row"><span>关键字段</span><strong>专业组、计划数、学费、选科</strong></div>
+                  <div class="summary-row"><span>历史位次</span><strong>2025: 38500 / 2024: 37200</strong></div>
+                  <div class="card-subtitle">引用摘要不超过合规长度，仅展示字段级证据。</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="drawer" id="compareDrawer">
+              <div class="candidate-head">
+                <div>
+                  <div class="card-title">方案对比</div>
+                  <div class="card-subtitle">同一组件支持手动、版本、对话触发三种入口。</div>
+                </div>
+                <button class="ghost" data-action="closeDrawers">关闭</button>
+              </div>
+              <div class="stack" style="margin-top: 12px;">
+                <div class="card">
+                  <div class="summary-row"><span>学校</span><strong>郑州大学 vs 河南大学</strong></div>
+                  <div class="summary-row"><span>位次差</span><strong>+5820 vs +3100</strong></div>
+                  <div class="summary-row"><span>学费</span><strong>6000/年 vs 5500/年</strong></div>
+                  <div class="summary-row"><span>风险等级</span><strong>低 vs 中</strong></div>
+                  <div class="tag target">AI 取舍建议：A 安全边际更高，B 城市与专业匹配更灵活。</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="chat-panel" id="chatPanel">
+              <div class="chat-header">
+                <strong>报告问答</strong>
+                <button class="ghost" data-action="closeChat">关闭</button>
+              </div>
+              <div class="chat-body" id="chatBody">
+                <div class="bubble ai">
+                  <div class="bubble-label">问津助手</div>
+                  可以问我任何关于这份报告的问题，也可以让我帮你调整方案。
+                  <div class="stack" style="margin-top: 10px;">
+                    <button class="ghost" data-chat="why">推荐的学校是怎么筛选出来的？</button>
+                    <button class="ghost" data-chat="compare">帮我对比均衡型和进取型</button>
+                    <button class="ghost" data-chat="budget">预算超过 8 万的别推荐了</button>
+                  </div>
+                </div>
+              </div>
+              <div class="chat-input">
+                <input id="chatText" placeholder="输入你的问题或调整意图" maxlength="200" />
+                <button class="primary" data-action="sendChat">发送</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <aside class="prototype-notes">
+        <div class="card">
+          <div class="card-title">原型覆盖范围</div>
+          <ul class="note-list">
+            <li>验证 Generative UI：Chat 控制层 + 结构化画布。</li>
+            <li>覆盖移动端和桌面端布局差异。</li>
+            <li>覆盖 SSE 生成过程、并行分组、自检、降级提示。</li>
+            <li>覆盖报告内证据链、方案对比、Chat Panel、局部重生成确认。</li>
+          </ul>
+        </div>
+        <div class="card">
+          <div class="card-title">关键状态</div>
+          <span class="state-pill">建档追问</span>
+          <span class="state-pill">生成中</span>
+          <span class="state-pill">决策回放</span>
+          <span class="state-pill">证据抽屉</span>
+          <span class="state-pill">方案对比</span>
+          <span class="state-pill">改约束确认</span>
+          <span class="state-pill">版本切换</span>
+        </div>
+        <div class="card">
+          <div class="card-title">使用方式</div>
+          <ul class="note-list">
+            <li>从顶部导航直接跳页面，或从入口页按流程点击。</li>
+            <li>在报告页点击“问一问”，试试预设问题。</li>
+            <li>点击“预算超过 8 万的别推荐了”，查看确认卡片和 v2 版本变化。</li>
+            <li>点击桌面端按钮，检查 Chat Panel 右侧 Drawer 形态。</li>
+          </ul>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <script>
+    const root = document.getElementById("prototypeRoot");
+    const appTitle = document.getElementById("appTitle");
+    const phoneFrame = document.getElementById("phoneFrame");
+    const screens = Array.from(document.querySelectorAll("[data-screen-panel]"));
+    const navButtons = Array.from(document.querySelectorAll(".nav button"));
+    const overlay = document.getElementById("overlay");
+    const evidenceDrawer = document.getElementById("evidenceDrawer");
+    const compareDrawer = document.getElementById("compareDrawer");
+    const chatPanel = document.getElementById("chatPanel");
+    const chatBody = document.getElementById("chatBody");
+    const candidateList = document.getElementById("candidateList");
+    const sidePlan = document.getElementById("sidePlan");
+    const versionNumber = document.getElementById("versionNumber");
+
+    const titleMap = {
+      home: "问津志愿规划",
+      assess: "快速测算",
+      profile: "建档问诊",
+      generating: "方案生成进度",
+      report: "完整报告"
+    };
+
+    const planLabels = {
+      conservative: "保守型",
+      balanced: "均衡型",
+      aggressive: "进取型"
+    };
+
+    const candidates = {
+      conservative: [
+        ["郑州大学", "计算机科学与技术", "保", "82/100", "2025: 38500 / 2024: 37200"],
+        ["河南师范大学", "软件工程", "稳", "76/100", "2025: 41200 / 2024: 40580"]
+      ],
+      balanced: [
+        ["郑州大学", "计算机科学与技术", "稳", "78/100", "2025: 38500 / 2024: 37200"],
+        ["河南大学", "自动化", "稳", "73/100", "2025: 35400 / 2024: 36120"],
+        ["南京信息工程大学", "电子信息类", "冲", "66/100", "2025: 29800 / 2024: 30540"]
+      ],
+      aggressive: [
+        ["南京邮电大学", "通信工程", "冲", "61/100", "2025: 27800 / 2024: 28400"],
+        ["合肥工业大学", "智能制造", "高冲", "54/100", "2025: 24500 / 2024: 25100"],
+        ["郑州大学", "计算机科学与技术", "保", "82/100", "2025: 38500 / 2024: 37200"]
+      ]
+    };
+
+    let currentScreen = "home";
+    let currentPlan = "balanced";
+    let reportVersion = 1;
+
+    function setScreen(screen) {
+      currentScreen = screen;
+      screens.forEach(panel => panel.classList.toggle("active", panel.dataset.screenPanel === screen));
+      navButtons.forEach(btn => btn.classList.toggle("active", btn.dataset.screen === screen));
+      appTitle.textContent = titleMap[screen] || "问津志愿规划";
+      closeDrawers();
+      closeChat();
+      if (screen === "report") renderCandidates();
+    }
+
+    function setViewport(viewport) {
+      root.classList.toggle("desktop-mode", viewport === "desktop");
+      document.querySelectorAll("[data-viewport]").forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.viewport === viewport);
+      });
+    }
+
+    function renderCandidates() {
+      if (!candidateList) return;
+      candidateList.innerHTML = "";
+      candidates[currentPlan].forEach((item, index) => {
+        const [school, major, tier, score, ranks] = item;
+        const tierClass = tier === "保" ? "safe" : tier === "稳" ? "target" : "rush";
+        const card = document.createElement("div");
+        card.className = "card candidate";
+        card.innerHTML = `
+          <div class="candidate-head">
+            <div>
+              <div class="candidate-title">${index + 1}. ${school}</div>
+              <div class="card-subtitle">${major} · 河南/外省 · 专业组 0600${index + 1}</div>
+            </div>
+            <span class="tag ${tierClass}">${tier}</span>
+          </div>
+          <div class="candidate-meta">
+            <div class="meta-box">匹配置信分<strong>${score}</strong></div>
+            <div class="meta-box">近两年位次<strong>${ranks}</strong></div>
+          </div>
+          <div class="row-actions">
+            <button class="ghost" data-action="openEvidence">查看数据来源</button>
+            <button class="ghost" data-action="openCompare">加入对比</button>
+          </div>
+        `;
+        candidateList.appendChild(card);
+      });
+      if (sidePlan) sidePlan.textContent = planLabels[currentPlan];
+      document.querySelectorAll("[data-plan]").forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.plan === currentPlan);
+      });
+    }
+
+    function openDrawer(drawer) {
+      closeChat();
+      overlay.classList.add("open");
+      drawer.classList.add("open");
+    }
+
+    function closeDrawers() {
+      overlay.classList.remove("open");
+      evidenceDrawer.classList.remove("open");
+      compareDrawer.classList.remove("open");
+    }
+
+    function openChat() {
+      closeDrawers();
+      overlay.classList.add("open");
+      chatPanel.classList.add("open");
+    }
+
+    function closeChat() {
+      chatPanel.classList.remove("open");
+      if (!evidenceDrawer.classList.contains("open") && !compareDrawer.classList.contains("open")) {
+        overlay.classList.remove("open");
+      }
+    }
+
+    function addChat(role, html, variant = "") {
+      const bubble = document.createElement("div");
+      bubble.className = `bubble ${role} ${variant}`;
+      bubble.innerHTML = html;
+      chatBody.appendChild(bubble);
+      chatBody.scrollTop = chatBody.scrollHeight;
+    }
+
+    function handleChatIntent(intent) {
+      if (intent === "compare") {
+        addChat("user", "帮我对比均衡型和进取型");
+        addChat("ai", "<div class='bubble-label'>问津助手</div>已为你打开对比视图。", "tool");
+        openDrawer(compareDrawer);
+        return;
+      }
+
+      if (intent === "budget") {
+        addChat("user", "预算超过 8 万的别推荐了");
+        addChat("ai", `
+          <div class='bubble-label'>问津助手</div>
+          检测到你想调整：预算上限 → 8 万元/年
+          <div class='row-actions' style='margin-top:10px;'>
+            <button class='primary' data-action='confirmRefine'>确认，重新生成方案</button>
+            <button class='ghost'>取消，继续问答</button>
+          </div>
+        `);
+        return;
+      }
+
+      addChat("user", "推荐的学校是怎么筛选出来的？");
+      addChat("ai", "<div class='bubble-label'>问津助手</div>先用位次和选科做硬过滤，再结合预算、城市、专业偏好排序。关键结论都能点开数据来源。<div class='card-subtitle' style='margin-top:8px;'>以上分析基于报告数据，最终填报请以省级考试院为准。</div>");
+    }
+
+    function confirmRefine() {
+      addChat("ai", "<div class='bubble-label'>局部重新生成</div>已开始重跑 Recommendation → Risk → Report，预计 10 秒内完成。", "tool");
+      window.setTimeout(() => {
+        reportVersion = 2;
+        versionNumber.textContent = "2";
+        currentPlan = "balanced";
+        renderCandidates();
+        addChat("ai", "<div class='bubble-label'>问津助手</div>已根据新预算重新生成。候选从 48 所变为 31 所，均衡型方案移除了 2 个高学费专业。", "tool");
+      }, 900);
+    }
+
+    document.addEventListener("click", event => {
+      const target = event.target.closest("button");
+      if (!target) return;
+
+      if (target.dataset.screen) {
+        setScreen(target.dataset.screen);
+      }
+      if (target.dataset.goto) {
+        setScreen(target.dataset.goto);
+      }
+      if (target.dataset.viewport) {
+        setViewport(target.dataset.viewport);
+      }
+      if (target.dataset.plan) {
+        currentPlan = target.dataset.plan;
+        renderCandidates();
+      }
+      if (target.dataset.chat) {
+        handleChatIntent(target.dataset.chat);
+      }
+
+      const action = target.dataset.action;
+      if (action === "back") setScreen(currentScreen === "home" ? "home" : "home");
+      if (action === "showRisk") document.getElementById("riskPreview").classList.remove("hidden");
+      if (action === "toggleReplay") document.getElementById("replayBlock").classList.toggle("hidden");
+      if (action === "expandRisk") openDrawer(compareDrawer);
+      if (action === "openEvidence") openDrawer(evidenceDrawer);
+      if (action === "openCompare") openDrawer(compareDrawer);
+      if (action === "closeDrawers") closeDrawers();
+      if (action === "openChat") openChat();
+      if (action === "closeChat") closeChat();
+      if (action === "sendChat") {
+        const input = document.getElementById("chatText");
+        const text = input.value.trim();
+        if (!text) return;
+        addChat("user", text);
+        addChat("ai", "<div class='bubble-label'>问津助手</div>收到。这个原型里建议使用预设问题测试 UI 操作、对比和重新生成状态。");
+        input.value = "";
+      }
+      if (action === "confirmRefine") confirmRefine();
+      if (action === "switchVersion") {
+        reportVersion = reportVersion === 1 ? 2 : 1;
+        versionNumber.textContent = String(reportVersion);
+        target.textContent = `v${reportVersion}`;
+      }
+    });
+
+    renderCandidates();
+  </script>
+</body>
+</html>
