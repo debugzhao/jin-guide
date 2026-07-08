@@ -1,6 +1,6 @@
 # 问津 Agent 后端 PRD v2
 
-版本：v2.0（2026-07-06）—— 从 0 到 1 重新设计，"AI 全程协作者"为原生设计，非增量补丁
+版本：v2.1（2026-07-08）—— 从 0 到 1 重新设计，"AI 全程协作者"为原生设计，非增量补丁；本次修订澄清 `/reports/generate` 触发时机与 `/refine` 建档中/交付后复用，对齐 `frontend-prd-v2.md` v2.2
 后端框架：FastAPI + LangGraph
 数据底座：PostgreSQL + pgvector + Redis
 模型网关：LiteLLM Proxy → Moonshot Kimi（`kimi-k2.6`，OpenAI 兼容协议）
@@ -144,7 +144,7 @@ sequenceDiagram
     FE->>用户: 在当前对话流实时渲染"生成过程卡片"
     LG->>Redis: completed {report_id, risk_level}
     Redis-->>FE: completed（经 BFF 转发）
-    FE->>用户: 展示报告预览卡片，并进入报告工作台
+    FE->>用户: 右侧实时报告面板原地渲染"基础版"报告，地址栏无刷新切换为 /reports/{report_id}
     end
 
     rect rgb(238,250,238)
@@ -174,9 +174,10 @@ sequenceDiagram
 **读图要点**：
 
 - 三个阶段共用同一套分层（FE→BFF→API），阶段二和阶段三还共用同一条 Redis Stream 和同一个 LangGraph 图定义——不是三套独立机制拼起来的。阶段二在产品上表现为**对话内生成过程卡片**，不需要独立生成进度页。
+- 阶段一和阶段二在产品体验上**不是严格先后的两个页面**：只要阶段一收集完 `student_profiles` 的必填字段（省份、批次、分数/位次、选科、性别/体检限制），前端就可以立即调用 `POST /api/v1/reports/generate`，不需要等预算、城市、专业等建议字段填完——见 §5.1 说明。阶段二产出的首份报告（`version=1`）在前端呈现为"基础版"；此后用户在同一对话里继续补充的偏好，全部经由阶段三的 §5.9 `/refine` 接口处理，产出 `version=2、3…`，前端呈现为"偏好更新版"。阶段二与阶段三因此共用同一个报告血缘链，不因为触发时机（建档中 vs 报告交付后）而分裂成两套机制。
 - 阶段一的"矛盾检测"和阶段二的"规则校验"复用的是同一批 Policy Rule Agent 工具（`check_subject_req` 等），只是调用时机不同：建档时做单字段前置校验，生成时做完整候选集校验。
 - 阶段二的 `par` 块是 §10.3 并行执行的时序体现；`loop` 块是 §10.6 Reflection 循环保护的时序体现。
-- 阶段三的 `alt` 分支对应 §10.9 两类工具的核心区别：UI 操作类不经过确认直接执行，数据变更类必须走确认卡片 + `/refine` 独立请求。
+- 阶段三的 `alt` 分支对应 §10.9 两类工具的核心区别：UI 操作类不经过确认直接执行，数据变更类必须走确认卡片 + `/refine` 独立请求；这个确认+`/refine`流程同样适用于用户仍停留在建档页、报告只有"基础版"时发起的偏好补充，不要求先进入独立的报告工作台页面。
 
 ---
 
@@ -277,7 +278,7 @@ sequenceDiagram
 
 **匿名会话说明**：用户首次进入前端时，BFF 调用 `POST /api/v1/auth/anonymous-session` 创建匿名会话并种下 `anonymous_id` / `session_token` Cookie。匿名用户可以完成测算、建档和生成前准备；尝试查看完整报告、保存档案或分享报告时触发登录/注册。注册或登录成功后，后端把同一匿名会话下的 `student_profiles`、未完成 `agent_runs`、草稿志愿表和报告记录绑定到正式 `user_id`，绑定过程幂等，避免重复创建档案。
 
-**`/api/v1/reports/generate` 说明**：面向前端的语义化入口，内部等价于 `POST /api/v1/agent/runs`（`task_type=generate_report`）。前端收到 `run_id` 后在当前 AI 对话建档页追加/更新生成过程卡片；当前版本不提供独立 `/reports/generating` 页面。
+**`/api/v1/reports/generate` 说明**：面向前端的语义化入口，内部等价于 `POST /api/v1/agent/runs`（`task_type=generate_report`）。前端收到 `run_id` 后在当前 AI 对话建档页追加/更新生成过程卡片，并驱动右侧实时报告面板渲染；当前版本不提供独立 `/reports/generating` 页面。**触发条件只要求 `student_profiles` 必填字段完整**（省份、批次、分数/位次、选科、性别/体检限制，对应 `profile_complete=true`），不要求预算、城市、专业等建议字段已填写——首次调用产出的报告即前端所称"基础版"（`version=1`）。生成完成后前端不强制跳转页面，只在拿到 `report_id` 后把地址栏无刷新切换为 `/reports/{id}`；此后用户在同一对话里补充的偏好统一走 §5.9 `/refine`，不会重新调用本接口。
 
 **`agent_runs.status` 状态枚举**：`queued` / `running` / `completed` / `failed` / `timeout`。
 
@@ -503,7 +504,7 @@ data: {"reason": "run_completed", "total_events": 42}
 
 ### 5.9 报告局部重新生成
 
-来自 ConversationAgent 的"改约束重新生成"能力（详见 §10.9），由用户在报告问答中表达修改意图、经确认后调用：
+来自 ConversationAgent 的"改约束重新生成"能力（详见 §10.9），由用户表达修改意图、经确认后调用。这个接口在两个时机都会被调用，且是**同一套逻辑**：一是用户仍在 AI 对话建档页、报告只有基础版（`version=1`）时补充预算/城市/专业等偏好；二是报告已经进入独立的报告工作台页面之后继续改约束。两种时机都不区分"建档中"或"报告交付后"，都产出下一个 `version`，挂在同一个 `parent_report_id` 血缘链上：
 
 ```http
 POST /api/v1/reports/{report_id}/refine
@@ -694,7 +695,8 @@ data: {"conversation_id": "conv_abc", "message_id": "msg_007", "total_tokens": 1
 
 **字段说明**：
 
-- `condition_commentary`（顶层，可为 null）：Report Agent 生成的条件点评，指出用户输入条件里的张力或可优化点，前端展示在考生概况卡片下方；无明显张力时为 `null`，前端不展示该区块。
+- `condition_commentary`（顶层，可为 null）：Report Agent 生成的条件点评，指出用户输入条件里的张力或可优化点，前端展示在考生概况卡片下方；无明显张力时为 `null`，前端不展示该区块。当 `reports.version = 1`（仅用必填字段生成的"基础版"）且用户尚未提供预算/城市/专业偏好时，Report Agent 生成引导性点评（例如"目前只有基础建档信息，报告会先覆盖更多候选，避免过早收窄"）而非张力点评；`version > 1` 的 refine 结果则点评偏好纳入后的变化。
+- `reports.version`：前端呈现约定——`version = 1` 标注为"基础版"，`version > 1`（经 §5.9 `/refine` 产生）标注为"偏好更新版"；进入独立的报告工作台页面后统一改用正式版本号（v1/v2…）展示在 `ReportVersionSwitcher`，两者是同一版本血缘链的不同文案，不是两套版本机制。
 - `matching_confidence_score`（候选项）：0-100 的匹配置信分，用于解释排序和方案内相对安全边际；前端展示为 `92.5/100`，不得展示为"录取概率 92.5%"或暗示确定性录取结果。它与 `admission_safety_score`（0-100 定性安全度，驱动进度条和色彩）并存，是同一风险评估的不同呈现粒度，不是录取承诺。
 - `historical_ranks`（候选项）：近两年该专业组最低投档位次并列展示，数据来自 `admission_scores` 表按年份聚合，无需新数据管道。`rank_reference` 指向报告生成时使用的主要参考年份。
 
@@ -1271,6 +1273,7 @@ Prompt 注入防护（RAG 文档作为数据，不允许覆盖系统规则）；
 - 所有工具函数返回 `ToolResponse`；`PARTIAL` 自动触发 `data_warnings` 写入；CircuitBreaker 对三个外部调用点生效；ToolFilter 确保每个节点只见权限范围内工具。
 - `admission_scores` 含 `batch` 字段；`province_thresholds` 已预置默认值；SSE 用 Cookie 鉴权，不在 query string 传长期 token。
 - 建档字段依赖图跳过逻辑不调用 LLM（可通过 mock LLM 客户端断言零调用验证）；矛盾检测正确触发 Profile Agent 追问，追问轮次 ≤3。
+- `POST /api/v1/reports/generate` 只校验必填字段（省份、批次、分数/位次、选科、性别/体检限制）完整即放行，未填预算/城市/专业等建议字段不阻断请求（可通过构造仅含必填字段的 profile 断言 202 而非 422 验证）。
 - BM25 通过 `pg_bm25` 实现；`chunks` 表有 `embedding_model` 字段。
 - ConversationAgent 回复不含禁词；不调用 `update_profile`/`generate_candidates`/`render_report_template`（ToolFilter 隔离，可通过单元测试验证）。
 - ConversationAgent 的 UI 操作类工具调用不经过用户二次确认即执行，数据变更类工具必须先发送 `refine_confirm_required` 再等待前端调用 `/refine`。
