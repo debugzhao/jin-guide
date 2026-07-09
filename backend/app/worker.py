@@ -43,18 +43,28 @@ async def _push_run_sse(run_id: str, event: str, data: dict) -> None:
 
 
 async def _emit_completed_if_report_exists(run_id: str) -> None:
-    """Fallback: ensure frontend receives completed when report was persisted."""
+    """
+    Ensure the frontend receives a terminal event once the graph run finishes.
+    Two outcomes: a report was persisted (normal path), or the run stopped at
+    the PROFILE_CHECK gate (profile_agent branch, see graph.py) — in that case
+    there is no report, and we still need to close out the SSE stream instead
+    of leaving the client waiting forever for a `completed` event that never comes.
+    """
     async with async_session_maker() as db:
         result = await db.execute(
             select(Report).where(Report.run_id == run_id, Report.deleted_at.is_(None))
         )
         report = result.scalar_one_or_none()
-        if not report:
+        if report:
+            await _push_run_sse(run_id, "completed", {
+                "report_id": report.id,
+                "risk_level": report.risk_level,
+                "compliance_passed": True,
+            })
             return
-        await _push_run_sse(run_id, "completed", {
-            "report_id": report.id,
-            "risk_level": report.risk_level,
-            "compliance_passed": True,
+
+        await _push_run_sse(run_id, "profile_incomplete", {
+            "message": "档案信息不完整，请补充后重试",
         })
 
 

@@ -14,7 +14,13 @@ _TOOL_REGISTRY: dict[str, list[str]] = {
         "check_batch_eligibility",
         "check_budget",
     ],
+    "profile_agent": [
+        "check_subject_req",
+        "check_batch_eligibility",
+    ],
     "report_agent": [],  # LLM generation only, no tool calls
+    "risk_agent": [],  # deterministic risk_engine calls, no LLM tool calls
+    "reflection_agent": [],  # LLM judge only, no tool calls
 }
 
 

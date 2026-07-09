@@ -1,16 +1,33 @@
 from datetime import UTC, datetime
-from typing import Optional
+from typing import Any, Literal, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
-from app.database import get_db
+from app.database import get_db, get_sync_db
+from app.models.admission import AdmissionScore, SubjectRequirement
 from app.models.profile import Preference, StudentProfile
 
 router = APIRouter()
+
+# 建档字段依赖顺序（纯配置驱动，不调用 LLM，见 docs/backend-prd-v2.md §5.6）
+_FIELD_ORDER = [
+    "province",
+    "batch",
+    "score",
+    "rank",
+    "subjects",
+    "gender",
+    "has_physical_limits",
+    "family_budget",
+    "risk_style",
+    "city_prefs",
+    "major_prefs",
+]
 
 
 class PreferenceIn(BaseModel):
@@ -178,3 +195,152 @@ async def get_profile(
         updated_at=profile.updated_at.isoformat(),
         preference=pref_out,
     )
+
+
+# ── 建档单字段实时校验 (docs/backend-prd-v2.md §5.6) ─────────────────────────────
+
+class FieldCheckIn(BaseModel):
+    profile_id: Optional[str] = None
+    field: str
+    value: Any
+    known_fields: dict[str, Any] = {}
+
+
+class FieldCheckOption(BaseModel):
+    action: str
+    label: str
+
+
+class FieldCheckIssue(BaseModel):
+    rule: str
+    message: str
+    options: list[FieldCheckOption]
+
+
+class FieldCheckOut(BaseModel):
+    status: Literal["ok", "needs_clarification"]
+    next_fields: list[str] = []
+    issue: Optional[FieldCheckIssue] = None
+
+
+def _next_fields(known: dict[str, Any], just_submitted: str) -> list[str]:
+    """纯配置驱动的字段依赖图：跳过已知字段，返回接下来最多 3 个待填字段。"""
+    known_now = set(known.keys()) | {just_submitted}
+    return [f for f in _FIELD_ORDER if f not in known_now][:3]
+
+
+def _check_rank_against_batch(
+    rank: int, province: str, batch: str, subject_type: str, db: Session
+) -> Optional[FieldCheckIssue]:
+    """位次是否具备目标批次报考资格；无历史数据时不阻断（PARTIAL 视为通过）。"""
+    from app.engine.rules import check_batch_eligibility
+
+    year = db.execute(
+        select(func.max(AdmissionScore.year)).where(
+            AdmissionScore.province == province,
+            AdmissionScore.batch == batch,
+            AdmissionScore.subject_type == subject_type,
+        )
+    ).scalar_one_or_none()
+    if year is None:
+        return None
+
+    result = check_batch_eligibility(
+        student_rank=rank,
+        province=province,
+        target_batch=batch,
+        year=year,
+        subject_type=subject_type,
+        db=db,
+    )
+    if not result.is_error:
+        return None
+
+    return FieldCheckIssue(
+        rule="batch_ineligible",
+        message=result.text,
+        options=[
+            FieldCheckOption(action="adjust_rank_or_batch", label="调整位次或批次"),
+            FieldCheckOption(action="continue_anyway", label="仍按此继续"),
+        ],
+    )
+
+
+def _check_subject_combo(
+    subjects: list[str], province: str, batch: str, db: Session
+) -> Optional[FieldCheckIssue]:
+    """
+    选科组合在该省份/批次是否有任意专业组能满足（required_subjects ⊆ 已选科目，
+    且 optional_subjects 里满足 optional_required_count）。
+    完全没有选科要求数据时不阻断（数据缺口而非矛盾）。
+    """
+    student_set = set(subjects or [])
+
+    rows = db.execute(
+        select(
+            SubjectRequirement.required_subjects,
+            SubjectRequirement.optional_subjects,
+            SubjectRequirement.optional_required_count,
+        )
+        .join(AdmissionScore, AdmissionScore.university_id == SubjectRequirement.university_id)
+        .where(
+            AdmissionScore.province == province,
+            AdmissionScore.batch == batch,
+        )
+        .limit(500)
+    ).all()
+
+    if not rows:
+        return None
+
+    for required, optional, opt_count in rows:
+        required = required or []
+        if any(s not in student_set for s in required):
+            continue
+        optional = optional or []
+        opt_count = opt_count or 0
+        if optional and opt_count > 0:
+            matched = [s for s in optional if s in student_set]
+            if len(matched) < opt_count:
+                continue
+        return None  # 找到至少一个能满足的专业组
+
+    return FieldCheckIssue(
+        rule="subject_combination_no_admission_plan",
+        message=f"该选科组合在 {province}{batch} 暂无对应招生计划",
+        options=[
+            FieldCheckOption(action="adjust_subjects", label="调整选科"),
+            FieldCheckOption(action="continue_anyway", label="仍按此继续"),
+        ],
+    )
+
+
+@router.post("/field-check", response_model=FieldCheckOut)
+def field_check(
+    body: FieldCheckIn,
+    db: Session = Depends(get_sync_db),
+) -> FieldCheckOut:
+    """
+    对话式建档每提交一个字段做前置校验，判断是否需要 Agent 介入追问。
+    字段排序/跳过逻辑是纯配置驱动的字段依赖图；矛盾检测复用 Rule Engine 的
+    确定性校验函数，均不调用 LLM（转成自然语言追问是 Profile Agent 的职责）。
+    """
+    known = dict(body.known_fields)
+    subject_type = known.get("subject_type", "physics")
+
+    issue: Optional[FieldCheckIssue] = None
+
+    if body.field == "rank" and known.get("province") and known.get("batch"):
+        issue = _check_rank_against_batch(
+            rank=int(body.value), province=known["province"], batch=known["batch"],
+            subject_type=subject_type, db=db,
+        )
+    elif body.field == "subjects" and known.get("province") and known.get("batch"):
+        issue = _check_subject_combo(
+            subjects=list(body.value or []), province=known["province"], batch=known["batch"], db=db,
+        )
+
+    if issue:
+        return FieldCheckOut(status="needs_clarification", issue=issue)
+
+    return FieldCheckOut(status="ok", next_fields=_next_fields(known, body.field))

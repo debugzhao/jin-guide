@@ -4,20 +4,25 @@ LangGraph state machine for 问津 Agent.
 Graph topology:
 
     data_resolver
-       /        \\
-retrieval_agent  policy_rule_agent   (parallel fan-out)
-       \\        /
-    recommendation
-          |
-         risk
-          |
-        report
-          |
-      reflection  ←──── (retry loop, max 3 iterations)
-          |
-    [conditional]
-       /    \\
-    END    report (retry when compliance issues)
+      [PROFILE_CHECK: 档案完整？]
+       /              \\
+  profile_agent    retrieval_agent  policy_rule_agent   (parallel fan-out)
+      |                    \\        /
+     END                 recommendation
+                               |
+                              risk
+                               |
+                             report
+                               |
+                           reflection  ←──── (retry loop, max 3 iterations)
+                               |
+                         [conditional]
+                            /    \\
+                         END    report (retry when compliance issues)
+
+Conditional routing from data_resolver (PROFILE_CHECK):
+  profile_complete       → [retrieval_agent, policy_rule_agent] (fan-out)
+  NOT profile_complete   → profile_agent (追问，不生成报告，图在此结束)
 
 Conditional routing from reflection:
   compliance_passed                    → END
@@ -33,6 +38,7 @@ from langgraph.graph import END, StateGraph
 from app.agent.debug_events import emit_debug_event
 from app.agent.nodes.data_resolver import data_resolver
 from app.agent.nodes.policy_rule_agent import policy_rule_agent
+from app.agent.nodes.profile_agent import profile_agent
 from app.agent.nodes.recommendation_agent import recommendation_agent
 from app.agent.nodes.reflection_agent import reflection_agent
 from app.agent.nodes.report_agent import report_agent
@@ -135,6 +141,16 @@ def _wrap_with_debug(node_name: str, fn: Callable) -> Callable:
     return _wrapped
 
 
+def _route_after_data_resolver(state: VolunteerPlanState) -> list[str]:
+    """
+    PROFILE_CHECK：档案完整则并行进入检索+规则校验，否则转 profile_agent 追问并结束 run。
+    返回列表以支持"完整"分支同时触发两个并行节点（LangGraph 支持条件路由返回多个目标）。
+    """
+    if state.get("profile_complete", False):
+        return ["retrieval_agent", "policy_rule_agent"]
+    return ["profile_agent"]
+
+
 def _route_after_reflection(state: VolunteerPlanState) -> str:
     """
     Conditional routing after Reflection Agent completes.
@@ -156,6 +172,7 @@ def create_graph():
 
     # ── Nodes (all wrapped with debug event emission) ──────────────────────
     graph.add_node("data_resolver", _wrap_with_debug("data_resolver", data_resolver))
+    graph.add_node("profile_agent", _wrap_with_debug("profile_agent", profile_agent))
     graph.add_node("retrieval_agent", _wrap_with_debug("retrieval_agent", retrieval_agent))
     graph.add_node("policy_rule_agent", _wrap_with_debug("policy_rule_agent", policy_rule_agent))
     graph.add_node("recommendation", _wrap_with_debug("recommendation", recommendation_agent))
@@ -166,9 +183,17 @@ def create_graph():
     # ── Edges ──────────────────────────────────────────────────────────────
     graph.set_entry_point("data_resolver")
 
-    # Fan-out: data_resolver → both parallel agents
-    graph.add_edge("data_resolver", "retrieval_agent")
-    graph.add_edge("data_resolver", "policy_rule_agent")
+    # PROFILE_CHECK: complete → fan-out to both parallel agents; incomplete → profile_agent
+    graph.add_conditional_edges(
+        "data_resolver",
+        _route_after_data_resolver,
+        {
+            "retrieval_agent": "retrieval_agent",
+            "policy_rule_agent": "policy_rule_agent",
+            "profile_agent": "profile_agent",
+        },
+    )
+    graph.add_edge("profile_agent", END)
 
     # Fan-in: both parallel agents → recommendation (LangGraph waits for both)
     graph.add_edge("retrieval_agent", "recommendation")

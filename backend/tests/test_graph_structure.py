@@ -7,10 +7,12 @@ from app.agent.graph import agent_graph, create_graph
 
 class TestGraphNodes:
     def test_all_eight_nodes_present(self):
+        # human_review was removed in v1.1 (see CLAUDE.md); profile_agent was
+        # added to gate report generation on profile completeness (PROFILE_CHECK).
         nodes = set(agent_graph.nodes)
         expected = {
-            "data_resolver", "retrieval_agent", "policy_rule_agent",
-            "recommendation", "risk", "report", "reflection", "human_review",
+            "data_resolver", "profile_agent", "retrieval_agent", "policy_rule_agent",
+            "recommendation", "risk", "report", "reflection",
         }
         for n in expected:
             assert n in nodes, f"Node '{n}' missing from graph"
