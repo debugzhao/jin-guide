@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -108,6 +108,54 @@ class SubjectRequirement(Base):
     __table_args__ = (
         Index("ix_subject_req_university", "university_id"),
         Index("ix_subject_req_major", "university_id", "major_name"),
+    )
+
+
+class AdmissionPlan(Base):
+    """招生计划（区别于 admission_scores 历年投档线）：某年份/省份/批次下某专业组的招生名额与学费"""
+    __tablename__ = "admission_plans"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    year: Mapped[int] = mapped_column(Integer, nullable=False)
+    province: Mapped[str] = mapped_column(String(50), nullable=False)
+    batch: Mapped[str] = mapped_column(String(50), nullable=False)
+    university_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("universities.id", ondelete="CASCADE"), nullable=False
+    )
+    major_group: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    major_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    quota: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    subjects: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    tuition: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    dataset_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+    __table_args__ = (
+        Index("ix_admission_plans_lookup", "province", "year", "batch", "major_group"),
+    )
+
+
+class RuleRequirement(Base):
+    """通用规则 + 来源引用存储（选科/体检/批次等规则的可追溯配置，见 docs/backend-prd-v2.md §6.3）"""
+    __tablename__ = "rule_requirements"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    type: Mapped[str] = mapped_column(String(50), nullable=False)
+    province: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    target_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    rule_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    source_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("documents.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+    __table_args__ = (
+        Index("ix_rule_requirements_target", "target_id"),
     )
 
 

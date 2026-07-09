@@ -3,6 +3,7 @@ from typing import Optional
 from uuid import uuid4
 
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -17,6 +18,11 @@ class Report(Base):
     profile_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("student_profiles.id"), nullable=True
     )
+    user_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("users.id"), nullable=True
+    )
+    # 匿名建档阶段生成的报告归属；登录/注册后绑定到 user_id（见 auth.py 的绑定逻辑）
+    anonymous_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     run_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("agent_runs.id"), nullable=True
     )
@@ -30,6 +36,13 @@ class Report(Base):
     # Evidence chain embedded directly (see PRD 6.5)
     evidence_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     dataset_version: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # 同一血缘链内从 1 递增；/refine 产出的新版本 parent_report_id 指向被 refine 的报告
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    parent_report_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("reports.id"), nullable=True
+    )
+    # 用户可见的生成过程摘要，供报告页"决策过程回放"卡片使用（只读回放，不重新调用 Agent）
+    run_summary_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )

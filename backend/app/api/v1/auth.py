@@ -2,11 +2,12 @@
 Auth API — email + password strategy.
 
 Endpoints:
-  POST /auth/send-code      — send 6-digit verification code to email (for registration)
-  POST /auth/register       — register with email + code + password
-  POST /auth/login          — login with email + password → set session cookie
-  POST /auth/logout         — clear session cookie
-  GET  /auth/me             — return current user info (requires session)
+  POST /auth/send-code          — send 6-digit verification code to email (for registration)
+  POST /auth/register           — register with email + code + password
+  POST /auth/login              — login with email + password → set session cookie
+  POST /auth/logout             — clear session cookie
+  GET  /auth/me                 — return current user info (requires session)
+  POST /auth/anonymous-session  — create an anonymous session for unauthenticated draft/measure flows
 """
 import hashlib
 import hmac
@@ -20,11 +21,13 @@ import redis.asyncio as aioredis
 import structlog
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
 from pydantic import BaseModel, EmailStr, field_validator
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
+from app.models.profile import StudentProfile
+from app.models.report import Report
 from app.models.user import AuthSession, User
 from app.services.email import send_verification_code
 
@@ -102,6 +105,23 @@ async def _send_email_code(email: str, code: str) -> bool:
     return await send_verification_code(email, code, _CODE_TTL_MINUTES)
 
 
+async def _bind_anonymous_data(db: AsyncSession, anonymous_id: str, user_id: str) -> None:
+    """
+    Idempotently attach anonymous-session drafts/reports to the newly authenticated user.
+    Only touches rows that aren't already owned by a user, so repeated logins are safe.
+    """
+    await db.execute(
+        update(StudentProfile)
+        .where(StudentProfile.anonymous_id == anonymous_id, StudentProfile.user_id.is_(None))
+        .values(user_id=user_id)
+    )
+    await db.execute(
+        update(Report)
+        .where(Report.anonymous_id == anonymous_id, Report.user_id.is_(None))
+        .values(user_id=user_id)
+    )
+
+
 async def _get_current_user(
     session_token: str | None = Cookie(default=None),
     db: AsyncSession = Depends(get_db),
@@ -163,6 +183,11 @@ class MeOut(BaseModel):
     email_verified: bool
 
 
+class AnonymousSessionOut(BaseModel):
+    anonymous_id: str
+    session_id: str
+
+
 # ── Endpoints ────────────────────────────────────────────────────────────────────
 
 @router.post("/send-code", response_model=SendCodeOut)
@@ -192,6 +217,7 @@ async def register(
     body: RegisterIn,
     response: Response,
     db: AsyncSession = Depends(get_db),
+    session_token: str | None = Cookie(default=None),
 ):
     """Register a new user with email + verification code + password."""
     email = _normalize_email(body.email)
@@ -214,6 +240,15 @@ async def register(
     )
     db.add(user)
     await db.flush()
+
+    # Bind any anonymous-session drafts (student_profiles/reports) to the new user.
+    if session_token:
+        old_session_result = await db.execute(
+            select(AuthSession).where(AuthSession.id == session_token)
+        )
+        old_session = old_session_result.scalar_one_or_none()
+        if old_session and old_session.anonymous_id:
+            await _bind_anonymous_data(db, old_session.anonymous_id, user.id)
 
     expires_at_session = datetime.now(UTC) + timedelta(days=_SESSION_DAYS)
     auth_session = AuthSession(
@@ -240,6 +275,7 @@ async def login(
     body: LoginIn,
     response: Response,
     db: AsyncSession = Depends(get_db),
+    session_token: str | None = Cookie(default=None),
 ):
     """Login with email + password."""
     email = _normalize_email(body.email)
@@ -249,6 +285,15 @@ async def login(
         raise HTTPException(status_code=401, detail="邮箱或密码不正确")
     if not _verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=401, detail="邮箱或密码不正确")
+
+    # Bind any anonymous-session drafts (student_profiles/reports) to this user.
+    if session_token:
+        old_session_result = await db.execute(
+            select(AuthSession).where(AuthSession.id == session_token)
+        )
+        old_session = old_session_result.scalar_one_or_none()
+        if old_session and old_session.anonymous_id:
+            await _bind_anonymous_data(db, old_session.anonymous_id, user.id)
 
     expires_at = datetime.now(UTC) + timedelta(days=_SESSION_DAYS)
     auth_session = AuthSession(
@@ -288,3 +333,60 @@ async def me(current_user: User | None = Depends(_get_current_user)):
         role=current_user.role,
         email_verified=current_user.email_verified,
     )
+
+
+@router.post("/anonymous-session", response_model=AnonymousSessionOut)
+async def create_anonymous_session(
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    session_token: str | None = Cookie(default=None),
+):
+    """
+    Create an anonymous session for unauthenticated measure/建档 flows.
+
+    Idempotent: if the incoming session_token cookie already resolves to a valid
+    session (anonymous or logged-in), reuse it instead of creating a duplicate row.
+    Registering/logging in later binds student_profiles/reports created under this
+    anonymous_id to the real user (see _bind_anonymous_data).
+    """
+    if session_token:
+        existing = await db.execute(
+            select(AuthSession).where(
+                AuthSession.id == session_token,
+                AuthSession.expires_at > datetime.now(UTC),
+            )
+        )
+        session = existing.scalar_one_or_none()
+        if session:
+            return AnonymousSessionOut(
+                anonymous_id=session.anonymous_id or "",
+                session_id=session.id,
+            )
+
+    anonymous_id = str(uuid4())
+    expires_at = datetime.now(UTC) + timedelta(days=_SESSION_DAYS)
+    auth_session = AuthSession(
+        id=str(uuid4()),
+        user_id=None,
+        anonymous_id=anonymous_id,
+        expires_at=expires_at,
+    )
+    db.add(auth_session)
+    await db.commit()
+
+    response.set_cookie(
+        key="session_token",
+        value=auth_session.id,
+        httponly=True,
+        samesite="strict",
+        expires=int(expires_at.timestamp()),
+    )
+    response.set_cookie(
+        key="anonymous_id",
+        value=anonymous_id,
+        httponly=False,
+        samesite="strict",
+        expires=int(expires_at.timestamp()),
+    )
+    logger.info("anonymous_session_created", anonymous_id=anonymous_id)
+    return AnonymousSessionOut(anonymous_id=anonymous_id, session_id=auth_session.id)

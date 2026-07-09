@@ -6,6 +6,8 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.cursor import decode_cursor, encode_cursor
+from app.api.dependencies import Identity, get_identity
 from app.api.v1.mock_data import MOCK_REPORT_EVIDENCE, MOCK_REPORT_PLAN
 from app.database import get_db
 from app.models.agent_run import AgentRun
@@ -17,6 +19,7 @@ router = APIRouter()
 class GenerateReportIn(BaseModel):
     profile_id: str
     user_id: Optional[str] = None
+    anonymous_id: Optional[str] = None
     thread_id: Optional[str] = None
 
 
@@ -46,7 +49,14 @@ class ReportListItem(BaseModel):
     risk_level: Optional[str]
     risk_score: Optional[float]
     dataset_version: Optional[str]
+    version: int
     created_at: str
+
+
+class ReportListOut(BaseModel):
+    items: list[ReportListItem]
+    next_cursor: Optional[str]
+    has_more: bool
 
 
 def _demo_report_out() -> ReportOut:
@@ -101,6 +111,7 @@ async def generate_report(
         id=run_id,
         thread_id=thread_id,
         user_id=body.user_id,
+        anonymous_id=body.anonymous_id,
         profile_id=body.profile_id,
         task_type="generate_report",
         status="queued",
@@ -118,37 +129,66 @@ async def generate_report(
     )
 
 
-@router.get("", response_model=list[ReportListItem])
+@router.get("", response_model=ReportListOut)
 async def list_reports(
     profile_id: Optional[str] = Query(None),
+    cursor: Optional[str] = Query(None),
     limit: int = Query(20, ge=1, le=100),
+    identity: Identity = Depends(get_identity),
     db: AsyncSession = Depends(get_db),
 ):
-    """List reports, optionally filtered by profile_id. Ordered by created_at desc."""
-    stmt = (
-        select(Report)
-        .where(Report.deleted_at.is_(None))
-        .order_by(Report.created_at.desc())
-        .limit(limit)
-    )
+    """
+    当前用户（或匿名会话）的报告历史，游标分页 (CLAUDE.md「分页规范」)。
+    未登录且无匿名会话 cookie 时返回空列表，而不是全库报告。
+    """
+    if not identity.user and not identity.anonymous_id:
+        return ReportListOut(items=[], next_cursor=None, has_more=False)
+
+    stmt = select(Report).where(Report.deleted_at.is_(None))
+    if identity.user:
+        stmt = stmt.where(Report.user_id == identity.user.id)
+    else:
+        stmt = stmt.where(Report.anonymous_id == identity.anonymous_id)
     if profile_id:
         stmt = stmt.where(Report.profile_id == profile_id)
 
+    if cursor:
+        try:
+            cur_created_at, cur_id = decode_cursor(cursor)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid cursor")
+        stmt = stmt.where(
+            (Report.created_at < cur_created_at)
+            | ((Report.created_at == cur_created_at) & (Report.id < cur_id))
+        )
+
+    stmt = stmt.order_by(Report.created_at.desc(), Report.id.desc()).limit(limit + 1)
+
     result = await db.execute(stmt)
     reports = result.scalars().all()
+    has_more = len(reports) > limit
+    reports = reports[:limit]
+    next_cursor = (
+        encode_cursor(reports[-1].created_at, reports[-1].id) if has_more and reports else None
+    )
 
-    return [
-        ReportListItem(
-            id=r.id,
-            profile_id=r.profile_id,
-            status=r.status,
-            risk_level=r.risk_level,
-            risk_score=r.risk_score,
-            dataset_version=r.dataset_version,
-            created_at=r.created_at.isoformat(),
-        )
-        for r in reports
-    ]
+    return ReportListOut(
+        items=[
+            ReportListItem(
+                id=r.id,
+                profile_id=r.profile_id,
+                status=r.status,
+                risk_level=r.risk_level,
+                risk_score=r.risk_score,
+                dataset_version=r.dataset_version,
+                version=r.version,
+                created_at=r.created_at.isoformat(),
+            )
+            for r in reports
+        ],
+        next_cursor=next_cursor,
+        has_more=has_more,
+    )
 
 
 @router.get("/demo-report", response_model=ReportOut)

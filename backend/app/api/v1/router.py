@@ -1,6 +1,18 @@
 from fastapi import APIRouter
 
-from app.api.v1 import admin, agent, auth, chat, data, profile, reports, risk, sources, volunteer
+from app.api.v1 import (
+    admin,
+    agent,
+    auth,
+    chat,
+    data,
+    notifications,
+    profile,
+    reports,
+    risk,
+    sources,
+    volunteer,
+)
 
 router = APIRouter()
 
@@ -14,3 +26,4 @@ router.include_router(risk.router, prefix="/risk", tags=["risk"])
 router.include_router(volunteer.router, prefix="/volunteer", tags=["volunteer"])
 router.include_router(sources.router, prefix="/sources", tags=["sources"])
 router.include_router(admin.router, prefix="/admin", tags=["admin"])
+router.include_router(notifications.router, prefix="/notifications", tags=["notifications"])

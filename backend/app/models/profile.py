@@ -17,6 +17,8 @@ class StudentProfile(Base):
     user_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("users.id"), nullable=True
     )
+    # 匿名建档阶段草稿归属；登录/注册后绑定到 user_id（见 auth.py 的绑定逻辑）
+    anonymous_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     province: Mapped[str] = mapped_column(String(50))
     score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     rank: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

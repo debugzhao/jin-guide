@@ -5,7 +5,16 @@ from app.models.profile import StudentProfile, Preference
 from app.models.agent_run import AgentRun
 from app.models.report import Report, VolunteerCheck
 from app.models.document import Document, Chunk
-from app.models.admission import University, AdmissionScore, RankSegment, SubjectRequirement, ProvinceThreshold
+from app.models.admission import (
+    University,
+    AdmissionScore,
+    RankSegment,
+    SubjectRequirement,
+    ProvinceThreshold,
+    AdmissionPlan,
+    RuleRequirement,
+)
+from app.models.notification import Notification
 
 __all__ = [
     "Base",
@@ -23,4 +32,7 @@ __all__ = [
     "RankSegment",
     "SubjectRequirement",
     "ProvinceThreshold",
+    "AdmissionPlan",
+    "RuleRequirement",
+    "Notification",
 ]

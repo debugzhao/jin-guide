@@ -20,6 +20,7 @@ router = APIRouter()
 class AgentRunIn(BaseModel):
     thread_id: Optional[str] = None
     user_id: Optional[str] = None
+    anonymous_id: Optional[str] = None
     profile_id: Optional[str] = None
     task_type: str = "generate_report"
     input: Optional[dict] = None
@@ -85,6 +86,7 @@ async def create_agent_run(
         id=run_id,
         thread_id=thread_id,
         user_id=body.user_id,
+        anonymous_id=body.anonymous_id,
         profile_id=body.profile_id,
         task_type=body.task_type,
         status="queued",

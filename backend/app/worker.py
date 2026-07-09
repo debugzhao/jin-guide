@@ -151,6 +151,7 @@ def _build_initial_state(run: AgentRun) -> VolunteerPlanState:
         run_id=run.id,
         thread_id=run.thread_id,
         user_id=run.user_id or "",
+        anonymous_id=run.anonymous_id or "",
         profile_id=run.profile_id or "",
         task_type=run.task_type,
         profile=None,

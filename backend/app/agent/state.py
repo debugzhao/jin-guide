@@ -11,6 +11,7 @@ class VolunteerPlanState(TypedDict):
     run_id: str
     thread_id: str
     user_id: str
+    anonymous_id: str
     profile_id: str
     task_type: Literal["generate_report", "check_volunteer"]
 

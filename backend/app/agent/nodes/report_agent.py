@@ -263,6 +263,8 @@ async def report_agent(state: VolunteerPlanState) -> dict:
             report = Report(
                 id=report_id,
                 profile_id=state.get("profile_id") or None,
+                user_id=state.get("user_id") or None,
+                anonymous_id=state.get("anonymous_id") or None,
                 run_id=run_id,
                 status="completed",
                 risk_level=overall_risk,

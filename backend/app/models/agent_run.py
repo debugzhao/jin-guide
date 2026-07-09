@@ -20,6 +20,8 @@ class AgentRun(Base):
     user_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("users.id"), nullable=True
     )
+    # 匿名会话发起的 run；用于把产出的 Report 正确归属（见 report_agent.py）
+    anonymous_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     profile_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("student_profiles.id"), nullable=True
     )

@@ -41,7 +41,7 @@ export default function ReportsPage() {
     setError('')
     fetch(`${BASE_URL}/api/v1/reports?limit=20`, { credentials: 'include' })
       .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
-      .then(setReports)
+      .then((data: { items: ReportListItem[] }) => setReports(data.items))
       .catch((e: Error) => setError(e.message || '加载报告列表失败'))
       .finally(() => setLoading(false))
   }
