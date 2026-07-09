@@ -60,8 +60,4 @@ async def risk_node(state: VolunteerPlanState) -> dict:
     return {
         "risk_items": risk_items,
         "overall_risk_level": overall_risk_level,
-        "needs_human_review": overall_risk_level == "high",
-        "review_reasons": (
-            [f"风险等级高，需人工复核：{risk_items[0]['message']}"] if overall_risk_level == "high" and risk_items else []
-        ),
     }

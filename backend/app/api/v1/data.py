@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_sync_db
+from app.engine.thresholds import get_province_threshold
 from app.models.admission import AdmissionScore, University
 
 router = APIRouter()
@@ -60,6 +61,7 @@ def check_data_availability(
             warnings.append(f"可用最近数据年份：{nearest_year}")
 
     dataset_version = f"{province.replace('省', '')}_{year}_v1"
+    max_volunteers = get_province_threshold(db, province).max_volunteers
 
     return DataAvailabilityOut(
         province=province,
@@ -69,5 +71,5 @@ def check_data_availability(
         dataset_version=dataset_version,
         available=available,
         warnings=warnings,
-        max_volunteers=96,  # Province-specific cap; 河南/山东 default 96
+        max_volunteers=max_volunteers,
     )

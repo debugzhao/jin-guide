@@ -9,10 +9,11 @@ Max 3 iterations. Early exit when LLM returns passed=true or
 feedback contains "无需改进".
 
 Graph routing (handled by conditional edges in graph.py):
-  pass + no human review needed  → END
-  fail + iterations < 3          → back to report (retry)
-  fail + iterations >= 3         → human_review_node (forced)
-  pass + needs_human_review       → human_review_node (risk-driven)
+  compliance_passed         → END
+  fail + iterations < 3     → back to report (retry)
+  max iterations exceeded   → END (best-effort delivery with warning)
+
+人工复核（HITL）已在 v1.1 移除，reflection 不再有 human_review 分支。
 """
 from __future__ import annotations
 

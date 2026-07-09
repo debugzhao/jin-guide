@@ -13,9 +13,21 @@
 }
 
 body {
-  background-color: #F8FAFC;
+  background-color: #040128;
   font-family: var(--font-sans);
-  color: #0F172A;
+  color: #F1F5F9;
+  min-height: 100vh;
+  background-image:
+    radial-gradient(60% 50% at 0% 20%, rgba(139, 124, 246, 0.12), transparent 60%),
+    radial-gradient(50% 45% at 100% 10%, rgba(139, 124, 246, 0.10), transparent 60%);
+  background-repeat: no-repeat;
+}
+
+/* ── 玻璃卡片：细边框 + 半透明深色背景，边框承担分层，阴影弱化 (docs/frontend-style.md) ── */
+.wj-glass-card {
+  background-color: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
 /* ── Admin Debug Console: LangGraph topology edge animations ────────────── */

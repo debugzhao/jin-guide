@@ -5,7 +5,7 @@ from app.models.profile import StudentProfile, Preference
 from app.models.agent_run import AgentRun
 from app.models.report import Report, VolunteerCheck
 from app.models.document import Document, Chunk
-from app.models.admission import University, AdmissionScore, RankSegment, SubjectRequirement
+from app.models.admission import University, AdmissionScore, RankSegment, SubjectRequirement, ProvinceThreshold
 
 __all__ = [
     "Base",
@@ -22,4 +22,5 @@ __all__ = [
     "AdmissionScore",
     "RankSegment",
     "SubjectRequirement",
+    "ProvinceThreshold",
 ]

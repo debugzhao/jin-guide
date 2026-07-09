@@ -14,6 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_sync_db
+from app.engine.thresholds import get_province_threshold
 from app.models.admission import AdmissionScore, RankSegment, University
 
 router = APIRouter()
@@ -54,12 +55,6 @@ _HENAN_BATCH_LINE: dict[str, dict[str, int]] = {
     "专科批": {"physics": 200, "history": 200},
 }
 
-# 冲稳保位次差阈值（相对历史平均录取位次）
-_TIER = {
-    "rush_max": -1000,    # 历史均值位次 - 1000 以内 → 冲
-    "target_max": 1000,   # ±1000 → 稳
-    "safe_min": 2000,     # 超出 2000 → 保
-}
 
 
 @router.post("/preview", response_model=RiskPreviewOut)
@@ -194,12 +189,14 @@ def _calc_tier_counts(
         )
     ).scalars().all()
 
+    thresholds = get_province_threshold(db, province)
+
     rush = target = safe = 0
     for avg_rank in rows:
         rank_gap = avg_rank - rank  # 正值 = 历史均值位次 > 考生位次 → 院校更难
-        if rank_gap > _TIER["safe_min"]:
+        if rank_gap > thresholds.safe_rank_gap:
             safe += 1
-        elif rank_gap > -_TIER["rush_max"]:
+        elif rank_gap > thresholds.rush_rank_gap_min:
             target += 1
         else:
             rush += 1

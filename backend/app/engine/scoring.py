@@ -9,6 +9,7 @@ from typing import Literal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.engine.thresholds import ThresholdValues, get_province_threshold
 from app.models.admission import AdmissionScore
 
 TierType = Literal["high_rush", "rush", "target", "safe"]
@@ -20,17 +21,23 @@ def _clip(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
 
-def assign_tier(rank_gap: float) -> TierType:
+def assign_tier(rank_gap: float, thresholds: ThresholdValues | None = None) -> TierType:
     """
     rank_gap = historical_avg_min_rank - student_rank
     正值 = 学生位次优于历史均值（越正越保底）
     负值 = 学生位次差于历史均值（越负越冲刺）
+
+    阈值来自 province_thresholds 表（按省份可配置，见 app.engine.thresholds），
+    不传时使用全国默认值。分档只消费 high_rush_rank_gap / rush_rank_gap_min /
+    safe_rank_gap 三个边界，与原硬编码的 -5000/-1000/+2000 三段划分一一对应；
+    rush_rank_gap_max / target_rank_gap 两列当前未被冲稳保判定逻辑使用。
     """
-    if rank_gap < -5000:
+    t = thresholds or ThresholdValues()
+    if rank_gap < -t.high_rush_rank_gap:
         return "high_rush"
-    if rank_gap < -1000:
+    if rank_gap < -t.rush_rank_gap_min:
         return "rush"
-    if rank_gap <= 2000:
+    if rank_gap <= t.safe_rank_gap:
         return "target"
     return "safe"
 
@@ -42,10 +49,15 @@ def compute_admission_score(
     batch: str,
     subject_type: str,
     db: Session,
+    thresholds: ThresholdValues | None = None,
 ) -> tuple[float, float, TierType]:
     """
     Returns (admission_score 0-100, rank_gap, tier).
     Falls back to (50.0, 0.0, 'target') when no historical data.
+
+    `thresholds` 建议由调用方在循环外通过 get_province_threshold(db, province)
+    取一次后传入，避免对同一省份的每个候选院校都重复查一次 province_thresholds。
+    不传时这里会自己查一次。
     """
     rows = db.execute(
         select(AdmissionScore.year, AdmissionScore.min_rank)
@@ -78,7 +90,8 @@ def compute_admission_score(
 
     raw = _clip(50.0 + rank_gap / 500.0 * 30.0, 0.0, 100.0)
     score = raw * 0.7 + stability * 100.0 * 0.3
-    tier = assign_tier(rank_gap)
+    t = thresholds or get_province_threshold(db, province)
+    tier = assign_tier(rank_gap, t)
     return round(score, 2), round(rank_gap, 1), tier
 
 

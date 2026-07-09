@@ -82,8 +82,6 @@ function initialNodeStates(): Record<string, DebugNodeState> {
 const DEBUG_EVENTS_CAP = 1000
 
 interface DebugSlice {
-  /** Controls the homepage-triggered debug drawer — open to any visitor, no role check. */
-  isDebugDrawerOpen: boolean
   selectedRunId: string | null
   isLiveFollowing: boolean
   debugRunFilter: DebugRunFilter
@@ -92,8 +90,6 @@ interface DebugSlice {
   timelineFilter: 'all' | 'node' | 'tool' | 'error'
   isAutoScroll: boolean
 
-  openDebugDrawer: () => void
-  closeDebugDrawer: () => void
   setSelectedRunId: (runId: string | null) => void
   setIsLiveFollowing: (live: boolean) => void
   setDebugRunFilter: (filter: DebugRunFilter) => void
@@ -212,7 +208,6 @@ export const useAppStore = create<AppStore>()(
       clearUser: () => set({ user: null, authChecked: true }),
 
       // ── debug slice ──
-      isDebugDrawerOpen: false,
       selectedRunId: null,
       isLiveFollowing: true,
       debugRunFilter: {},
@@ -220,9 +215,6 @@ export const useAppStore = create<AppStore>()(
       debugEvents: [],
       timelineFilter: 'all',
       isAutoScroll: true,
-
-      openDebugDrawer: () => set({ isDebugDrawerOpen: true }),
-      closeDebugDrawer: () => set({ isDebugDrawerOpen: false }),
 
       setSelectedRunId: (runId) =>
         set({ selectedRunId: runId, nodeStates: initialNodeStates(), debugEvents: [] }),

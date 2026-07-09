@@ -32,8 +32,8 @@ def _score_all_sync(
     profile: dict,
     hard_blocked_items: list[str],
     max_candidates: int = 200,
-) -> tuple[list[dict], dict]:
-    """Score all eligible universities and return (scored_candidates, tier_summary)."""
+) -> tuple[list[dict], dict, int]:
+    """Score all eligible universities and return (scored_candidates, tier_summary, max_volunteers)."""
     from app.database import SyncSessionLocal
     from app.engine.scoring import (
         assign_tier,
@@ -43,6 +43,7 @@ def _score_all_sync(
         compute_cost_risk_score,
         compute_overall_score,
     )
+    from app.engine.thresholds import get_province_threshold
     from app.models.admission import AdmissionScore, University
     from sqlalchemy import select
 
@@ -69,6 +70,8 @@ def _score_all_sync(
                 blocked_subject_combos.add((parts[1], parts[2]))
 
     with SyncSessionLocal() as db:
+        thresholds = get_province_threshold(db, province)
+
         # Get distinct universities with admission data for this province/batch/subject_type
         rows = db.execute(
             select(
@@ -106,6 +109,7 @@ def _score_all_sync(
                     batch=batch,
                     subject_type=subject_type,
                     db=db,
+                    thresholds=thresholds,
                 )
             except Exception:
                 adm_score, rank_gap, tier = 50.0, 0.0, "target"
@@ -168,7 +172,7 @@ def _score_all_sync(
         t: sum(1 for c in scored if c["tier"] == t)
         for t in ("high_rush", "rush", "target", "safe")
     }
-    return scored, tier_summary
+    return scored, tier_summary, thresholds.max_volunteers
 
 
 async def recommendation_agent(state: VolunteerPlanState) -> dict:
@@ -179,19 +183,20 @@ async def recommendation_agent(state: VolunteerPlanState) -> dict:
     await _push_sse(run_id, "node_started", {"node": "recommendation", "message": "正在生成候选志愿方案"})
 
     try:
-        scored_candidates, tier_summary = await asyncio.to_thread(
+        scored_candidates, tier_summary, max_volunteers = await asyncio.to_thread(
             _score_all_sync, profile, hard_blocked_items
         )
     except Exception as exc:
         logger.exception("recommendation_agent scoring failed")
         scored_candidates = []
         tier_summary = {"high_rush": 0, "rush": 0, "target": 0, "safe": 0}
+        max_volunteers = 96
 
     # Generate three plans from scored candidates
     try:
         from app.engine.planner import generate_plans
 
-        plans = generate_plans(scored_candidates)
+        plans = generate_plans(scored_candidates, max_volunteers=max_volunteers)
     except Exception as exc:
         logger.exception("generate_plans failed")
         plans = {}

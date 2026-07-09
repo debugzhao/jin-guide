@@ -22,7 +22,7 @@ from datetime import UTC, datetime
 
 import httpx
 
-from app.agent.nodes.compliance import check_compliance
+from app.agent.nodes.compliance import _FORBIDDEN, check_compliance, sanitize_text
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -33,11 +33,11 @@ _MAX_HISTORY_MESSAGES = 10  # trim to last N messages for context
 _MAX_PLAN_JSON_CHARS = 8000
 _MAX_EVIDENCE_CHARS = 3000
 
-_SYSTEM_PROMPT = """\
+_SYSTEM_PROMPT = f"""\
 你是"问津"AI 志愿助手。你的职责是基于已生成的志愿报告，回答考生或家长的探索性问题。
 
 【硬性约束，必须严格遵守】
-1. 禁止出现以下表述：保证录取、必中、精准录取、包过、保上、百分百录取、内部数据、代替填报、稳拿、必然上岸。
+1. 禁止出现以下表述：{"、".join(_FORBIDDEN)}。
 2. 每条建议必须有数据支撑，使用模糊表述时（如"概率较高"）须同时引用位次差数据。
 3. 不允许对报告以外的院校或专业做出推荐。
 4. 最终录取决定由考生和家长自主做出，AI 仅提供参考。
@@ -87,20 +87,8 @@ def _compliance_check(text: str) -> tuple[bool, list[str]]:
 
 
 def _sanitize_response(text: str, issues: list[str]) -> str:
-    """Replace compliance-violating phrases with safe alternatives."""
-    replacements = {
-        r"保证录取": "有录取可能",
-        r"必中": "有较大概率录取",
-        r"精准录取": "预计录取",
-        r"包过": "通过概率较高",
-        r"保上": "安全边际较充足",
-        r"百分百录取": "预计录取概率较高",
-        r"稳拿": "有较大把握",
-        r"必然上岸": "预计可以录取",
-    }
-    for pattern, replacement in replacements.items():
-        text = re.sub(pattern, replacement, text)
-    return text
+    """Replace compliance-violating phrases with safe alternatives (shared word list, see compliance.py)."""
+    return sanitize_text(text)
 
 
 async def stream_conversation_response(

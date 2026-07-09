@@ -1,18 +1,17 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Compass, ClipboardCheck, BarChart2, Wrench } from 'lucide-react'
+import { Compass, ClipboardCheck, BarChart2 } from 'lucide-react'
 import EntryCard from '@/components/entry/EntryCard'
 import Button from '@/components/ui/Button'
 import LoginSheet from '@/components/ui/LoginSheet'
 import UserMenu from '@/components/ui/UserMenu'
-import DebugDrawer from '@/components/admin/debug/DebugDrawer'
 import { api } from '@/lib/api'
 import { useAppStore } from '@/lib/store'
 
 export default function HomePage() {
   const [loginOpen, setLoginOpen] = useState(false)
-  const { user, authChecked, setUser, clearUser, openDebugDrawer } = useAppStore()
+  const { user, authChecked, setUser, clearUser } = useAppStore()
 
   useEffect(() => {
     api.me().then(setUser).catch(() => clearUser())
@@ -29,14 +28,6 @@ export default function HomePage() {
             <p className="wj-subtitle text-xs text-[#64748B] mt-0.5">AI 志愿决策助理，帮你稳上心仪大学</p>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              onClick={openDebugDrawer}
-              className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-[#64748B] hover:text-[#1E40AF] hover:bg-[#EFF6FF] transition-colors"
-              aria-label="打开 Debug 控制台"
-              title="Debug 控制台"
-            >
-              <Wrench className="w-4 h-4" />
-            </button>
             {authChecked && (user ? <UserMenu /> : (
               <Button variant="ghost" size="sm" onClick={() => setLoginOpen(true)}>
                 登录
@@ -86,8 +77,6 @@ export default function HomePage() {
         isOpen={loginOpen}
         onClose={() => setLoginOpen(false)}
       />
-
-      <DebugDrawer />
     </div>
   )
 }

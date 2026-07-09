@@ -1,5 +1,5 @@
 """
-Admin Debug Console API — 面向任何访客开放（含未登录），无角色限制。
+Admin Debug Console API — 仅 role=admin 可访问，其余请求返回 401/403。
 数据本身不含 PII（省份/位次/分数等），仅暴露耗时/费用/工具调用等运维指标。
 
 Endpoints:
@@ -21,11 +21,12 @@ from pydantic import BaseModel
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.dependencies import require_admin_role
 from app.config import settings
 from app.database import get_db
 from app.models.agent_run import AgentRun
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_admin_role)])
 
 _METRICS_WINDOW_SECONDS = 300  # 5-minute rolling window for error rate
 

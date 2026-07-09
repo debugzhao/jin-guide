@@ -109,3 +109,22 @@ class SubjectRequirement(Base):
         Index("ix_subject_req_university", "university_id"),
         Index("ix_subject_req_major", "university_id", "major_name"),
     )
+
+
+class ProvinceThreshold(Base):
+    """省份级冲稳保位次阈值 + 志愿数上限配置，替代代码内硬编码 (docs/03_data_model.md §2.5)"""
+    __tablename__ = "province_thresholds"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    province: Mapped[str] = mapped_column(String(50), nullable=False)
+    year: Mapped[int] = mapped_column(Integer, nullable=False)
+    high_rush_rank_gap: Mapped[int] = mapped_column(Integer, nullable=False, default=5000)
+    rush_rank_gap_min: Mapped[int] = mapped_column(Integer, nullable=False, default=1000)
+    rush_rank_gap_max: Mapped[int] = mapped_column(Integer, nullable=False, default=5000)
+    target_rank_gap: Mapped[int] = mapped_column(Integer, nullable=False, default=1000)
+    safe_rank_gap: Mapped[int] = mapped_column(Integer, nullable=False, default=2000)
+    max_volunteers: Mapped[int] = mapped_column(Integer, nullable=False, default=96)
+
+    __table_args__ = (
+        Index("ix_province_thresholds_province_year", "province", "year", unique=True),
+    )
