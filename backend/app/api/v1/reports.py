@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Any, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -11,9 +11,21 @@ from app.api.dependencies import Identity, get_identity
 from app.api.v1.mock_data import MOCK_REPORT_EVIDENCE, MOCK_REPORT_PLAN
 from app.database import get_db
 from app.models.agent_run import AgentRun
+from app.models.profile import Preference, StudentProfile
 from app.models.report import Report
 
 router = APIRouter()
+
+# /refine 只接受这些"轻量约束"字段（白名单）；命中之外的任何 key 都要求走完整重新生成
+# (docs/backend-prd-v2.md §5.9)
+_LIGHT_PATCH_KEYS = {
+    "budget_max",
+    "exclude_school_ids",
+    "add_preferred_city",
+    "city_prefs",
+    "major_prefs",
+    "rejected_majors",
+}
 
 
 class GenerateReportIn(BaseModel):
@@ -39,6 +51,9 @@ class ReportOut(BaseModel):
     plan_json: Optional[dict]
     evidence_json: Optional[list]
     dataset_version: Optional[str]
+    version: int
+    parent_report_id: Optional[str]
+    run_summary_json: Optional[dict]
     created_at: str
 
 
@@ -70,6 +85,9 @@ def _demo_report_out() -> ReportOut:
         plan_json=MOCK_REPORT_PLAN,
         evidence_json=MOCK_REPORT_EVIDENCE,
         dataset_version="河南_2026_v1",
+        version=1,
+        parent_report_id=None,
+        run_summary_json=None,
         created_at="2026-07-02T10:00:00Z",
     )
 
@@ -85,6 +103,9 @@ def _report_to_out(report: Report) -> ReportOut:
         plan_json=report.plan_json,
         evidence_json=report.evidence_json,
         dataset_version=report.dataset_version,
+        version=report.version,
+        parent_report_id=report.parent_report_id,
+        run_summary_json=report.run_summary_json,
         created_at=report.created_at.isoformat(),
     )
 
@@ -232,3 +253,133 @@ async def get_report(
         raise HTTPException(status_code=404, detail="report not found")
 
     return _report_to_out(report)
+
+
+# ── 报告局部重新生成 (docs/backend-prd-v2.md §5.9) ────────────────────────────
+
+class RefineIn(BaseModel):
+    patch: dict[str, Any]
+    source: Optional[str] = None
+    conversation_id: Optional[str] = None
+
+
+class RefineOut(BaseModel):
+    parent_report_id: str
+    run_id: str
+    stream_url: str
+    status: str
+    estimated_seconds: int
+
+
+def _build_patched_profile_dict(
+    profile: StudentProfile, pref: Optional[Preference], patch: dict[str, Any]
+) -> tuple[dict, list[str]]:
+    """
+    应用 refine patch 到档案字段，返回 (profile_dict, hard_blocked_items)。
+    profile_dict 形状与 data_resolver.py 的 _load_profile_sync 保持一致，
+    这样 recommendation_agent 复用同一套 profile 读取逻辑无需特殊处理。
+    """
+    subjects: list[str] = profile.subjects or []
+    subject_type = "physics" if "物理" in subjects else "history"
+
+    city_prefs = list(patch.get("city_prefs", (pref.city_prefs if pref else None) or []))
+    add_city = patch.get("add_preferred_city")
+    if add_city and add_city not in city_prefs:
+        city_prefs.append(add_city)
+
+    family_budget = patch.get("budget_max", profile.family_budget)
+
+    profile_dict = {
+        "id": profile.id,
+        "province": profile.province,
+        "score": profile.score or 0,
+        "rank": profile.rank or 0,
+        "subjects": subjects,
+        "subject_type": subject_type,
+        "batch": profile.batch or "本科批",
+        "family_budget": family_budget,
+        "risk_style": profile.risk_style or "balanced",
+        "major_prefs": patch.get("major_prefs", (pref.major_prefs if pref else None) or []),
+        "city_prefs": city_prefs,
+        "rejected_majors": patch.get("rejected_majors", (pref.rejected_majors if pref else None) or []),
+    }
+
+    hard_blocked_items = [f"exclude:{sid}" for sid in patch.get("exclude_school_ids", [])]
+
+    return profile_dict, hard_blocked_items
+
+
+@router.post("/{report_id}/refine", response_model=RefineOut, status_code=202)
+async def refine_report(
+    report_id: str,
+    body: RefineIn,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    基于约束修改触发局部重新生成，产出新版本报告（parent_report_id 血缘链递增 version）。
+    只接受轻量约束 patch（预算/城市偏好/排除院校等）；命中省份/选科/批次等重大约束的字段
+    一律返回 422，引导前端走完整的 POST /reports/generate。
+    """
+    unknown_keys = set(body.patch.keys()) - _LIGHT_PATCH_KEYS
+    if unknown_keys:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": {
+                    "code": "requires_full_regenerate",
+                    "message": f"以下字段涉及重大约束，需完整重新生成：{', '.join(sorted(unknown_keys))}",
+                }
+            },
+        )
+
+    result = await db.execute(
+        select(Report).where(Report.id == report_id, Report.deleted_at.is_(None))
+    )
+    parent_report = result.scalar_one_or_none()
+    if not parent_report:
+        raise HTTPException(status_code=404, detail="report not found")
+
+    if not parent_report.profile_id:
+        raise HTTPException(status_code=409, detail="checkpoint_not_found")
+
+    profile_result = await db.execute(
+        select(StudentProfile).where(StudentProfile.id == parent_report.profile_id)
+    )
+    profile = profile_result.scalar_one_or_none()
+    if not profile:
+        raise HTTPException(status_code=409, detail="checkpoint_not_found")
+
+    pref_result = await db.execute(
+        select(Preference).where(Preference.profile_id == parent_report.profile_id)
+    )
+    pref = pref_result.scalar_one_or_none()
+
+    profile_dict, hard_blocked_items = _build_patched_profile_dict(profile, pref, body.patch)
+
+    arq_pool = getattr(request.app.state, "arq_pool", None)
+    if not arq_pool:
+        raise HTTPException(status_code=503, detail="ARQ pool unavailable")
+
+    run_id = str(uuid4())
+    run = AgentRun(
+        id=run_id,
+        thread_id=str(uuid4()),
+        user_id=parent_report.user_id,
+        anonymous_id=parent_report.anonymous_id,
+        profile_id=parent_report.profile_id,
+        task_type="refine_report",
+        status="queued",
+    )
+    db.add(run)
+    await db.commit()
+
+    await arq_pool.enqueue_job("run_refine", run_id, report_id, profile_dict, hard_blocked_items)
+
+    return RefineOut(
+        parent_report_id=report_id,
+        run_id=run_id,
+        stream_url=f"/api/v1/agent/runs/{run_id}/events",
+        status="queued",
+        estimated_seconds=10,
+    )

@@ -5,6 +5,7 @@ MOCK_REPORT_PLAN = {
         "rank": 32680,
         "subjects": ["物理", "化学"]
     },
+    "condition_commentary": "你的地域偏好（仅限郑州）和预算（≤6000元/年）同时设置较紧，符合条件的候选数量有限；如果放宽地域偏好，候选会更充分。",
     "risk_level": "high",
     "risk_items": [
         {"level": "warning", "description": "填报的临床医学专业涉及医学体检色觉限制，请核实考生体检档案。"},
@@ -23,9 +24,11 @@ MOCK_REPORT_PLAN = {
                     "major_name": "软件工程",
                     "major_group": "专业组01",
                     "admission_safety_score": 75.0,
+                    "matching_confidence_score": 78.0,
                     "overall_score": 85.0,
                     "tuition_per_year": 5500,
                     "subject_requirements": ["物理", "化学"],
+                    "historical_ranks": [{"year": 2025, "min_rank": 35200}, {"year": 2024, "min_rank": 34100}],
                     "recommendation_reasons": ["考生位次高出郑州大学软件工程近3年平均位次3000名", "考生倾向郑州市高校，离家近"],
                     "evidence_ids": ["ev-001"]
                 },
@@ -38,9 +41,11 @@ MOCK_REPORT_PLAN = {
                     "major_name": "计算机科学与技术",
                     "major_group": "专业组02",
                     "admission_safety_score": 88.0,
+                    "matching_confidence_score": 82.0,
                     "overall_score": 78.0,
                     "tuition_per_year": 5000,
                     "subject_requirements": ["物理"],
+                    "historical_ranks": [{"year": 2025, "min_rank": 45300}, {"year": 2024, "min_rank": 44800}],
                     "recommendation_reasons": ["分数处于安全区间，可作为绝佳的稳妥保底院校"],
                     "evidence_ids": ["ev-002"]
                 }
@@ -78,9 +83,11 @@ MOCK_REPORT_PLAN = {
                     "major_name": "电子信息科学与技术",
                     "major_group": "专业组01",
                     "admission_safety_score": 45.0,
+                    "matching_confidence_score": 58.0,
                     "overall_score": 92.0,
                     "tuition_per_year": 6000,
                     "subject_requirements": ["物理", "化学"],
+                    "historical_ranks": [{"year": 2025, "min_rank": 29800}, {"year": 2024, "min_rank": 31500}],
                     "recommendation_reasons": ["C9顶尖高校，位次略有缺口，建议积极尝试冲击"],
                     "evidence_ids": ["ev-003"]
                 }

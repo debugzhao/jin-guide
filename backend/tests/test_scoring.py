@@ -6,7 +6,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.models import Base
-from app.models.admission import AdmissionScore
+from app.models.admission import AdmissionScore, ProvinceThreshold
 from app.engine.scoring import (
     assign_tier,
     compute_admission_score,
@@ -22,7 +22,14 @@ from app.engine.scoring import (
 @pytest.fixture(scope="module")
 def db():
     engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
-    Base.metadata.create_all(engine)
+    # 只建这一张测试用到的表：Base.metadata 上还挂着用了 JSONB 列的表
+    # （notifications/agent_runs/reports/report_conversations），SQLite 编译器
+    # 无法渲染 JSONB，全量 create_all 会报 CompileError。
+    # compute_admission_score 会查 province_thresholds 取阈值（查无数据时回落默认值，
+    # 但表必须存在），故一并建表，不插数据。
+    Base.metadata.create_all(
+        engine, tables=[AdmissionScore.__table__, ProvinceThreshold.__table__]
+    )
     with Session(engine) as session:
         # 3-year data for UNIV_A
         for year, min_rank in [(2023, 30000), (2024, 31000), (2025, 32000)]:

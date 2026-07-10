@@ -213,23 +213,13 @@ class TestReflectionRouting:
     def test_pass_no_review_routes_to_end(self):
         state = {
             "compliance_passed": True,
-            "needs_human_review": False,
             "reflection_iterations": 1,
         }
         assert self._call_route(state) == "end"
 
-    def test_pass_but_needs_human_review_routes_to_human_review(self):
-        state = {
-            "compliance_passed": True,
-            "needs_human_review": True,
-            "reflection_iterations": 1,
-        }
-        assert self._call_route(state) == "human_review"
-
     def test_fail_iter1_routes_to_report_retry(self):
         state = {
             "compliance_passed": False,
-            "needs_human_review": False,
             "reflection_iterations": 1,
         }
         assert self._call_route(state) == "report"
@@ -237,28 +227,25 @@ class TestReflectionRouting:
     def test_fail_iter2_routes_to_report_retry(self):
         state = {
             "compliance_passed": False,
-            "needs_human_review": False,
             "reflection_iterations": 2,
         }
         assert self._call_route(state) == "report"
 
-    def test_fail_iter3_routes_to_human_review(self):
-        """At max iterations (3), force human_review regardless of need flag."""
+    def test_fail_iter3_routes_to_end_best_effort(self):
+        """达最大轮次（3）仍未通过：不再有 human_review 分支，best-effort 交付。"""
         state = {
             "compliance_passed": False,
-            "needs_human_review": False,
             "reflection_iterations": 3,
         }
-        assert self._call_route(state) == "human_review"
+        assert self._call_route(state) == "end"
 
-    def test_fail_iter4_routes_to_human_review(self):
-        """Iterations > 3 also routes to human_review."""
+    def test_fail_iter4_routes_to_end_best_effort(self):
+        """超过最大轮次同样 best-effort 交付。"""
         state = {
             "compliance_passed": False,
-            "needs_human_review": False,
             "reflection_iterations": 4,
         }
-        assert self._call_route(state) == "human_review"
+        assert self._call_route(state) == "end"
 
     def test_default_state_routes_to_end(self):
         """Missing fields default to safe values → end."""

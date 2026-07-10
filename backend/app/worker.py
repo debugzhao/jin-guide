@@ -13,12 +13,13 @@ import structlog
 from arq.connections import RedisSettings
 from sqlalchemy import select
 
-from app.agent.graph import agent_graph
+from app.agent.graph import agent_graph, refine_graph
 from app.agent.state import VolunteerPlanState
 from app.config import settings
 from app.database import async_session_maker
 from app.logging_config import configure_logging
 from app.models.agent_run import AgentRun
+from app.models.profile import Preference, StudentProfile
 from app.models.report import Report
 
 if settings.langsmith_api_key:
@@ -69,11 +70,15 @@ async def _emit_completed_if_report_exists(run_id: str) -> None:
 
 
 async def _stream_graph(
-    graph_input, config: dict, run_id: str
+    graph, graph_input, config: dict, run_id: str
 ) -> dict:
     """
-    Drive the graph via astream(stream_mode="updates") and log one structured
-    line per completed superstep: run_id, node, event, latency_ms.
+    Drive the given compiled graph via astream(stream_mode="updates") and log one
+    structured line per completed superstep: run_id, node, event, latency_ms.
+
+    `graph` is either the full `agent_graph` (first-time generation) or the
+    smaller `refine_graph` (recommendation → risk → report → reflection only,
+    used by /refine — see run_refine below).
 
     Returns a debug_summary dict for writing to agent_runs.debug_summary_json.
     """
@@ -83,7 +88,7 @@ async def _stream_graph(
     state_summary: dict = {}
     step_started_at = time.perf_counter()
 
-    async for chunk in agent_graph.astream(graph_input, config=config, stream_mode="updates"):
+    async for chunk in graph.astream(graph_input, config=config, stream_mode="updates"):
         latency_ms = round((time.perf_counter() - step_started_at) * 1000, 1)
         step_started_at = time.perf_counter()
         for node_name, node_state in chunk.items():
@@ -180,6 +185,52 @@ def _build_initial_state(run: AgentRun) -> VolunteerPlanState:
         overall_risk_level="medium",
         report_draft=None,
         report_id=None,
+        version=1,
+        parent_report_id=None,
+        compliance_passed=True,
+        compliance_issues=[],
+        reflection_iterations=0,
+        messages=[],
+        started_at=datetime.now(UTC).isoformat(),
+        completed_at=None,
+        error=None,
+        degraded_agents=[],
+        tool_call_log=[],
+    )
+
+
+def _build_refine_state(
+    run: AgentRun, parent_report: Report, profile_dict: dict, hard_blocked_items: list[str]
+) -> VolunteerPlanState:
+    """
+    局部重新生成的初始 state：复用被 refine 报告的 evidence_json（不重新检索/校验规则），
+    profile 已经在调用方（run_refine）应用过 patch。
+    """
+    return VolunteerPlanState(
+        run_id=run.id,
+        thread_id=run.thread_id,
+        user_id=run.user_id or "",
+        anonymous_id=run.anonymous_id or "",
+        profile_id=run.profile_id or "",
+        task_type=run.task_type,
+        profile=profile_dict,
+        profile_complete=True,
+        profile_pending_questions=[],
+        dataset_version=parent_report.dataset_version,
+        data_warnings=[],
+        evidence_list=parent_report.evidence_json or [],
+        retrieval_complete=True,
+        rule_results=[],
+        hard_blocked_items=hard_blocked_items,
+        candidates=[],
+        scored_candidates=[],
+        tier_summary={},
+        risk_items=[],
+        overall_risk_level="medium",
+        report_draft=None,
+        report_id=None,
+        version=(parent_report.version or 1) + 1,
+        parent_report_id=parent_report.id,
         compliance_passed=True,
         compliance_issues=[],
         reflection_iterations=0,
@@ -212,24 +263,42 @@ def _get_langsmith_stats(ls_run_id: uuid.UUID) -> tuple[int, float, str | None]:
         return 0, 0.0, None
 
 
-async def run_agent(ctx: dict, run_id: str) -> None:
+async def _write_run_summary_to_report(run_id: str, debug_summary: dict) -> None:
     """
-    Core ARQ task: load AgentRun from DB, build initial state, invoke LangGraph.
-
-    On success: marks run as 'completed', sets completed_at, writes LangSmith stats.
-    On failure: marks run as 'failed', stores error_msg.
+    Best-effort: stash a user-safe subset of debug_summary on the Report this run
+    produced, for the report page's "AI 是如何得出这份方案的" decision replay card
+    (docs/backend-prd-v2.md §6.1 reports.run_summary_json). No PII — same fields
+    already exposed to Admin Debug, just trimmed to what a user-facing replay needs.
     """
+    summary = {
+        "node_timings": debug_summary.get("node_timings", {}),
+        "degraded_agents": debug_summary.get("degraded_agents", []),
+        "reflection_iterations": debug_summary.get("state_summary", {}).get("reflection_iterations", 0),
+    }
     async with async_session_maker() as db:
-        result = await db.execute(select(AgentRun).where(AgentRun.id == run_id))
-        run = result.scalar_one_or_none()
-        if not run:
-            return
+        result = await db.execute(
+            select(Report).where(Report.run_id == run_id, Report.deleted_at.is_(None))
+        )
+        report = result.scalar_one_or_none()
+        if report:
+            report.run_summary_json = summary
+            await db.commit()
 
-        run.status = "running"
-        await db.commit()
 
-    state = _build_initial_state(run)
-
+async def _run_graph_and_finalize(
+    *,
+    graph,
+    state: VolunteerPlanState,
+    run: AgentRun,
+    on_success,
+) -> None:
+    """
+    Shared execution + finalization for both first-time generation (run_agent)
+    and local refine (run_refine): drive the graph, write AgentRun status/cost/
+    debug_summary, and call `on_success(run_id, debug_summary)` for the
+    run-type-specific terminal SSE event (their `completed` payload shapes differ).
+    """
+    run_id = run.id
     ls_run_id = uuid.uuid4()
     config = {
         "configurable": {"thread_id": run.thread_id},
@@ -247,8 +316,8 @@ async def run_agent(ctx: dict, run_id: str) -> None:
     logger.info("agent_run_started", run_id=run_id, node="run", stage="run_started")
 
     try:
-        debug_summary = await _stream_graph(state, config, run_id)
-        await _emit_completed_if_report_exists(run_id)
+        debug_summary = await _stream_graph(graph, state, config, run_id)
+        await on_success(run_id, debug_summary)
 
         total_tokens, cost_usd, trace_url = _get_langsmith_stats(ls_run_id)
         duration_seconds = round(time.perf_counter() - run_started_at, 2)
@@ -271,6 +340,8 @@ async def run_agent(ctx: dict, run_id: str) -> None:
                 run2.duration_seconds = duration_seconds
                 run2.debug_summary_json = debug_summary
                 await db2.commit()
+
+        await _write_run_summary_to_report(run_id, debug_summary)
 
         logger.info(
             "agent_run_completed",
@@ -307,10 +378,89 @@ async def run_agent(ctx: dict, run_id: str) -> None:
         raise
 
 
+async def run_agent(ctx: dict, run_id: str) -> None:
+    """
+    Core ARQ task: load AgentRun from DB, build initial state, invoke the full LangGraph.
+
+    On success: marks run as 'completed', sets completed_at, writes LangSmith stats.
+    On failure: marks run as 'failed', stores error_msg.
+    """
+    async with async_session_maker() as db:
+        result = await db.execute(select(AgentRun).where(AgentRun.id == run_id))
+        run = result.scalar_one_or_none()
+        if not run:
+            return
+
+        run.status = "running"
+        await db.commit()
+
+    state = _build_initial_state(run)
+
+    async def on_success(rid: str, _debug_summary: dict) -> None:
+        await _emit_completed_if_report_exists(rid)
+
+    await _run_graph_and_finalize(graph=agent_graph, state=state, run=run, on_success=on_success)
+
+
+async def run_refine(
+    ctx: dict,
+    run_id: str,
+    parent_report_id: str,
+    profile_dict: dict,
+    hard_blocked_items: list[str],
+) -> None:
+    """
+    局部重新生成 (docs/backend-prd-v2.md §5.9)：只重跑
+    recommendation → risk → report → reflection，复用 parent_report.evidence_json。
+    `profile_dict`/`hard_blocked_items` 已经在 POST /reports/{id}/refine 里把 patch
+    应用好，这里不再重新查一次 DB 或解析 patch。
+    """
+    async with async_session_maker() as db:
+        result = await db.execute(select(AgentRun).where(AgentRun.id == run_id))
+        run = result.scalar_one_or_none()
+        if not run:
+            return
+        run.status = "running"
+        await db.commit()
+
+        parent_result = await db.execute(
+            select(Report).where(Report.id == parent_report_id, Report.deleted_at.is_(None))
+        )
+        parent_report = parent_result.scalar_one_or_none()
+        if not parent_report:
+            run.status = "failed"
+            run.error_msg = "parent report not found"
+            run.completed_at = datetime.now(UTC)
+            await db.commit()
+            return
+
+    state = _build_refine_state(run, parent_report, profile_dict, hard_blocked_items)
+
+    async def on_success(rid: str, _debug_summary: dict) -> None:
+        async with async_session_maker() as db2:
+            r = await db2.execute(
+                select(Report).where(Report.run_id == rid, Report.deleted_at.is_(None))
+            )
+            new_report = r.scalar_one_or_none()
+        if not new_report:
+            return
+        await _push_run_sse(rid, "completed", {
+            "report_id": new_report.id,
+            "parent_report_id": parent_report_id,
+            "version": new_report.version,
+            "diff_summary": {
+                "candidates_before": len((parent_report.plan_json or {}).get("balanced", {}).get("volunteers", [])),
+                "candidates_after": len((new_report.plan_json or {}).get("balanced", {}).get("volunteers", [])),
+            },
+        })
+
+    await _run_graph_and_finalize(graph=refine_graph, state=state, run=run, on_success=on_success)
+
+
 class WorkerSettings:
     """ARQ worker configuration. Run: arq app.worker.WorkerSettings"""
 
-    functions = [run_agent]
+    functions = [run_agent, run_refine]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     max_jobs = 10
     job_timeout = 180

@@ -42,6 +42,7 @@ def _score_all_sync(
         compute_major_fit_score,
         compute_cost_risk_score,
         compute_overall_score,
+        get_historical_ranks,
     )
     from app.engine.thresholds import get_province_threshold
     from app.models.admission import AdmissionScore, University
@@ -68,6 +69,9 @@ def _score_all_sync(
             parts = item.split(":", 2)
             if len(parts) == 3:
                 blocked_subject_combos.add((parts[1], parts[2]))
+        elif item.startswith("exclude:"):
+            # 用户在 /refine 里主动排除的院校（见 reports.py 的 patch.exclude_school_ids）
+            blocked_univ_ids.add(item.split(":", 1)[1])
 
     with SyncSessionLocal() as db:
         thresholds = get_province_threshold(db, province)
@@ -137,6 +141,21 @@ def _score_all_sync(
 
             overall = compute_overall_score(adm_score, major_fit, city_score, cost_risk)
 
+            # 匹配置信分：区别于纯录取安全度的 admission_safety_score，混入专业/城市
+            # 适配维度，用于卡片上"排序解释"的独立数字 (docs/backend-prd-v2.md §6.4)。
+            # 权重是产品设定的展示口径，非硬性业务规则，不参与 overall_score 排序计算。
+            matching_confidence = max(
+                0.0, min(100.0, adm_score * 0.6 + major_fit * 0.2 + city_score * 0.2)
+            )
+
+            historical_ranks = get_historical_ranks(
+                university_id=univ_id,
+                province=province,
+                batch=batch,
+                subject_type=subject_type,
+                db=db,
+            )
+
             label_parts = []
             if row.is_985:
                 label_parts.append("985")
@@ -155,10 +174,12 @@ def _score_all_sync(
                 "rank_gap": round(rank_gap, 0),
                 "probability": round(max(0.1, min(0.99, 0.5 + rank_gap / 30000)), 2),
                 "admission_safety_score": round(adm_score, 1),
+                "matching_confidence_score": round(matching_confidence, 1),
                 "overall_score": round(overall, 1),
                 "tuition_per_year": tuition,
                 "subject_requirements": [],
                 "rank_reference": {"province": province, "batch": batch},
+                "historical_ranks": historical_ranks,
                 "recommendation_reasons": [],
                 "risk_items": [],
                 "evidence_ids": [],

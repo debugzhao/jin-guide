@@ -95,6 +95,33 @@ def compute_admission_score(
     return round(score, 2), round(rank_gap, 1), tier
 
 
+def get_historical_ranks(
+    university_id: str,
+    province: str,
+    batch: str,
+    subject_type: str,
+    db: Session,
+    limit: int = 2,
+) -> list[dict]:
+    """
+    近 N 年该院校在该省份/批次/选科类型下的最低投档位次，按年份降序
+    (docs/backend-prd-v2.md §6.4 candidate.historical_ranks，前端并列展示为
+    "2024: 38500  2025: 37200" 之类的历史依据，不是录取概率)。
+    """
+    rows = db.execute(
+        select(AdmissionScore.year, AdmissionScore.min_rank)
+        .where(
+            AdmissionScore.university_id == university_id,
+            AdmissionScore.province == province,
+            AdmissionScore.batch == batch,
+            AdmissionScore.subject_type == subject_type,
+        )
+        .order_by(AdmissionScore.year.desc())
+        .limit(limit)
+    ).all()
+    return [{"year": r.year, "min_rank": r.min_rank} for r in rows if r.min_rank is not None]
+
+
 def compute_major_fit_score(
     preference_majors: list[str],
     rejected_majors: list[str],

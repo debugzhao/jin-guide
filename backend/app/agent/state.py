@@ -46,6 +46,9 @@ class VolunteerPlanState(TypedDict):
     # ── 报告 ──
     report_draft: Optional[dict]
     report_id: Optional[str]
+    # 同一血缘链内的版本号（首版为 1）；/refine 产出的新版本 parent_report_id 指向被 refine 的报告
+    version: int
+    parent_report_id: Optional[str]
 
     # ── 合规自检 ──
     compliance_passed: bool

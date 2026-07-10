@@ -165,6 +165,13 @@ async def stream_run_events(
                             last_id = entry_id
                             event_type = fields.get("event", "message")
                             data = fields.get("data", "{}")
+
+                            # debug: 前缀事件只给 Admin Debug Console（见 admin.py
+                            # /admin/runs/{id}/debug-events），用户侧白名单事件（见
+                            # docs/backend-prd-v2.md §5.7）都不带这个前缀，跳过转发。
+                            if event_type.startswith("debug:"):
+                                continue
+
                             yield f"event: {event_type}\ndata: {data}\n\n"
 
                             # Stop streaming after completed or failed event

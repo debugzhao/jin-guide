@@ -24,7 +24,13 @@ from app.engine.rules import (
 @pytest.fixture(scope="module")
 def db():
     engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
-    Base.metadata.create_all(engine)
+    # 只建这三张测试用到的表：Base.metadata 上还挂着 notifications/agent_runs/reports/
+    # report_conversations 等用了 JSONB 列的表，SQLite 编译器无法渲染 JSONB，
+    # 全量 create_all 会报 CompileError。
+    Base.metadata.create_all(
+        engine,
+        tables=[University.__table__, AdmissionScore.__table__, SubjectRequirement.__table__],
+    )
     with Session(engine) as session:
         # 院校 A：有选科要求、有体检限制、学费 5000
         univ_a = University(

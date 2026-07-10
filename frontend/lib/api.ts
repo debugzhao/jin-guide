@@ -27,6 +27,23 @@ export interface RiskItem {
   message: string
 }
 
+export interface FieldCheckOption {
+  action: string
+  label: string
+}
+
+export interface FieldCheckIssue {
+  rule: string
+  message: string
+  options: FieldCheckOption[]
+}
+
+export interface FieldCheckResult {
+  status: 'ok' | 'needs_clarification'
+  next_fields: string[]
+  issue: FieldCheckIssue | null
+}
+
 export interface RiskPreviewResult {
   overallRisk: 'low' | 'medium' | 'high' | 'unknown'
   riskScore: number
@@ -64,6 +81,25 @@ export const api = {
     return { profileId: res.id }
   },
   getProfile: (id: string) => apiFetch<unknown>(`/api/v1/profile/${id}`),
+  /**
+   * 建档单字段实时校验 (docs/backend-prd-v2.md §5.6)：字段排序/跳过和矛盾检测
+   * 都是确定性结果，不涉及 LLM。命中矛盾时返回 needs_clarification + 结构化选项。
+   */
+  checkProfileField: (params: {
+    profileId?: string
+    field: string
+    value: unknown
+    knownFields: Record<string, unknown>
+  }) =>
+    apiFetch<FieldCheckResult>('/api/v1/profile/field-check', {
+      method: 'POST',
+      body: JSON.stringify({
+        profile_id: params.profileId ?? null,
+        field: params.field,
+        value: params.value,
+        known_fields: params.knownFields,
+      }),
+    }),
   generateReport: async (data: { profileId: string }) => {
     const res = await apiFetch<{ run_id: string; status: string; stream_url: string }>(
       '/api/v1/reports/generate',

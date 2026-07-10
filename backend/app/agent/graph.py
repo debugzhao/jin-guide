@@ -45,11 +45,13 @@ from app.agent.nodes.report_agent import report_agent
 from app.agent.nodes.retrieval_agent import retrieval_agent
 from app.agent.nodes.risk import risk_node
 from app.agent.state import VolunteerPlanState
+from app.agent.user_events import push_user_event
 
 _MAX_REFLECTION_ITERATIONS = 3
 
-# Nodes that run in parallel after data_resolver
-_PARALLEL_NODES = frozenset(["retrieval_agent", "policy_rule_agent"])
+# Nodes that run in parallel after data_resolver（顺序即 SSE agents_parallel_started
+# 事件里 "agents" 字段的顺序，对齐 docs/backend-prd-v2.md §5.7 示例）
+_PARALLEL_NODES = ("retrieval_agent", "policy_rule_agent")
 # Node that merges the parallel branches
 _FAN_IN_NODE = "recommendation"
 
@@ -86,6 +88,17 @@ def _wrap_with_debug(node_name: str, fn: Callable) -> Callable:
                 "node_started",
                 {"node": node_name, "status": "running"},
             )
+            # 两个并行节点同时进图，只从其中一个（约定用列表里的第一个）广播一次
+            # 用户侧的 agents_parallel_started，避免重复推送两条一样的事件。
+            if node_name == _PARALLEL_NODES[0]:
+                await push_user_event(
+                    run_id,
+                    "agents_parallel_started",
+                    {
+                        "agents": list(_PARALLEL_NODES),
+                        "message": "正在同时检索数据和校验规则",
+                    },
+                )
 
         elif node_name == _FAN_IN_NODE:
             await emit_debug_event(
@@ -97,6 +110,14 @@ def _wrap_with_debug(node_name: str, fn: Callable) -> Callable:
                 run_id,
                 "node_started",
                 {"node": node_name, "status": "running"},
+            )
+            await push_user_event(
+                run_id,
+                "agents_parallel_merged",
+                {
+                    "agents": list(_PARALLEL_NODES),
+                    "summary": "证据检索完成，规则校验完成",
+                },
             )
 
         elif node_name == "reflection":
@@ -122,15 +143,30 @@ def _wrap_with_debug(node_name: str, fn: Callable) -> Callable:
 
         # Attach reflection result details
         if node_name == "reflection" and isinstance(result, dict):
-            extra["compliance_passed"] = result.get("compliance_passed", True)
-            extra["reflection_iterations"] = result.get("reflection_iterations", 0)
+            passed = result.get("compliance_passed", True)
+            iteration = result.get("reflection_iterations", 0)
+            extra["compliance_passed"] = passed
+            extra["reflection_iterations"] = iteration
             await emit_debug_event(
                 run_id,
                 "reflection_iteration",
                 {
-                    "iteration": result.get("reflection_iterations", 0),
-                    "passed": result.get("compliance_passed", True),
+                    "iteration": iteration,
+                    "passed": passed,
                     "issues": result.get("compliance_issues", []),
+                },
+            )
+            # 用户侧只传类别化的 issue_category，不传原始违规文本（docs/backend-prd-v2.md
+            # §5.7 隐私约束）。当前 Reflection 只做合规/过度承诺检测，未通过统一归类为
+            # over_promise；evidence_gap 留给未来 check_evidence_coverage 落地后再启用。
+            await push_user_event(
+                run_id,
+                "self_check_round",
+                {
+                    "iteration": iteration,
+                    "max_iterations": _MAX_REFLECTION_ITERATIONS,
+                    "issue_category": "none" if passed else "over_promise",
+                    "status": "passed" if passed else "revising",
                 },
             )
 
@@ -216,5 +252,38 @@ def create_graph():
     return graph.compile()
 
 
-# Module-level compiled graph instance — workers import this directly
+def create_refine_graph():
+    """
+    局部重新生成子图 (docs/backend-prd-v2.md §5.9)：只重跑
+    recommendation → risk → report → reflection，复用调用方在初始 state 里
+    传入的 evidence_list（来自被 refine 报告的 evidence_json），不重新走
+    data_resolver/retrieval_agent/policy_rule_agent。节点函数与主图完全一致，
+    只是入口和跳过的前置节点不同。
+    """
+    graph = StateGraph(VolunteerPlanState)
+
+    graph.add_node("recommendation", _wrap_with_debug("recommendation", recommendation_agent))
+    graph.add_node("risk", _wrap_with_debug("risk", risk_node))
+    graph.add_node("report", _wrap_with_debug("report", report_agent))
+    graph.add_node("reflection", _wrap_with_debug("reflection", reflection_agent))
+
+    graph.set_entry_point("recommendation")
+    graph.add_edge("recommendation", "risk")
+    graph.add_edge("risk", "report")
+    graph.add_edge("report", "reflection")
+
+    graph.add_conditional_edges(
+        "reflection",
+        _route_after_reflection,
+        {
+            "end": END,
+            "report": "report",
+        },
+    )
+
+    return graph.compile()
+
+
+# Module-level compiled graph instances — workers import these directly
 agent_graph = create_graph()
+refine_graph = create_refine_graph()

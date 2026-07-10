@@ -15,11 +15,15 @@ import redis.asyncio as aioredis
 from app.agent.circuit_breaker import get_circuit_breaker
 from app.agent.debug_events import emit_circuit_breaker, emit_degraded, emit_tool_called
 from app.agent.state import VolunteerPlanState
+from app.agent.user_events import push_user_event
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 _NODE_NAME = "retrieval_agent"
+
+# 降级原因 → 用户侧安心文案映射表 (docs/backend-prd-v2.md §5.7 隐私约束：不暴露具体服务名)
+_DEGRADED_NOTICE_MESSAGE = "检索遇到延迟，已切换备用数据源，不影响结果质量"
 
 
 async def _push_sse(run_id: str, event: str, data: dict) -> None:
@@ -32,6 +36,14 @@ async def _push_sse(run_id: str, event: str, data: dict) -> None:
         await redis_client.expire(f"sse:{run_id}", 604800)
     finally:
         await redis_client.aclose()
+
+
+async def _push_degraded_notice(run_id: str) -> None:
+    await push_user_event(
+        run_id,
+        "degraded_notice",
+        {"stage": "retrieval", "message": _DEGRADED_NOTICE_MESSAGE},
+    )
 
 
 def _sql_search_sync(province: str, batch: str, subject_type: str) -> list[dict]:
@@ -146,6 +158,7 @@ async def retrieval_agent(state: VolunteerPlanState) -> dict:
             await emit_circuit_breaker(run_id, _NODE_NAME, "pgvector", state_after.value)
         if v_result.data.get("degraded"):
             await emit_degraded(run_id, _NODE_NAME, "vector_search", "sql_search_only", v_result.text)
+            await _push_degraded_notice(run_id)
 
         if v_result.status in ("SUCCESS", "PARTIAL"):
             chunks = v_result.data.get("chunks", [])
@@ -168,6 +181,7 @@ async def retrieval_agent(state: VolunteerPlanState) -> dict:
                 await emit_circuit_breaker(run_id, _NODE_NAME, "cohere_rerank", breaker_after.value)
             if reranked.data.get("degraded"):
                 await emit_degraded(run_id, _NODE_NAME, "cohere_rerank", "vector_top_n", reranked.text)
+                await _push_degraded_notice(run_id)
 
             for chunk in reranked.data.get("chunks", []):
                 evidence_list.append({
@@ -182,6 +196,7 @@ async def retrieval_agent(state: VolunteerPlanState) -> dict:
     except Exception as exc:
         logger.warning("Vector search skipped in retrieval_agent: %s", exc)
         await emit_degraded(run_id, _NODE_NAME, "vector_search+rerank", "sql_search_only", str(exc))
+        await _push_degraded_notice(run_id)
 
     await _push_sse(run_id, "node_completed", {
         "node": "retrieval_agent",
