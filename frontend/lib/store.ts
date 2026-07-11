@@ -7,16 +7,6 @@ const uuidv4 = () =>
     ? crypto.randomUUID()
     : Math.random().toString(36).slice(2) + Date.now().toString(36)
 
-interface AssessFormData {
-  province?: string
-  batch?: string
-  score?: number
-  rank?: number
-  subjects?: string[]
-  gender?: string
-  hasPhysicalLimits?: boolean
-}
-
 // ── Auth slice ────────────────────────────────────────────────────────────────
 
 export interface CurrentUser {
@@ -38,7 +28,6 @@ interface AuthSlice {
 // ── Chat slice ────────────────────────────────────────────────────────────────
 
 interface ChatSlice {
-  isChatPanelOpen: boolean
   activeReportId: string | null
   messages: ChatMessage[]
   streamingContent: string
@@ -48,8 +37,8 @@ interface ChatSlice {
   /** Last failed user message, kept around so the "重试" button can resend it */
   lastFailedMessage: string | null
 
-  openChatPanel: (reportId: string) => void
-  closeChatPanel: () => void
+  /** 切换到另一份报告的对话时重置消息列表；同一份报告内重复调用是 no-op */
+  setActiveReport: (reportId: string) => void
   /** Initialise or replace messages (e.g. after loading history from API) */
   setChatMessages: (messages: ChatMessage[]) => void
   appendUserMessage: (content: string) => void
@@ -109,10 +98,6 @@ interface AppStore extends ChatSlice, DebugSlice, AuthSlice {
   setProfileId: (id: string) => void
   currentTab: PlanType
   setCurrentTab: (tab: PlanType) => void
-  wizardStep: number
-  setWizardStep: (step: number) => void
-  assessFormData: AssessFormData
-  setAssessFormData: (data: AssessFormData) => void
 }
 
 export const useAppStore = create<AppStore>()(
@@ -123,13 +108,8 @@ export const useAppStore = create<AppStore>()(
       setProfileId: (id) => set({ profileId: id }),
       currentTab: 'balanced',
       setCurrentTab: (tab) => set({ currentTab: tab }),
-      wizardStep: 1,
-      setWizardStep: (step) => set({ wizardStep: step }),
-      assessFormData: {},
-      setAssessFormData: (data) => set({ assessFormData: data }),
 
       // ── chat slice ──
-      isChatPanelOpen: false,
       activeReportId: null,
       messages: [],
       streamingContent: '',
@@ -138,16 +118,12 @@ export const useAppStore = create<AppStore>()(
       dailyLimitMessage: null,
       lastFailedMessage: null,
 
-      openChatPanel: (reportId) => {
+      setActiveReport: (reportId) => {
         const { activeReportId } = get()
-        // Reset messages when switching reports
         if (activeReportId !== reportId) {
           set({ messages: [], streamingContent: '', activeReportId: reportId })
         }
-        set({ isChatPanelOpen: true })
       },
-
-      closeChatPanel: () => set({ isChatPanelOpen: false }),
 
       setChatMessages: (messages) => set({ messages }),
 
@@ -295,8 +271,6 @@ export const useAppStore = create<AppStore>()(
       partialize: (state) => ({
         profileId: state.profileId,
         currentTab: state.currentTab,
-        wizardStep: state.wizardStep,
-        assessFormData: state.assessFormData,
       }),
     }
   )

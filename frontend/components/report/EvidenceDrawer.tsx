@@ -37,10 +37,10 @@ const TYPE_LABELS: Record<string, string> = {
 }
 
 const AUTH_COLORS: Record<string, string> = {
-  official: 'bg-green-100 text-green-700',
-  'semi-official': 'bg-blue-100 text-blue-700',
-  'third-party': 'bg-gray-100 text-gray-600',
-  internal: 'bg-yellow-100 text-yellow-700',
+  official: 'bg-[rgba(143,224,183,0.12)] text-[#8FE0B7]',
+  'semi-official': 'bg-[rgba(169,180,245,0.12)] text-[#A9B4F5]',
+  'third-party': 'bg-white/10 text-[#9CA3C4]',
+  internal: 'bg-[rgba(239,196,138,0.12)] text-[#EFC48A]',
 }
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -66,20 +66,20 @@ function SourceCard({ source }: { source: SourceDetail }) {
   const authColor = AUTH_COLORS[source.authorityLevel ?? ''] ?? 'bg-gray-100 text-gray-600'
 
   return (
-    <div className="border border-gray-200 rounded-xl overflow-hidden">
+    <div className="border border-white/10 rounded-xl overflow-hidden">
       <div className="p-4">
         <div className="flex items-start gap-3">
-          <div className="w-8 h-8 bg-blue-50 rounded-lg flex items-center justify-center shrink-0">
-            <FileText className="w-4 h-4 text-blue-600" />
+          <div className="w-8 h-8 bg-[rgba(167,139,250,0.14)] rounded-lg flex items-center justify-center shrink-0">
+            <FileText className="w-4 h-4 text-[#A78BFA]" />
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-gray-800 leading-snug">{source.title}</p>
+            <p className="text-sm font-semibold text-[#F1F5F9] leading-snug">{source.title}</p>
             <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-              <span className="text-xs text-gray-400">
+              <span className="text-xs text-[#6B7280]">
                 {TYPE_LABELS[source.type] ?? source.type}
               </span>
               {source.year && (
-                <span className="text-xs text-gray-400">{source.year} 年</span>
+                <span className="text-xs text-[#6B7280]">{source.year} 年</span>
               )}
               {source.authorityLevel && (
                 <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${authColor}`}>
@@ -99,7 +99,7 @@ function SourceCard({ source }: { source: SourceDetail }) {
               href={source.sourceUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="shrink-0 text-blue-500 hover:text-blue-600"
+              className="shrink-0 text-[#A78BFA] hover:opacity-80"
             >
               <ExternalLink className="w-4 h-4" />
             </a>
@@ -109,7 +109,7 @@ function SourceCard({ source }: { source: SourceDetail }) {
         {source.chunks.length > 0 && (
           <button
             onClick={() => setExpanded(!expanded)}
-            className="mt-3 flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700"
+            className="mt-3 flex items-center gap-1 text-xs text-[#A78BFA] hover:opacity-80"
           >
             {expanded ? (
               <><ChevronUp className="w-3.5 h-3.5" />收起摘要</>
@@ -121,10 +121,10 @@ function SourceCard({ source }: { source: SourceDetail }) {
       </div>
 
       {expanded && source.chunks.length > 0 && (
-        <div className="border-t border-gray-100 divide-y divide-gray-100">
+        <div className="border-t border-white/10 divide-y divide-white/10">
           {source.chunks.map((chunk) => (
-            <div key={chunk.id} className="px-4 py-3 bg-gray-50">
-              <p className="text-xs text-gray-600 leading-relaxed line-clamp-4">
+            <div key={chunk.id} className="px-4 py-3 bg-white/[0.02]">
+              <p className="text-xs text-[#9CA3C4] leading-relaxed line-clamp-4">
                 {chunk.content}
               </p>
             </div>
@@ -166,20 +166,20 @@ export default function EvidenceDrawer({
       />
 
       {/* Bottom sheet */}
-      <div className="fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-2xl shadow-2xl max-h-[75vh] flex flex-col">
+      <div className="fixed bottom-0 left-0 right-0 z-50 bg-[rgba(10,8,38,0.96)] backdrop-blur border-t border-white/10 rounded-t-2xl shadow-2xl max-h-[75vh] flex flex-col">
         {/* Handle + header */}
-        <div className="flex-shrink-0 px-4 pt-3 pb-4 border-b border-gray-100">
-          <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-3" />
+        <div className="flex-shrink-0 px-4 pt-3 pb-4 border-b border-white/10">
+          <div className="w-10 h-1 bg-white/20 rounded-full mx-auto mb-3" />
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-bold text-gray-900">数据来源</p>
-              <p className="text-xs text-gray-400 mt-0.5">{schoolName}</p>
+              <p className="text-sm font-bold text-[#F1F5F9]">数据来源</p>
+              <p className="text-xs text-[#6B7280] mt-0.5">{schoolName}</p>
             </div>
             <button
               onClick={onClose}
-              className="w-8 h-8 flex items-center justify-center rounded-full bg-gray-100 hover:bg-gray-200 transition-colors"
+              className="w-8 h-8 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/15 transition-colors"
             >
-              <X className="w-4 h-4 text-gray-600" />
+              <X className="w-4 h-4 text-[#9CA3C4]" />
             </button>
           </div>
         </div>
@@ -187,13 +187,13 @@ export default function EvidenceDrawer({
         {/* Content */}
         <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
           {loading && (
-            <div className="py-8 text-center text-sm text-gray-400">加载中...</div>
+            <div className="py-8 text-center text-sm text-[#6B7280]">加载中...</div>
           )}
           {error && (
-            <div className="py-6 text-center text-sm text-red-500">{error}</div>
+            <div className="py-6 text-center text-sm text-[#F2A9A9]">{error}</div>
           )}
           {!loading && !error && sources.length === 0 && evidenceIds.length === 0 && (
-            <div className="py-8 text-center text-sm text-gray-400">该推荐暂无关联证据来源</div>
+            <div className="py-8 text-center text-sm text-[#6B7280]">该推荐暂无关联证据来源</div>
           )}
           {sources.map((s) => (
             <SourceCard key={s.id} source={s} />

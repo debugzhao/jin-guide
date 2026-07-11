@@ -16,7 +16,7 @@ const tabs: { value: PlanType; label: string; desc: string }[] = [
 
 export default function PlanTabs({ currentTab, onChange }: PlanTabsProps) {
   return (
-    <div className="flex bg-[#F8FAFC] rounded-btn p-1 gap-1">
+    <div className="flex wj-glass-card rounded-btn p-1 gap-1">
       {tabs.map((tab) => (
         <button
           key={tab.value}
@@ -25,8 +25,8 @@ export default function PlanTabs({ currentTab, onChange }: PlanTabsProps) {
             'flex-1 py-2 px-2 rounded-[6px] text-sm font-medium transition-colors',
             'flex flex-col items-center gap-0.5',
             currentTab === tab.value
-              ? 'bg-white text-[#1E40AF] shadow-sm'
-              : 'text-[#64748B] hover:text-[#0F172A]'
+              ? 'bg-[rgba(167,139,250,0.14)] text-[#A78BFA]'
+              : 'text-[#9CA3C4] hover:text-[#F1F5F9]'
           )}
         >
           <span>{tab.label}</span>

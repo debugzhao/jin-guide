@@ -15,14 +15,14 @@ interface Props {
 
 export default function ChatSuggestedQuestions({ onSelect }: Props) {
   return (
-    <div className="px-4 py-5 flex flex-col items-center gap-4">
+    <div className="py-5 flex flex-col items-center gap-4">
       <div className="flex flex-col items-center gap-1.5">
-        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600
+        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#A78BFA] to-[#7C6CE8]
           flex items-center justify-center">
           <MessageCircle className="w-5 h-5 text-white" />
         </div>
-        <p className="text-sm font-medium text-gray-800">问问 AI 助手</p>
-        <p className="text-xs text-gray-400 text-center">
+        <p className="text-sm font-medium text-[#F1F5F9]">问问 AI 助手</p>
+        <p className="text-xs text-[#6B7280] text-center">
           基于你的志愿报告，解答你的疑问
         </p>
       </div>
@@ -32,16 +32,16 @@ export default function ChatSuggestedQuestions({ onSelect }: Props) {
           <button
             key={q}
             onClick={() => onSelect(q)}
-            className="w-full text-left px-3.5 py-2.5 rounded-xl border border-gray-200
-              bg-gray-50 hover:bg-blue-50 hover:border-blue-200 text-sm text-gray-700
-              hover:text-blue-700 transition-colors"
+            className="w-full text-left px-3.5 py-2.5 rounded-xl wj-glass-card
+              hover:border-[#A78BFA]/40 text-sm text-[#9CA3C4]
+              hover:text-[#F1F5F9] transition-colors"
           >
             {q}
           </button>
         ))}
       </div>
 
-      <p className="text-[10px] text-gray-400 text-center px-4">
+      <p className="text-[10px] text-[#6B7280] text-center px-4">
         AI 回复仅供参考，不构成录取承诺。最终填报决定请结合实际情况自主判断。
       </p>
     </div>

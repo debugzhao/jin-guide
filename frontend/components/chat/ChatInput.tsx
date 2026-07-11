@@ -46,10 +46,9 @@ export default function ChatInput({
   }
 
   return (
-    <div className="border-t border-gray-100 bg-white px-3 py-2.5">
-      <div className="flex items-end gap-2 bg-gray-50 rounded-xl border border-gray-200
-        focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100
-        transition-all px-3 py-2">
+    <div className="border-t border-white/10 pt-2.5 flex-shrink-0">
+      <div className="flex items-end gap-2 wj-glass-card rounded-xl
+        focus-within:border-[#A78BFA]/50 transition-all px-3 py-2">
         <textarea
           ref={textareaRef}
           value={value}
@@ -60,21 +59,21 @@ export default function ChatInput({
           placeholder={disabled ? '发送中…' : placeholder}
           maxLength={maxLength}
           rows={1}
-          className="flex-1 bg-transparent resize-none text-sm text-gray-800 placeholder-gray-400
+          className="flex-1 bg-transparent resize-none text-sm text-[#F1F5F9] placeholder-[#6B7280]
             outline-none min-h-[20px] max-h-[120px] leading-5 disabled:opacity-50"
         />
         <button
           onClick={handleSend}
           disabled={!canSend}
           className="flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center
-            bg-blue-600 hover:bg-blue-700 disabled:bg-gray-200 transition-colors mb-0.5"
+            bg-[#A78BFA] hover:bg-[#9370F5] disabled:bg-white/10 transition-colors mb-0.5"
           aria-label="发送"
         >
-          <Send className="w-3.5 h-3.5 text-white disabled:text-gray-400" />
+          <Send className="w-3.5 h-3.5 text-white disabled:text-[#6B7280]" />
         </button>
       </div>
       {value.length > maxLength * 0.8 && (
-        <p className="text-[10px] text-gray-400 text-right mt-1 pr-1">
+        <p className="text-[10px] text-[#6B7280] text-right mt-1 pr-1">
           {value.length}/{maxLength}
         </p>
       )}
