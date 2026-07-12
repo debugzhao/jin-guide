@@ -1,10 +1,12 @@
 /**
- * 建档字段 schema：字段 key → 控件类型/文案/选项的映射，供 FieldControl 渲染。
+ * 建档字段 schema：字段 key → 表单控件类型/标签/选项的映射，供
+ * `ProfileCaptureCard` 渲染成一张分组卡片（docs/wenjin-agent-prototype.html
+ * 第 1051-1093 行「基础建档信息」卡片是当前交互事实源：所有必填字段一起
+ * 展示在同一张 `.field-grid` 两列网格卡片里，不是逐条对话气泡）。
  *
- * 字段出场顺序由后端 `POST /profile/field-check` 响应里的 `next_fields` 决定
- * （`backend/app/api/v1/profile.py::_FIELD_ORDER`，纯配置驱动、零 LLM 调用），
- * 这里只镜像同一份顺序作为前端未收到响应前的初始队列，真正的推进节奏以后端
- * 返回值为准（docs/frontend-prd-v2.md §6.1「确定性逻辑与 Agent 边界」）。
+ * 字段跳过逻辑仍然纯本地计算（专科批跳过本科限定字段等），矛盾检测复用
+ * 后端 `POST /profile/field-check`（backend/app/api/v1/profile.py::_FIELD_ORDER），
+ * 只是触发时机从"每填一个字段查一次"改为"点击卡片底部确认按钮时统一查"。
  */
 
 export type FieldControlType =
@@ -23,8 +25,8 @@ export interface FieldOption {
 
 export interface FieldSchemaEntry {
   key: string
-  /** AI 消息气泡文案 */
-  question: string
+  /** 网格卡片里的字段标签 */
+  label: string
   controlType: FieldControlType
   /** 学生基础信息 = 必填；其余 = 建议（docs/frontend-prd-v2.md §6.1 字段清单表） */
   required: boolean
@@ -33,7 +35,7 @@ export interface FieldSchemaEntry {
   helpText?: string
 }
 
-// 与 backend/app/api/v1/profile.py::_FIELD_ORDER 保持一致的初始顺序
+// 与 backend/app/api/v1/profile.py::_FIELD_ORDER 保持一致
 export const PROFILE_FIELD_ORDER = [
   'province',
   'batch',
@@ -49,6 +51,12 @@ export const PROFILE_FIELD_ORDER = [
 ] as const
 
 export type ProfileFieldKey = (typeof PROFILE_FIELD_ORDER)[number]
+
+// 必填字段渲染进「基础建档信息」卡片；建议字段改由底部自然语言输入框补充
+// (docs/wenjin-agent-prototype.html sendConversation()/preferenceFormHtml())
+export const REQUIRED_FIELD_KEYS: ProfileFieldKey[] = [
+  'province', 'batch', 'score', 'rank', 'subjects', 'gender', 'has_physical_limits',
+]
 
 export const PROVINCES = [
   '北京', '上海', '天津', '重庆', '河北', '山西', '辽宁', '吉林', '黑龙江',
@@ -70,7 +78,7 @@ export const MAJOR_GROUPS = [
 export const PROFILE_FIELD_SCHEMA: Record<ProfileFieldKey, FieldSchemaEntry> = {
   province: {
     key: 'province',
-    question: '你在哪个省份参加高考？',
+    label: '省份',
     controlType: 'select',
     required: true,
     options: PROVINCES.map((p) => ({ value: p, label: p })),
@@ -78,7 +86,7 @@ export const PROFILE_FIELD_SCHEMA: Record<ProfileFieldKey, FieldSchemaEntry> = {
   },
   batch: {
     key: 'batch',
-    question: '目标批次是？',
+    label: '批次',
     controlType: 'radio-group',
     required: true,
     options: [
@@ -88,28 +96,28 @@ export const PROFILE_FIELD_SCHEMA: Record<ProfileFieldKey, FieldSchemaEntry> = {
   },
   score: {
     key: 'score',
-    question: '高考分数是多少？',
+    label: '高考分数',
     controlType: 'number-input',
     required: true,
     placeholder: '例：612',
   },
   rank: {
     key: 'rank',
-    question: '知道全省位次吗？',
+    label: '全省位次',
     controlType: 'number-input',
     required: false,
     placeholder: '例：32680',
-    helpText: '选填，但填写后推荐结果会更准确',
+    helpText: '分数和位次至少填一个，同时有位次时优先用位次匹配',
   },
   subjects: {
     key: 'subjects',
-    question: '你的选考科目组合是？',
+    label: '选考科目',
     controlType: 'subject-picker',
     required: true,
   },
   gender: {
     key: 'gender',
-    question: '性别是？',
+    label: '性别',
     controlType: 'radio-group',
     required: true,
     options: [
@@ -120,23 +128,22 @@ export const PROFILE_FIELD_SCHEMA: Record<ProfileFieldKey, FieldSchemaEntry> = {
   },
   has_physical_limits: {
     key: 'has_physical_limits',
-    question: '是否存在体检限制条件（如色觉异常、视力受限等）？',
+    label: '体检限制',
     controlType: 'boolean-with-detail',
     required: true,
     options: MEDICAL_RESTRICTIONS.map((m) => ({ value: m, label: m })),
-    helpText: '会影响部分专业的报考资格，如医学、化学类',
+    helpText: '如色觉异常、视力受限等，会影响部分专业报考资格',
   },
   family_budget: {
     key: 'family_budget',
-    question: '家庭年学费预算上限是多少？',
+    label: '家庭年学费预算',
     controlType: 'number-input',
     required: false,
     placeholder: '例：8000（元/年）',
-    helpText: '建议填写，不填也可以先生成基础版报告',
   },
   risk_style: {
     key: 'risk_style',
-    question: '志愿策略偏好？',
+    label: '志愿策略偏好',
     controlType: 'plan-cards',
     required: false,
     options: [
@@ -147,18 +154,16 @@ export const PROFILE_FIELD_SCHEMA: Record<ProfileFieldKey, FieldSchemaEntry> = {
   },
   city_prefs: {
     key: 'city_prefs',
-    question: '有倾向的城市吗？',
+    label: '倾向城市',
     controlType: 'chip-multiselect',
     required: false,
     options: CITIES.map((c) => ({ value: c, label: c })),
-    helpText: '可多选，不选则不限地域',
   },
   major_prefs: {
     key: 'major_prefs',
-    question: '感兴趣的专业方向？',
+    label: '感兴趣的专业方向',
     controlType: 'chip-multiselect',
     required: false,
     options: MAJOR_GROUPS.map((m) => ({ value: m, label: m })),
-    helpText: '可多选，不选则由 AI 综合评估',
   },
 }

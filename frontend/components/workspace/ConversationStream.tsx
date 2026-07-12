@@ -36,9 +36,12 @@ export default function ConversationStream({ onReportReady }: ConversationStream
   const [profileSummaryLabel, setProfileSummaryLabel] = useState('')
   const [generationError, setGenerationError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [lastAnswers, setLastAnswers] = useState<Record<string, unknown> | null>(null)
 
   const handleProfileReady = async (answers: Record<string, unknown>) => {
     setSubmitting(true)
+    setGenerationError(null)
+    setLastAnswers(answers)
     setProfileSummaryLabel(buildProfileSummaryLabel(answers))
 
     const payload = {
@@ -84,14 +87,12 @@ export default function ConversationStream({ onReportReady }: ConversationStream
   }, [])
 
   const handleRetry = () => {
-    setGenerationError(null)
-    setStage('profile')
-    setRunId(null)
+    if (lastAnswers) handleProfileReady(lastAnswers)
   }
 
   return (
     <div className="space-y-4">
-      {stage === 'profile' && <ProfileChatFlow onReady={handleProfileReady} submitting={submitting} />}
+      <ProfileChatFlow onReady={handleProfileReady} submitting={submitting} />
 
       {stage !== 'profile' && runId && (
         <InlineGenerationCard
