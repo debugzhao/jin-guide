@@ -119,26 +119,26 @@ export default function ChatColumn({ reportId }: Props) {
 
   return (
     <div className="flex flex-col">
-      <div className="flex items-center justify-between pb-3 border-b border-white/10">
+      <div className="flex items-center justify-between pb-3 border-b border-[#E2E8F0]">
         <div>
-          <p className="text-sm font-semibold text-[#F1F5F9]">问津助手</p>
-          <p className="text-[10px] text-[#6B7280]">基于你的志愿报告解答问题</p>
+          <p className="text-sm font-semibold text-[#0F172A]">问津助手</p>
+          <p className="text-[10px] text-[#94A3B8]">基于你的志愿报告解答问题</p>
         </div>
         {messages.length > 0 && (
           confirmingClear ? (
             <div className="flex items-center gap-1.5">
-              <span className="text-[11px] text-[#9CA3C4]">确定清除？</span>
-              <button onClick={() => setConfirmingClear(false)} className="text-[11px] text-[#6B7280] hover:text-[#9CA3C4] px-1">
+              <span className="text-[11px] text-[#64748B]">确定清除？</span>
+              <button onClick={() => setConfirmingClear(false)} className="text-[11px] text-[#94A3B8] hover:text-[#64748B] px-1">
                 取消
               </button>
-              <button onClick={handleClearChat} className="text-[11px] text-[#F2A9A9] hover:opacity-80 font-medium px-1">
+              <button onClick={handleClearChat} className="text-[11px] text-[#DC2626] hover:opacity-80 font-medium px-1">
                 确定
               </button>
             </div>
           ) : (
             <button
               onClick={handleClearChat}
-              className="flex items-center gap-1 px-1.5 py-1 rounded-btn text-[#6B7280] hover:text-[#F2A9A9] transition-colors"
+              className="flex items-center gap-1 px-1.5 py-1 rounded-btn text-[#94A3B8] hover:text-[#DC2626] transition-colors"
               aria-label="清除对话"
             >
               <Trash2 className="w-3.5 h-3.5" />
@@ -154,7 +154,7 @@ export default function ChatColumn({ reportId }: Props) {
         ) : (
           <>
             {messages.length > HISTORY_WARNING_THRESHOLD && (
-              <p className="text-center text-[11px] text-[#6B7280] py-1">
+              <p className="text-center text-[11px] text-[#94A3B8] py-1">
                 对话较长，建议清除后重新提问以保持上下文准确
               </p>
             )}
@@ -166,9 +166,9 @@ export default function ChatColumn({ reportId }: Props) {
         )}
 
         {lastFailedMessage && !isStreaming && (
-          <div className="flex items-center justify-between gap-2 px-3 py-2.5 rounded-btn bg-[rgba(242,169,169,0.12)] border border-[rgba(242,169,169,0.32)]">
-            <p className="text-xs text-[#F2A9A9]">连接中断，消息未发送成功</p>
-            <button onClick={handleRetry} className="flex items-center gap-1 text-xs text-[#F2A9A9] font-medium flex-shrink-0">
+          <div className="flex items-center justify-between gap-2 px-3 py-2.5 rounded-btn bg-[#FEF2F2] border border-[#FECACA]">
+            <p className="text-xs text-[#DC2626]">连接中断，消息未发送成功</p>
+            <button onClick={handleRetry} className="flex items-center gap-1 text-xs text-[#DC2626] font-medium flex-shrink-0">
               <RefreshCw className="w-3 h-3" />
               重试
             </button>
@@ -176,9 +176,9 @@ export default function ChatColumn({ reportId }: Props) {
         )}
 
         {dailyLimitReached && (
-          <div className="flex items-center gap-2 px-3 py-2.5 rounded-btn bg-[rgba(239,196,138,0.12)] border border-[rgba(239,196,138,0.32)]">
-            <AlertCircle className="w-4 h-4 text-[#EFC48A] flex-shrink-0" />
-            <p className="text-xs text-[#EFC48A]">
+          <div className="flex items-center gap-2 px-3 py-2.5 rounded-btn bg-[#FFFBEB] border border-[#FDE68A]">
+            <AlertCircle className="w-4 h-4 text-[#D97706] flex-shrink-0" />
+            <p className="text-xs text-[#D97706]">
               {dailyLimitMessage || '今日问答次数已达上限，明日 0 点重置'}
             </p>
           </div>
@@ -189,7 +189,7 @@ export default function ChatColumn({ reportId }: Props) {
 
       {!dailyLimitReached && <ChatInput onSend={handleSend} disabled={isStreaming} />}
 
-      <p className="text-[10px] text-[#6B7280] text-center pt-2 flex-shrink-0">
+      <p className="text-[10px] text-[#94A3B8] text-center pt-2 flex-shrink-0">
         以上分析基于报告数据，最终填报请以省级考试院为准
       </p>
     </div>

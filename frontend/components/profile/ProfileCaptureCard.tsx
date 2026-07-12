@@ -18,22 +18,22 @@ interface ProfileCaptureCardProps {
 }
 
 const inputClass =
-  'wj-glass-card w-full rounded-lg px-3 py-2 text-sm text-[#F1F5F9] placeholder:text-[#6B7280] focus:outline-none focus:ring-2 focus:ring-[#A78BFA]/40'
+  'wj-glass-card w-full rounded-lg px-3 py-2 text-sm text-[#0F172A] placeholder:text-[#94A3B8] focus:outline-none focus:ring-2 focus:ring-[#1E40AF]/40'
 
 const chipClass = (active: boolean) =>
   cn(
     'px-2.5 py-1 rounded-tag text-xs border transition-colors',
     active
-      ? 'border-[#A78BFA] bg-[rgba(167,139,250,0.14)] text-[#A78BFA]'
-      : 'border-white/10 text-[#9CA3C4] hover:border-white/20'
+      ? 'border-[#1E40AF] bg-[#EFF6FF] text-[#1E40AF]'
+      : 'border-[#E2E8F0] text-[#64748B] hover:border-[#CBD5E1]'
   )
 
 const pillClass = (active: boolean) =>
   cn(
     'flex-1 px-3 py-2 rounded-lg text-sm border text-center transition-colors',
     active
-      ? 'border-[#A78BFA] bg-[rgba(167,139,250,0.14)] text-[#A78BFA]'
-      : 'border-white/10 text-[#9CA3C4] hover:border-white/20'
+      ? 'border-[#1E40AF] bg-[#EFF6FF] text-[#1E40AF]'
+      : 'border-[#E2E8F0] text-[#64748B] hover:border-[#CBD5E1]'
   )
 
 /**
@@ -121,21 +121,21 @@ export default function ProfileCaptureCard({ profileId, onSubmit, submitting }: 
 
   return (
     <div className="wj-glass-card rounded-2xl rounded-tl-sm px-4 py-3 max-w-[96%] space-y-3">
-      <div className="text-xs text-[#9CA3C4]">问津助手</div>
-      <p className="text-sm text-[#F1F5F9]">
+      <div className="text-xs text-[#64748B]">问津助手</div>
+      <p className="text-sm text-[#0F172A]">
         先填写生成志愿报告必须依赖的基础信息。这里不完整时，我只能做快速答疑，不能渲染右侧报告。
       </p>
 
-      <div className="bg-white/[0.03] border border-white/10 rounded-lg p-3.5 space-y-3">
+      <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg p-3.5 space-y-3">
         <div className="flex items-center justify-between gap-2">
-          <strong className="text-sm text-[#F1F5F9]">基础建档信息</strong>
-          <span className="text-xs px-2 py-0.5 rounded-tag bg-[rgba(242,169,169,0.12)] text-[#F2A9A9] border border-[rgba(242,169,169,0.32)]">
+          <strong className="text-sm text-[#0F172A]">基础建档信息</strong>
+          <span className="text-xs px-2 py-0.5 rounded-tag bg-[#FEF2F2] text-[#DC2626] border border-[#FECACA]">
             必填
           </span>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <label className="flex flex-col gap-1.5 text-xs text-[#9CA3C4]">
+          <label className="flex flex-col gap-1.5 text-xs text-[#64748B]">
             {PROFILE_FIELD_SCHEMA.province.label}
             <select
               className={inputClass}
@@ -144,12 +144,12 @@ export default function ProfileCaptureCard({ profileId, onSubmit, submitting }: 
             >
               <option value="" disabled>请选择省份</option>
               {PROFILE_FIELD_SCHEMA.province.options?.map((o) => (
-                <option key={o.value} value={o.value} className="bg-[#0A0826] text-[#F1F5F9]">{o.label}</option>
+                <option key={o.value} value={o.value} className="bg-white text-[#0F172A]">{o.label}</option>
               ))}
             </select>
           </label>
 
-          <div className="flex flex-col gap-1.5 text-xs text-[#9CA3C4]">
+          <div className="flex flex-col gap-1.5 text-xs text-[#64748B]">
             {PROFILE_FIELD_SCHEMA.batch.label}
             <div className="flex gap-2">
               {PROFILE_FIELD_SCHEMA.batch.options?.map((o) => (
@@ -160,7 +160,7 @@ export default function ProfileCaptureCard({ profileId, onSubmit, submitting }: 
             </div>
           </div>
 
-          <label className="flex flex-col gap-1.5 text-xs text-[#9CA3C4]">
+          <label className="flex flex-col gap-1.5 text-xs text-[#64748B]">
             {PROFILE_FIELD_SCHEMA.score.label}
             <input
               type="number"
@@ -171,7 +171,7 @@ export default function ProfileCaptureCard({ profileId, onSubmit, submitting }: 
             />
           </label>
 
-          <label className="flex flex-col gap-1.5 text-xs text-[#9CA3C4]">
+          <label className="flex flex-col gap-1.5 text-xs text-[#64748B]">
             {PROFILE_FIELD_SCHEMA.rank.label}
             <input
               type="number"
@@ -182,7 +182,7 @@ export default function ProfileCaptureCard({ profileId, onSubmit, submitting }: 
             />
           </label>
 
-          <div className="md:col-span-2 flex flex-col gap-1.5 text-xs text-[#9CA3C4]">
+          <div className="md:col-span-2 flex flex-col gap-1.5 text-xs text-[#64748B]">
             {PROFILE_FIELD_SCHEMA.subjects.label}
             <div className="flex gap-2">
               {(['物理', '历史'] as const).map((s) => (
@@ -205,7 +205,7 @@ export default function ProfileCaptureCard({ profileId, onSubmit, submitting }: 
             </div>
           </div>
 
-          <div className="flex flex-col gap-1.5 text-xs text-[#9CA3C4]">
+          <div className="flex flex-col gap-1.5 text-xs text-[#64748B]">
             {PROFILE_FIELD_SCHEMA.gender.label}
             <div className="flex gap-2">
               {PROFILE_FIELD_SCHEMA.gender.options?.map((o) => (
@@ -216,9 +216,9 @@ export default function ProfileCaptureCard({ profileId, onSubmit, submitting }: 
             </div>
           </div>
 
-          <div className="md:col-span-2 flex flex-col gap-1.5 text-xs text-[#9CA3C4]">
+          <div className="md:col-span-2 flex flex-col gap-1.5 text-xs text-[#64748B]">
             {PROFILE_FIELD_SCHEMA.has_physical_limits.label}
-            <p className="text-[11px] text-[#6B7280]">{PROFILE_FIELD_SCHEMA.has_physical_limits.helpText}</p>
+            <p className="text-[11px] text-[#94A3B8]">{PROFILE_FIELD_SCHEMA.has_physical_limits.helpText}</p>
             <div className="flex gap-2">
               <button type="button" className={pillClass(hasMedicalLimit === false)} onClick={() => { setHasMedicalLimit(false); setMedicalDetails([]) }}>
                 无限制
@@ -244,7 +244,7 @@ export default function ProfileCaptureCard({ profileId, onSubmit, submitting }: 
           </div>
         </div>
 
-        <p className="text-xs text-[#6B7280]">分数和位次至少填一个；同时填写时，匹配会优先使用位次。</p>
+        <p className="text-xs text-[#94A3B8]">分数和位次至少填一个；同时填写时，匹配会优先使用位次。</p>
 
         <Button className="w-full" onClick={handleSubmit} disabled={!requiredFilled || checking || submitting}>
           {checking ? '校验中...' : submitting ? '生成中...' : '确认基础信息并渲染报告'}

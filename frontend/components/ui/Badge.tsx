@@ -8,14 +8,14 @@ interface BadgeProps {
 }
 
 const variantStyles: Record<BadgeVariant, string> = {
-  rush: 'bg-[rgba(239,196,138,0.12)] text-[#EFC48A] border border-[rgba(239,196,138,0.32)]',
-  target: 'bg-[rgba(169,180,245,0.12)] text-[#A9B4F5] border border-[rgba(169,180,245,0.32)]',
-  safe: 'bg-[rgba(143,224,183,0.12)] text-[#8FE0B7] border border-[rgba(143,224,183,0.32)]',
-  high_rush: 'bg-[rgba(242,169,169,0.12)] text-[#F2A9A9] border border-[rgba(242,169,169,0.32)]',
-  high: 'bg-[rgba(242,169,169,0.12)] text-[#F2A9A9] border border-[rgba(242,169,169,0.32)]',
-  medium: 'bg-[rgba(239,196,138,0.12)] text-[#EFC48A] border border-[rgba(239,196,138,0.32)]',
-  low: 'bg-[rgba(143,224,183,0.12)] text-[#8FE0B7] border border-[rgba(143,224,183,0.32)]',
-  info: 'bg-[rgba(169,180,245,0.12)] text-[#A9B4F5] border border-[rgba(169,180,245,0.32)]',
+  rush: 'bg-[#FFFBEB] text-[#D97706] border border-[#FDE68A]',
+  target: 'bg-[#EFF6FF] text-[#2563EB] border border-[#BFDBFE]',
+  safe: 'bg-[#F0FDF4] text-[#16A34A] border border-[#BBF7D0]',
+  high_rush: 'bg-[#FEF2F2] text-[#DC2626] border border-[#FECACA]',
+  high: 'bg-[#FEF2F2] text-[#DC2626] border border-[#FECACA]',
+  medium: 'bg-[#FFFBEB] text-[#D97706] border border-[#FDE68A]',
+  low: 'bg-[#F0FDF4] text-[#16A34A] border border-[#BBF7D0]',
+  info: 'bg-[#EFF6FF] text-[#2563EB] border border-[#BFDBFE]',
 }
 
 export default function Badge({ variant, children, className }: BadgeProps) {

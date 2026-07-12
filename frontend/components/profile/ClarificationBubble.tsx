@@ -16,10 +16,10 @@ interface Props {
  */
 export default function ClarificationBubble({ issue, onAction }: Props) {
   return (
-    <div className="wj-glass-card rounded-2xl rounded-tl-sm px-4 py-3 max-w-[85%] border-[rgba(242,169,169,0.32)]">
+    <div className="wj-glass-card rounded-2xl rounded-tl-sm px-4 py-3 max-w-[85%] border-[#FECACA]">
       <div className="flex items-start gap-2">
-        <AlertTriangle className="w-4 h-4 text-[#F2A9A9] flex-shrink-0 mt-0.5" />
-        <p className="text-sm text-[#F1F5F9] leading-relaxed">{issue.message}</p>
+        <AlertTriangle className="w-4 h-4 text-[#DC2626] flex-shrink-0 mt-0.5" />
+        <p className="text-sm text-[#0F172A] leading-relaxed">{issue.message}</p>
       </div>
       <div className="flex gap-2 mt-3">
         {issue.options.map((opt) => (

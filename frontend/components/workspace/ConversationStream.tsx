@@ -104,14 +104,14 @@ export default function ConversationStream({ onReportReady }: ConversationStream
       )}
 
       {generationError && stage === 'generating' && (
-        <div className="wj-glass-card rounded-card px-4 py-3 border-[rgba(242,169,169,0.32)] space-y-2">
-          <p className="text-sm text-[#F2A9A9]">{generationError}</p>
+        <div className="wj-glass-card rounded-card px-4 py-3 border-[#FECACA] space-y-2">
+          <p className="text-sm text-[#DC2626]">{generationError}</p>
           <Button size="sm" variant="outline" onClick={handleRetry}>返回修改</Button>
         </div>
       )}
 
       {stage === 'chat' && reportId && (
-        <div className="pt-2 border-t border-white/10">
+        <div className="pt-2 border-t border-[#E2E8F0]">
           <ChatColumn reportId={reportId} />
         </div>
       )}

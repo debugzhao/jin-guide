@@ -13,9 +13,9 @@ export default function ConditionCommentaryCard({ commentary }: Props) {
   if (!commentary) return null
 
   return (
-    <div className="wj-glass-card rounded-card px-4 py-3 flex items-start gap-2.5">
-      <Sparkles className="w-4 h-4 text-[#A78BFA] flex-shrink-0 mt-0.5" />
-      <p className="text-sm text-[#F1F5F9] leading-relaxed">{commentary}</p>
+    <div className="bg-[#EFF6FF] border border-[#BFDBFE] rounded-card px-4 py-3 flex items-start gap-2.5">
+      <Sparkles className="w-4 h-4 text-[#1E40AF] flex-shrink-0 mt-0.5" />
+      <p className="text-sm text-[#0F172A] leading-relaxed">{commentary}</p>
     </div>
   )
 }

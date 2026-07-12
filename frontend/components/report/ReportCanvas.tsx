@@ -32,7 +32,7 @@ export default function ReportCanvas({ report }: ReportCanvasProps) {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3 text-xs text-[#9CA3C4] flex-wrap">
+      <div className="flex items-center gap-3 text-xs text-[#64748B] flex-wrap">
         {report.province && <span>{report.province} · {report.score} 分</span>}
         {report.rank && <span>全省第 {report.rank.toLocaleString('zh-CN')} 名</span>}
         {report.subjects && <span>{report.subjects.join('/')} 选科</span>}
@@ -46,7 +46,7 @@ export default function ReportCanvas({ report }: ReportCanvasProps) {
       <DecisionReplayCard runSummary={report.runSummary} />
 
       <PlanTabs currentTab={activeTab} onChange={setCurrentTab} />
-      <div className="text-xs text-[#9CA3C4] px-1">{PLAN_DESC[activeTab] || ''}</div>
+      <div className="text-xs text-[#64748B] px-1">{PLAN_DESC[activeTab] || ''}</div>
 
       {candidates.length > 0 ? (
         <div className="space-y-3">
@@ -55,7 +55,7 @@ export default function ReportCanvas({ report }: ReportCanvasProps) {
           ))}
         </div>
       ) : (
-        <div className="py-10 text-center text-sm text-[#6B7280]">暂无候选院校数据</div>
+        <div className="py-10 text-center text-sm text-[#94A3B8]">暂无候选院校数据</div>
       )}
     </div>
   )

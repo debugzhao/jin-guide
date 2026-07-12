@@ -35,7 +35,7 @@ export default function ReportWorkspacePage() {
         showBack
         onBack={() => router.push('/reports')}
         rightSlot={
-          <button onClick={handleShare} className="p-2 rounded-btn text-[#9CA3C4] hover:text-[#F1F5F9] hover:bg-white/5">
+          <button onClick={handleShare} className="p-2 rounded-btn text-[#64748B] hover:text-[#0F172A] hover:bg-[#F1F5F9]">
             <Share2 className="w-4.5 h-4.5" />
           </button>
         }

@@ -9,42 +9,42 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // LiteLLM 式深紫黑克制风格 (docs/frontend-prd-v2.md §3.2, docs/frontend-style.md)
+        // 纯白背景 + 克制配色，对齐 docs/wenjin-agent-prototype.html 的 :root 变量
         brand: {
-          primary: '#A78BFA',
-          secondary: '#2DD4BF',
+          primary: '#1E40AF',
+          secondary: '#0D9488',
         },
-        // 背景与层次：基色 + 装饰光晕 + 玻璃卡片
+        // 背景与层次：纯白页面 + 白色卡片
         surface: {
-          base: '#040128',
-          glow: 'rgba(139, 124, 246, 0.12)',
-          card: 'rgba(255, 255, 255, 0.04)',
-          'card-border': 'rgba(255, 255, 255, 0.10)',
-          overlay: 'rgba(10, 8, 38, 0.92)',
+          base: '#FFFFFF',
+          glow: 'rgba(30, 64, 175, 0.06)',
+          card: '#FFFFFF',
+          'card-border': '#E2E8F0',
+          overlay: 'rgba(15, 23, 42, 0.45)',
         },
-        // 风险等级色：保留红/橙/绿/蓝语义色相，降低饱和度+半透明背景以适配深色底
+        // 风险等级色：红/橙/绿/蓝语义色相，浅色背景下用饱和文字色 + 极浅背景
         risk: {
-          high: '#F2A9A9',
-          'high-bg': 'rgba(242, 169, 169, 0.12)',
-          'high-border': 'rgba(242, 169, 169, 0.32)',
-          medium: '#EFC48A',
-          'medium-bg': 'rgba(239, 196, 138, 0.12)',
-          'medium-border': 'rgba(239, 196, 138, 0.32)',
-          low: '#8FE0B7',
-          'low-bg': 'rgba(143, 224, 183, 0.12)',
-          'low-border': 'rgba(143, 224, 183, 0.32)',
-          info: '#A9B4F5',
-          'info-bg': 'rgba(169, 180, 245, 0.12)',
-          'info-border': 'rgba(169, 180, 245, 0.32)',
+          high: '#DC2626',
+          'high-bg': '#FEF2F2',
+          'high-border': '#FECACA',
+          medium: '#D97706',
+          'medium-bg': '#FFFBEB',
+          'medium-border': '#FDE68A',
+          low: '#16A34A',
+          'low-bg': '#F0FDF4',
+          'low-border': '#BBF7D0',
+          info: '#2563EB',
+          'info-bg': '#EFF6FF',
+          'info-border': '#BFDBFE',
         },
-        // 中性色：深底浅字（与浅色主题相反）
+        // 中性色：白底深字
         neutral: {
-          page: '#040128',
-          card: 'rgba(255, 255, 255, 0.04)',
-          'text-primary': '#F1F5F9',
-          'text-secondary': '#9CA3C4',
-          placeholder: '#6B7280',
-          border: 'rgba(255, 255, 255, 0.10)',
+          page: '#FFFFFF',
+          card: '#FFFFFF',
+          'text-primary': '#0F172A',
+          'text-secondary': '#64748B',
+          placeholder: '#94A3B8',
+          border: '#E2E8F0',
         },
       },
       fontFamily: {
@@ -57,7 +57,7 @@ const config: Config = {
         bubble: '16px',
       },
       boxShadow: {
-        card: '0 8px 24px rgba(0, 0, 0, 0.35)',
+        card: '0 1px 3px rgba(15, 23, 42, 0.08)',
       },
     },
   },

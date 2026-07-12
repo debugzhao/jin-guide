@@ -39,17 +39,17 @@ export default function HomePage() {
 
   return (
     <div className="h-screen flex flex-col overflow-hidden">
-      <header className="sticky top-0 z-30 bg-[#040128]/90 backdrop-blur border-b border-white/10 px-4 py-3 flex-shrink-0">
+      <header className="sticky top-0 z-30 bg-white/90 backdrop-blur border-b border-[#E2E8F0] px-4 py-3 flex-shrink-0">
         <div className="max-w-screen-xl mx-auto flex items-center justify-between">
           <div>
-            <h1 className="text-lg font-bold text-[#F1F5F9]">问津 <span className="text-[#A78BFA]">Agent</span></h1>
-            <p className="text-xs text-[#9CA3C4] mt-0.5">AI 志愿决策助理，全程陪你完成建档到报告</p>
+            <h1 className="text-lg font-bold text-[#0F172A]">问津 <span className="text-[#1E40AF]">Agent</span></h1>
+            <p className="text-xs text-[#64748B] mt-0.5">AI 志愿决策助理，全程陪你完成建档到报告</p>
           </div>
           <div className="flex items-center gap-2">
             {reportId && (
               <button
                 onClick={() => router.push('/reports')}
-                className="text-xs text-[#9CA3C4] hover:text-[#F1F5F9] px-2 py-1"
+                className="text-xs text-[#64748B] hover:text-[#0F172A] px-2 py-1"
               >
                 历史报告
               </button>

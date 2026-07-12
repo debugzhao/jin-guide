@@ -129,9 +129,9 @@ function deriveTimeline(events: AgentRunTimelineEvent[]): Derived {
 }
 
 function StepIcon({ status }: { status: StepStatus }) {
-  if (status === 'completed') return <CheckCircle2 className="w-4 h-4 text-[#8FE0B7]" />
-  if (status === 'running') return <Loader2 className="w-4 h-4 text-[#A78BFA] animate-spin" />
-  return <span className="w-4 h-4 rounded-full border border-white/20 inline-block" />
+  if (status === 'completed') return <CheckCircle2 className="w-4 h-4 text-[#16A34A]" />
+  if (status === 'running') return <Loader2 className="w-4 h-4 text-[#1E40AF] animate-spin" />
+  return <span className="w-4 h-4 rounded-full border border-[#CBD5E1] inline-block" />
 }
 
 interface InlineGenerationCardProps {
@@ -183,16 +183,16 @@ export default function InlineGenerationCard({
   return (
     <div className="wj-glass-card rounded-card px-4 py-3 space-y-2 max-w-[90%]">
       <div className="flex items-start gap-2">
-        <Bot className="w-4 h-4 text-[#A78BFA] flex-shrink-0 mt-0.5" />
+        <Bot className="w-4 h-4 text-[#1E40AF] flex-shrink-0 mt-0.5" />
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-[#F1F5F9]">方案生成过程</p>
+          <p className="text-sm font-medium text-[#0F172A]">方案生成过程</p>
           {profileSummaryLabel && (
-            <p className="text-xs text-[#9CA3C4] mt-0.5">{profileSummaryLabel}</p>
+            <p className="text-xs text-[#64748B] mt-0.5">{profileSummaryLabel}</p>
           )}
         </div>
         <button
           onClick={() => setExpanded((v) => !v)}
-          className="text-[#9CA3C4] hover:text-[#F1F5F9] flex-shrink-0"
+          className="text-[#64748B] hover:text-[#0F172A] flex-shrink-0"
           aria-label={expanded ? '收起时间线' : '展开时间线'}
         >
           {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
@@ -202,13 +202,13 @@ export default function InlineGenerationCard({
       {!expanded && (
         <div className="flex items-center gap-2 pl-6">
           {status === 'failed' ? (
-            <XCircle className="w-4 h-4 text-[#F2A9A9]" />
+            <XCircle className="w-4 h-4 text-[#DC2626]" />
           ) : status === 'completed' ? (
-            <CheckCircle2 className="w-4 h-4 text-[#8FE0B7]" />
+            <CheckCircle2 className="w-4 h-4 text-[#16A34A]" />
           ) : (
-            <Loader2 className="w-4 h-4 text-[#A78BFA] animate-spin" />
+            <Loader2 className="w-4 h-4 text-[#1E40AF] animate-spin" />
           )}
-          <p className="text-sm text-[#F1F5F9]">{summaryText}</p>
+          <p className="text-sm text-[#0F172A]">{summaryText}</p>
         </div>
       )}
 
@@ -216,48 +216,48 @@ export default function InlineGenerationCard({
         <div className="pl-6 space-y-2 text-sm">
           <div className="flex items-center gap-2">
             <StepIcon status={derived.dataResolver} />
-            <span className="text-[#F1F5F9]">档案检查 / 数据版本锁定</span>
+            <span className="text-[#0F172A]">档案检查 / 数据版本锁定</span>
           </div>
 
-          <div className="rounded-btn bg-white/[0.03] border border-[rgba(167,139,250,0.35)] px-3 py-2 space-y-1">
+          <div className="rounded-btn bg-[#F8FAFC] border border-[#BFDBFE] px-3 py-2 space-y-1">
             <div className="flex items-center gap-2">
               <StepIcon status={derived.parallel} />
-              <span className="text-[#F1F5F9]">正在并行处理：检索招生数据 + 校验选科/体检/批次规则</span>
+              <span className="text-[#0F172A]">正在并行处理：检索招生数据 + 校验选科/体检/批次规则</span>
             </div>
             {derived.parallelDetails.map((msg, i) => (
-              <p key={i} className="text-xs text-[#9CA3C4] pl-6">→ {msg}</p>
+              <p key={i} className="text-xs text-[#64748B] pl-6">→ {msg}</p>
             ))}
           </div>
 
           {derived.degradedNotices.map((msg, i) => (
-            <p key={i} className="text-xs text-[#A9B4F5] pl-6">ℹ️ {msg}</p>
+            <p key={i} className="text-xs text-[#2563EB] pl-6">ℹ️ {msg}</p>
           ))}
 
           <div className="flex items-center gap-2">
             <StepIcon status={derived.recommendation} />
-            <span className="text-[#F1F5F9]">生成候选方案 {derived.candidatesSummary ?? ''}</span>
+            <span className="text-[#0F172A]">生成候选方案 {derived.candidatesSummary ?? ''}</span>
           </div>
 
           <div className="flex items-start gap-2">
             <StepIcon status={derived.risk} />
             <div>
-              <span className="text-[#F1F5F9]">志愿梯度体检</span>
+              <span className="text-[#0F172A]">志愿梯度体检</span>
               {derived.riskSummary.map((msg, i) => (
-                <p key={i} className="text-xs text-[#EFC48A] mt-0.5">{msg}</p>
+                <p key={i} className="text-xs text-[#D97706] mt-0.5">{msg}</p>
               ))}
             </div>
           </div>
 
           <div className="flex items-center gap-2">
             <StepIcon status={derived.report} />
-            <span className="text-[#F1F5F9]">生成报告初稿</span>
+            <span className="text-[#0F172A]">生成报告初稿</span>
           </div>
 
           {derived.reflectionRounds.length > 0 && (
-            <div className="rounded-btn bg-white/[0.03] border border-[rgba(167,139,250,0.35)] px-3 py-2 space-y-1">
-              <p className="text-[#F1F5F9]">AI 正在自我检查</p>
+            <div className="rounded-btn bg-[#F8FAFC] border border-[#BFDBFE] px-3 py-2 space-y-1">
+              <p className="text-[#0F172A]">AI 正在自我检查</p>
               {derived.reflectionRounds.map((r) => (
-                <p key={r.iteration} className="text-xs text-[#9CA3C4]">
+                <p key={r.iteration} className="text-xs text-[#64748B]">
                   第 {r.iteration} 轮：{ISSUE_CATEGORY_LABEL[r.issueCategory] ?? r.issueCategory}
                   {r.status === 'passed' ? ' ✓' : ' → 正在修正...'}
                 </p>
@@ -267,7 +267,7 @@ export default function InlineGenerationCard({
 
           <div className="flex items-center gap-2">
             <StepIcon status={status === 'completed' ? 'completed' : 'pending'} />
-            <span className="text-[#F1F5F9]">
+            <span className="text-[#0F172A]">
               {status === 'failed' ? '生成失败' : status === 'completed' ? '报告已生成' : '报告交付'}
             </span>
           </div>

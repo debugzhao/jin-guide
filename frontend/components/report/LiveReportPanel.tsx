@@ -40,9 +40,9 @@ export default function LiveReportPanel({ reportId }: LiveReportPanelProps) {
   if (!reportId) {
     return (
       <div className="wj-glass-card rounded-card px-6 py-12 flex flex-col items-center justify-center gap-3 text-center">
-        <FileClock className="w-8 h-8 text-[#6B7280]" />
-        <p className="text-sm text-[#9CA3C4]">等待基础建档信息</p>
-        <p className="text-xs text-[#6B7280]">完成左侧必填信息后，这里会实时渲染报告</p>
+        <FileClock className="w-8 h-8 text-[#94A3B8]" />
+        <p className="text-sm text-[#64748B]">等待基础建档信息</p>
+        <p className="text-xs text-[#94A3B8]">完成左侧必填信息后，这里会实时渲染报告</p>
       </div>
     )
   }
@@ -50,8 +50,8 @@ export default function LiveReportPanel({ reportId }: LiveReportPanelProps) {
   if (loading && !report) {
     return (
       <div className="wj-glass-card rounded-card px-6 py-12 flex flex-col items-center justify-center gap-3">
-        <RefreshCw className="w-6 h-6 text-[#A78BFA] animate-spin" />
-        <p className="text-sm text-[#9CA3C4]">报告加载中...</p>
+        <RefreshCw className="w-6 h-6 text-[#1E40AF] animate-spin" />
+        <p className="text-sm text-[#64748B]">报告加载中...</p>
       </div>
     )
   }
@@ -59,8 +59,8 @@ export default function LiveReportPanel({ reportId }: LiveReportPanelProps) {
   if (error || !report) {
     return (
       <div className="wj-glass-card rounded-card px-6 py-12 flex flex-col items-center justify-center gap-3">
-        <AlertCircle className="w-6 h-6 text-[#F2A9A9]" />
-        <p className="text-sm text-[#9CA3C4]">{error || '报告不存在'}</p>
+        <AlertCircle className="w-6 h-6 text-[#DC2626]" />
+        <p className="text-sm text-[#64748B]">{error || '报告不存在'}</p>
       </div>
     )
   }
@@ -70,8 +70,8 @@ export default function LiveReportPanel({ reportId }: LiveReportPanelProps) {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-[#F1F5F9]">志愿方案报告</h2>
-        <span className="text-xs px-2 py-0.5 rounded-tag bg-[rgba(143,224,183,0.12)] text-[#8FE0B7] border border-[rgba(143,224,183,0.32)]">
+        <h2 className="text-sm font-semibold text-[#0F172A]">志愿方案报告</h2>
+        <span className="text-xs px-2 py-0.5 rounded-tag bg-[#F0FDF4] text-[#16A34A] border border-[#BBF7D0]">
           {versionLabel}
         </span>
       </div>

@@ -26,18 +26,18 @@ export default function DecisionReplayCard({ runSummary }: Props) {
         onClick={() => setExpanded((v) => !v)}
         className="w-full flex items-center justify-between px-4 py-3 text-left"
       >
-        <span className="flex items-center gap-2 text-sm text-[#F1F5F9]">
-          <History className="w-4 h-4 text-[#A78BFA]" />
+        <span className="flex items-center gap-2 text-sm text-[#0F172A]">
+          <History className="w-4 h-4 text-[#1E40AF]" />
           AI 是如何得出这份方案的
         </span>
         {expanded ? (
-          <ChevronUp className="w-4 h-4 text-[#9CA3C4]" />
+          <ChevronUp className="w-4 h-4 text-[#64748B]" />
         ) : (
-          <ChevronDown className="w-4 h-4 text-[#9CA3C4]" />
+          <ChevronDown className="w-4 h-4 text-[#64748B]" />
         )}
       </button>
       {expanded && (
-        <div className="px-4 pb-3 space-y-1.5 text-xs text-[#9CA3C4]">
+        <div className="px-4 pb-3 space-y-1.5 text-xs text-[#64748B]">
           <p>并行处理过检索招生数据 + 校验选科/体检/批次规则两项任务</p>
           <p>
             AI 自我检查{reflectionIterations > 0 ? `修正了 ${reflectionIterations} 轮` : '一次通过，未触发修正'}

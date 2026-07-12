@@ -13,21 +13,17 @@
 }
 
 body {
-  background-color: #040128;
+  background-color: #FFFFFF;
   font-family: var(--font-sans);
-  color: #F1F5F9;
+  color: #0F172A;
   min-height: 100vh;
-  background-image:
-    radial-gradient(60% 50% at 0% 20%, rgba(139, 124, 246, 0.12), transparent 60%),
-    radial-gradient(50% 45% at 100% 10%, rgba(139, 124, 246, 0.10), transparent 60%);
-  background-repeat: no-repeat;
 }
 
-/* ── 玻璃卡片：细边框 + 半透明深色背景，边框承担分层，阴影弱化 (docs/frontend-style.md) ── */
+/* ── 卡片：白底细边框 + 弱阴影，贴合原型 wenjin-agent-prototype.html 的浅色配色 ── */
 .wj-glass-card {
-  background-color: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  background-color: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
 }
 
 /* ── Admin Debug Console: LangGraph topology edge animations ────────────── */

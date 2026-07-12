@@ -20,15 +20,15 @@ interface WorkspaceShellProps {
 export default function WorkspaceShell({ left, right, rightCollapsed, onToggleRight }: WorkspaceShellProps) {
   return (
     <div className="flex-1 flex overflow-hidden">
-      <div className={rightCollapsed ? 'flex-1 overflow-y-auto' : 'w-full md:w-[42%] md:flex-shrink-0 overflow-y-auto border-r border-white/10'}>
+      <div className={rightCollapsed ? 'flex-1 overflow-y-auto' : 'w-full md:w-[42%] md:flex-shrink-0 overflow-y-auto border-r border-[#E2E8F0]'}>
         <div className="max-w-screen-sm mx-auto px-4 py-6">{left}</div>
       </div>
 
-      <div className={rightCollapsed ? 'hidden' : 'hidden md:block flex-1 overflow-y-auto'}>
+      <div className={rightCollapsed ? 'hidden' : 'hidden md:block flex-1 overflow-y-auto bg-[#F8FAFC]'}>
         <div className="max-w-screen-md mx-auto px-4 py-6">
           <button
             onClick={onToggleRight}
-            className="mb-3 text-xs text-[#9CA3C4] hover:text-[#F1F5F9] transition-colors"
+            className="mb-3 text-xs text-[#64748B] hover:text-[#0F172A] transition-colors"
           >
             收起报告
           </button>
@@ -40,7 +40,7 @@ export default function WorkspaceShell({ left, right, rightCollapsed, onToggleRi
         <button
           onClick={onToggleRight}
           className="hidden md:flex fixed bottom-6 right-6 items-center gap-2 px-4 py-2.5 rounded-full
-            wj-glass-card text-[#F1F5F9] text-sm shadow-lg hover:border-[#A78BFA]/50 transition-colors z-30"
+            wj-glass-card text-[#0F172A] text-sm shadow-lg hover:border-[#1E40AF]/40 transition-colors z-30"
         >
           <PanelRightOpen className="w-4 h-4" />
           展开报告

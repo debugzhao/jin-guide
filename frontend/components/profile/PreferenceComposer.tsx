@@ -43,7 +43,7 @@ export default function PreferenceComposer({ onSubmit }: PreferenceComposerProps
         onKeyDown={(e) => e.key === 'Enter' && handleSend()}
         maxLength={200}
         placeholder="继续补充城市、专业、学费偏好或已有志愿草稿"
-        className="flex-1 bg-transparent text-sm text-[#F1F5F9] placeholder:text-[#6B7280] outline-none min-h-[36px] px-1"
+        className="flex-1 bg-transparent text-sm text-[#0F172A] placeholder:text-[#94A3B8] outline-none min-h-[36px] px-1"
       />
       <Button size="sm" onClick={handleSend} disabled={!text.trim()}>
         <Send className="w-3.5 h-3.5" />

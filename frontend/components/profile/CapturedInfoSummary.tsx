@@ -23,16 +23,16 @@ function formatValue(value: unknown): string {
  */
 export default function CapturedInfoSummary({ values }: CapturedInfoSummaryProps) {
   return (
-    <div className="bg-[rgba(169,180,245,0.08)] border border-[rgba(169,180,245,0.24)] rounded-2xl rounded-tl-sm px-4 py-3 max-w-[96%] space-y-2">
-      <div className="text-xs text-[#9CA3C4]">已采集信息</div>
-      <p className="text-sm text-[#F1F5F9]">
+    <div className="bg-[#EFF6FF] border border-[#BFDBFE] rounded-2xl rounded-tl-sm px-4 py-3 max-w-[96%] space-y-2">
+      <div className="text-xs text-[#64748B]">已采集信息</div>
+      <p className="text-sm text-[#0F172A]">
         这些不是手动发送的聊天内容，而是从上方基础建档信息卡片里沉淀出的结构化档案。
       </p>
       <div className="grid grid-cols-[repeat(auto-fit,minmax(110px,1fr))] gap-2">
         {FIELD_LABELS.map(([key, label]) => (
-          <div key={key} className="border border-white/10 rounded-lg bg-white/[0.02] p-2.5">
-            <span className="text-xs text-[#9CA3C4]">{label}</span>
-            <strong className="block text-sm text-[#F1F5F9] mt-0.5">{formatValue(values[key])}</strong>
+          <div key={key} className="border border-[#E2E8F0] rounded-lg bg-[#F8FAFC] p-2.5">
+            <span className="text-xs text-[#64748B]">{label}</span>
+            <strong className="block text-sm text-[#0F172A] mt-0.5">{formatValue(values[key])}</strong>
           </div>
         ))}
       </div>
