@@ -35,11 +35,16 @@ Wave 2 补丁（对齐 `docs/wenjin-agent-prototype.html`）：Wave 2 首版把 
 - 顺带修了一个无障碍 bug：`<label>` 包裹自定义按钮组（批次/性别选择）导致按钮可访问名称被拼接了外层文字，改成 `<div>` 只在真正包裹 `<select>`/`<input>` 时用 `<label>`。
 - 修了一个编排 bug：`ConversationStream.tsx` 之前在 `stage` 切到 `generating`/`chat` 后直接卸载了 `ProfileChatFlow`，导致提交后"已采集信息"/"档案摘要"两张卡片和偏好输入框根本没机会渲染；改为 `ProfileChatFlow` 全程常驻，由它自己管理"表单/已提交"两态。
 
+设计系统回退（v2.4）：v2.3 的深紫黑深色主题用户实测反馈"看着不舒服"，整体改回纯白背景浅色主题，色值直接采用 `wenjin-agent-prototype.html` 的 `:root` 变量（蓝 `#1E40AF`/绿 `#16A34A`/橙 `#D97706`/红 `#DC2626`，中性色 `#0F172A`/`#64748B`/`#94A3B8`/`#E2E8F0`）。`docs/frontend-prd-v2.md` §3 已同步改写为 v2.4，`docs/frontend-style.md`（深色分析文档）标注废弃仅留历史参考。涉及改动：
+- `app/globals.css`/`tailwind.config.ts` 基础层 + 之前深色化过的全部组件（`TopNav`/`WorkspaceShell`/`Button`/`Card`/`Badge`/`RiskOverview`/`PlanTabs`/`CandidateCard`/`EvidenceDrawer`/`ConditionCommentaryCard`/`DecisionReplayCard`/`LiveReportPanel`/`ReportCanvas`/`ChatInput`/`ChatMessageBubble`/`ChatSuggestedQuestions`/`ChatColumn`/`InlineGenerationCard`/`ProfileCaptureCard`/`CapturedInfoSummary`/`ProfileSummaryStatus`/`PreferenceComposer`/`PreferenceCard`/`ClarificationBubble`）全部改回浅色 token。
+- `/admin/debug` 不受影响（本来就没跟深色主题走，也没用这批共享组件）。
+- 后续任何新组件配色直接参考 `frontend-prd-v2.md` v2.4 §3.2 色值表或 `wenjin-agent-prototype.html` 的 `:root` 变量，不要再引入深色 token。
+
 已知但未处理（超出 Wave 1/2 声明范围，供后续排期）：
 - `gender`/`has_physical_limits` 只在建档字段依赖图（`_FIELD_ORDER`）里出现，`StudentProfile` 模型和 `ProfileIn` 都没有对应持久化字段——前端填了也会被后端静默丢弃。体检限制是 CLAUDE.md 里明确的高风险约束，建议单独排一个模块补上模型字段 + 迁移。
-- `components/report/EvidenceDrawer.tsx` 仍是移动端底部 Sheet 布局，未改造成 frontend-prd-v2 §6.2 要求的桌面端右侧滑出抽屉（本轮只做了配色深色化，没动布局）。
+- `components/report/EvidenceDrawer.tsx` 仍是移动端底部 Sheet 布局，未改造成 frontend-prd-v2 §6.2 要求的桌面端右侧滑出抽屉（只做过配色调整，没动布局）。
 - F8（历史位次/匹配置信分/AI 点评在候选卡片上的呈现）尚未做：后端 B7 已经在 `candidate.matching_confidence_score`/`historical_ranks` 和 `plan_json.condition_commentary` 里回传了数据，`ConditionCommentaryCard` 也已经在 ReportCanvas 里消费了 `condition_commentary`，但 `CandidateCard.tsx` 还没展示 `matching_confidence_score`/`historical_ranks` 这两个新字段。
-- Wave 2 过程中顺手修复了一个影响全站的真实 bug：`app/layout.tsx` 里有一大段 Phase1 深色主题改造前遗留的内联 `criticalCss`（`<style dangerouslySetInnerHTML>`），重新定义了 `.wj-topnav`/`.wj-button-*`/`.wj-card`/`.wj-input` 等类名的浅色样式，和 Tailwind 生成的深色类同优先级但顺序更靠后，导致 TopNav、按钮、输入框等全局组件实际渲染仍是浅色。已整段删除，`Card`/`Button`/`TopNav`/`Badge`/`RiskOverview`/`PlanTabs`/`CandidateCard`/`EvidenceDrawer`/`ChatInput`/`ChatMessageBubble`/`ChatSuggestedQuestions` 一并做了深色配色，`/admin/debug` 保持浅色不受影响（未使用这些共享组件）。
+- Wave 2 过程中曾发现一个影响全站的真实 bug（现已随设计系统回退一并解决）：`app/layout.tsx` 里有一大段 Phase1 深色主题改造前遗留的内联 `criticalCss`（`<style dangerouslySetInnerHTML>`），定义了 `.wj-topnav`/`.wj-button-*`/`.wj-card`/`.wj-input` 等类名的旧浅色样式，和当时的 Tailwind 深色类同优先级但顺序更靠后，导致 TopNav、按钮、输入框等全局组件实际渲染错乱。已整段删除该内联样式块；`/admin/debug` 全程不受影响（未使用这批共享组件）。
 
 未开始：
 - B6 ConversationAgent tool-calling 化
