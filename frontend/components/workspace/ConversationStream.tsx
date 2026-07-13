@@ -1,6 +1,7 @@
 'use client'
 
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import IntakeChat from '@/components/profile/IntakeChat'
 import ProfileChatFlow from '@/components/profile/ProfileChatFlow'
 import InlineGenerationCard from '@/components/chat/InlineGenerationCard'
 import ChatColumn from '@/components/chat/ChatColumn'
@@ -8,11 +9,13 @@ import Button from '@/components/ui/Button'
 import { api } from '@/lib/api'
 import { useAppStore } from '@/lib/store'
 
-type Stage = 'profile' | 'generating' | 'chat'
+export type Stage = 'idle' | 'profile' | 'generating' | 'chat'
 
 interface ConversationStreamProps {
   /** 报告拿到 report_id 后回调，供 `/` 页面把地址栏无刷新切换为 /reports/[id] */
   onReportReady: (reportId: string) => void
+  /** stage 变化时回调，供 `/` 页面决定是否展示报告栏（idle 纯聊天阶段不展示） */
+  onStageChange?: (stage: Stage) => void
 }
 
 function buildProfileSummaryLabel(answers: Record<string, unknown>): string {
@@ -28,15 +31,20 @@ function buildProfileSummaryLabel(answers: Record<string, unknown>): string {
  * `/` 页面左侧对话流（F2）：建档 → 生成过程 → 报告问答三个阶段的同一条对话，
  * 不是三个独立页面（frontend-prd-v2.md §0「Generative UI 混合形态」）。
  */
-export default function ConversationStream({ onReportReady }: ConversationStreamProps) {
+export default function ConversationStream({ onReportReady, onStageChange }: ConversationStreamProps) {
   const { setProfileId } = useAppStore()
-  const [stage, setStage] = useState<Stage>('profile')
+  const [stage, setStage] = useState<Stage>('idle')
   const [runId, setRunId] = useState<string | null>(null)
   const [reportId, setReportId] = useState<string | null>(null)
   const [profileSummaryLabel, setProfileSummaryLabel] = useState('')
   const [generationError, setGenerationError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [lastAnswers, setLastAnswers] = useState<Record<string, unknown> | null>(null)
+
+  useEffect(() => {
+    onStageChange?.(stage)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stage])
 
   const handleProfileReady = async (answers: Record<string, unknown>) => {
     setSubmitting(true)
@@ -92,9 +100,11 @@ export default function ConversationStream({ onReportReady }: ConversationStream
 
   return (
     <div className="space-y-4">
-      <ProfileChatFlow onReady={handleProfileReady} submitting={submitting} />
+      <IntakeChat onStartProfile={() => setStage('profile')} locked={stage !== 'idle'} />
 
-      {stage !== 'profile' && runId && (
+      {stage !== 'idle' && <ProfileChatFlow onReady={handleProfileReady} submitting={submitting} />}
+
+      {stage !== 'idle' && stage !== 'profile' && runId && (
         <InlineGenerationCard
           runId={runId}
           profileSummaryLabel={profileSummaryLabel}

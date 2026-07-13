@@ -100,6 +100,15 @@ export const api = {
         known_fields: params.knownFields,
       }),
     }),
+  /**
+   * Chat-first 首屏的建档意图判定：LLM 分类 + 关键词兜底，永远返回结果，
+   * 不阻塞对话（frontend-prd.md §Chat-first 建档入口）。
+   */
+  classifyIntent: (message: string) =>
+    apiFetch<{ intent: 'start_profile' | 'chitchat' }>('/api/v1/profile/intent', {
+      method: 'POST',
+      body: JSON.stringify({ message }),
+    }),
   generateReport: async (data: { profileId: string }) => {
     const res = await apiFetch<{ run_id: string; status: string; stream_url: string }>(
       '/api/v1/reports/generate',

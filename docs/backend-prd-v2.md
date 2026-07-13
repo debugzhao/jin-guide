@@ -252,6 +252,7 @@ sequenceDiagram
 | POST   | `/api/v1/profile`                       | 创建/更新学生档案（对话式建档逐字段提交）                       |
 | GET    | `/api/v1/profile/{id}`                  | 获取学生档案                                                    |
 | POST   | `/api/v1/profile/field-check`           | 建档单字段实时校验，命中矛盾/歧义时返回结构化追问               |
+| POST   | `/api/v1/profile/intent`                | Chat-first 建档意图判定（`profile-agent` 分类 + 关键词兜底，恒可用） |
 | GET    | `/api/v1/data/availability`             | 查询省份数据可用性和版本状态                                    |
 | POST   | `/api/v1/risk/preview`                  | 生成风险画像（同步，< 2s）                                      |
 | POST   | `/api/v1/volunteer/check`               | 志愿草稿风险体检（同步，< 5s），由对话内志愿草稿卡片调用；不支持上传/OCR 自动解析 |
@@ -386,6 +387,26 @@ POST /api/v1/profile/field-check
 ```
 
 **实现**：字段排序/跳过逻辑是纯配置驱动的字段依赖图（不调用 LLM）；矛盾检测复用 Policy Rule Agent 的规则工具（`check_subject_req`/`check_batch_eligibility` 等，见 §10.4）做同步前置校验，返回结构化结果——只有当需要把结果转成自然语言追问、或理解用户对追问的自由文本回应时，才会在 `POST /api/v1/profile` 主提交流程中调用 Profile Agent（详见 §10.1）。
+
+### 5.6b Chat-first 建档意图判定
+
+前端首屏是纯聊天入口（Chat-first，见 `docs/frontend-prd-v2.md` §6.1），只有识别到"开始建档/生成报告"意图后才内联渲染建档表单。这个判定由本接口承担：
+
+```http
+POST /api/v1/profile/intent
+```
+
+```json
+{ "message": "帮我看看能上什么大学" }
+```
+
+响应：
+
+```json
+{ "intent": "start_profile" }
+```
+
+`intent` 取值 `start_profile` / `chitchat`。**实现**：复用现有的 `profile-agent` 虚拟模型（`litellm_config.yaml`，与 Profile Agent 追问文案共用同一个轻量模型），非流式单次调用，严格要求只输出分类 JSON；LLM 超时（8s）/报错/输出格式不合法时，降级到确定性关键词兜底（"建档""报志愿""生成报告""测算"等命中即判 `start_profile`），保证接口恒可用、不阻塞前端对话（`backend/app/api/v1/profile.py::classify_intent`）。这是 UI 路由判断，不是志愿匹配的规则判断，因此不违反 §4「确定性系统与 Agent 边界」——它决定"是否展示表单"，不产出任何录取概率或规则结论。
 
 ### 5.7 Agent run 与协作可视化 SSE 事件
 

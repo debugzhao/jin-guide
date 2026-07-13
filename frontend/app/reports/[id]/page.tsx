@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { Share2 } from 'lucide-react'
 import TopNav from '@/components/layout/TopNav'
+import SidebarNav from '@/components/layout/SidebarNav'
 import WorkspaceShell from '@/components/layout/WorkspaceShell'
 import ChatColumn from '@/components/chat/ChatColumn'
 import LiveReportPanel from '@/components/report/LiveReportPanel'
@@ -42,10 +43,14 @@ export default function ReportWorkspacePage() {
       />
 
       <WorkspaceShell
+        sidebar={<SidebarNav onNewConversation={() => router.push('/')} onLoginClick={() => router.push('/')} />}
         left={<ChatColumn reportId={id} />}
         right={<LiveReportPanel reportId={id} />}
+        hasRight
         rightCollapsed={rightCollapsed}
         onToggleRight={() => setRightCollapsed((v) => !v)}
+        mobileSidebarOpen={false}
+        onCloseMobileSidebar={() => {}}
       />
     </div>
   )

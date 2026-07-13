@@ -195,8 +195,8 @@ GET /api/v1/reports?cursor=<opaque>&limit=20
 ## 当前实现状态
 
 项目处于 Phase 1。已有：
-- 前端：入口页、快速测算、建档向导、报告页、生成进度页、报告问答聊天面板（`components/chat/`）、Admin Debug 抽屉（`components/admin/debug/`）；Web 端居中 Modal 登录/注册
-- 后端：邮箱鉴权、LangGraph Agent 编排（Reflection 合规自检，无 HITL）、Resend 邮件验证码、报告问答 ConversationAgent（独立 SSE，不走 ARQ）、Admin Debug Console（运行时指标 + LangGraph 拓扑回放）
+- 前端：Chat-first 首屏（`/`，纯聊天入口 `IntakeChat` → 命中建档意图后内联渲染建档表单 → 生成过程 → 报告问答，同一对话流）、报告工作台（`/reports/[id]`）、响应式三栏工作台壳（`SidebarNav` + `WorkspaceShell`，`<lg` 抽屉/BottomSheet，`≥lg` 三栏常驻）、Admin Debug 抽屉（`components/admin/debug/`）；Web 端居中 Modal 登录/注册
+- 后端：邮箱鉴权、LangGraph Agent 编排（Reflection 合规自检，无 HITL）、Resend 邮件验证码、报告问答 ConversationAgent（独立 SSE，不走 ARQ）、Chat-first 建档意图判定（`POST /profile/intent`，LLM + 关键词兜底）、Admin Debug Console（运行时指标 + LangGraph 拓扑回放）
 - Agent 节点：data_resolver → 并行 retrieval/policy_rule → recommendation → risk → report → reflection（最多 3 轮重试后直接交付）
 - 工具层弹性设计：ToolResponse 三态协议、CircuitBreaker 熔断、ToolFilter 按 Agent 限制工具可见性
 
