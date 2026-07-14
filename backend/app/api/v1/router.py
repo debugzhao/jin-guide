@@ -6,6 +6,7 @@ from app.api.v1 import (
     auth,
     chat,
     data,
+    intake_chat,
     notifications,
     profile,
     reports,
@@ -21,6 +22,7 @@ router.include_router(profile.router, prefix="/profile", tags=["profile"])
 router.include_router(agent.router, prefix="/agent", tags=["agent"])
 router.include_router(reports.router, prefix="/reports", tags=["reports"])
 router.include_router(chat.router, prefix="/reports", tags=["chat"])
+router.include_router(intake_chat.router, prefix="/intake", tags=["intake-chat"])
 router.include_router(data.router, prefix="/data", tags=["data"])
 router.include_router(risk.router, prefix="/risk", tags=["risk"])
 router.include_router(volunteer.router, prefix="/volunteer", tags=["volunteer"])

@@ -252,7 +252,9 @@ sequenceDiagram
 | POST   | `/api/v1/profile`                       | 创建/更新学生档案（对话式建档逐字段提交）                       |
 | GET    | `/api/v1/profile/{id}`                  | 获取学生档案                                                    |
 | POST   | `/api/v1/profile/field-check`           | 建档单字段实时校验，命中矛盾/歧义时返回结构化追问               |
-| POST   | `/api/v1/profile/intent`                | Chat-first 建档意图判定（`profile-agent` 分类 + 关键词兜底，恒可用） |
+| POST   | `/api/v1/intake/chat`                   | Chat-first 建档前聊天（IntakeAgent，SSE 流式，function calling） |
+| GET    | `/api/v1/intake/chat/history`           | 获取建档前聊天历史（游标分页）                                  |
+| DELETE | `/api/v1/intake/chat`                   | 清空建档前聊天历史                                              |
 | GET    | `/api/v1/data/availability`             | 查询省份数据可用性和版本状态                                    |
 | POST   | `/api/v1/risk/preview`                  | 生成风险画像（同步，< 2s）                                      |
 | POST   | `/api/v1/volunteer/check`               | 志愿草稿风险体检（同步，< 5s），由对话内志愿草稿卡片调用；不支持上传/OCR 自动解析 |
@@ -388,25 +390,34 @@ POST /api/v1/profile/field-check
 
 **实现**：字段排序/跳过逻辑是纯配置驱动的字段依赖图（不调用 LLM）；矛盾检测复用 Policy Rule Agent 的规则工具（`check_subject_req`/`check_batch_eligibility` 等，见 §10.4）做同步前置校验，返回结构化结果——只有当需要把结果转成自然语言追问、或理解用户对追问的自由文本回应时，才会在 `POST /api/v1/profile` 主提交流程中调用 Profile Agent（详见 §10.1）。
 
-### 5.6b Chat-first 建档意图判定
+### 5.6b Chat-first 建档前聊天（IntakeAgent）
 
-前端首屏是纯聊天入口（Chat-first，见 `docs/frontend-prd-v2.md` §6.1），只有识别到"开始建档/生成报告"意图后才内联渲染建档表单。这个判定由本接口承担：
+前端首屏是一个真正的多轮流式 chatbot（Chat-first，见 `docs/frontend-prd-v2.md` §6.1），话题限定在高考志愿相关范围（查学校/查分数/查专业/对比学校/引导建档），不是"先分类再二选一"的旧版 `/profile/intent`（已废弃移除）。
 
 ```http
-POST /api/v1/profile/intent
+POST /api/v1/intake/chat
+GET  /api/v1/intake/chat/history
+DELETE /api/v1/intake/chat
 ```
 
 ```json
-{ "message": "帮我看看能上什么大学" }
+{ "message": "浙江大学在河南大概多少分" }
 ```
 
-响应：
+SSE 响应事件：`token`（增量文本）、`trigger_profile_capture`（前端收到即内联渲染建档表单）、`compliance_warning`、`done`、`error`。
 
-```json
-{ "intent": "start_profile" }
-```
+**实现**（`backend/app/agent/intake_agent.py`）：复用新增的 `intake-agent` 虚拟模型（`litellm_config.yaml`），用 OpenAI 风格 function calling 挂 4 个工具：
 
-`intent` 取值 `start_profile` / `chitchat`。**实现**：复用现有的 `profile-agent` 虚拟模型（`litellm_config.yaml`，与 Profile Agent 追问文案共用同一个轻量模型），非流式单次调用，严格要求只输出分类 JSON；LLM 超时（8s）/报错/输出格式不合法时，降级到确定性关键词兜底（"建档""报志愿""生成报告""测算"等命中即判 `start_profile`），保证接口恒可用、不阻塞前端对话（`backend/app/api/v1/profile.py::classify_intent`）。这是 UI 路由判断，不是志愿匹配的规则判断，因此不违反 §4「确定性系统与 Agent 边界」——它决定"是否展示表单"，不产出任何录取概率或规则结论。
+| 工具 | 作用 | 是否过 LLM 生成数字 |
+| --- | --- | --- |
+| `lookup_university_score` | 查某校在某省的历年录取分/位次（`backend/app/engine/school_lookup.py`） | 否，纯 SQL |
+| `lookup_subject_requirement` | 查某校（某专业）的选科要求/体检限制 | 否，纯 SQL |
+| `compare_universities` | 多校在同一省份的分数/位次/选科要求并排对比，只出结构化数据不含定性介绍 | 否，纯 SQL |
+| `start_profile_capture` | 识别到"开始建档/生成报告"意图时调用的信号工具，不返回数据 | — |
+
+系统提示词硬性要求：涉及具体分数/位次/选科等事实性数据必须调用工具查询，禁止凭参数记忆回答数字；工具查不到数据时如实说"暂无该数据"；话题与高考志愿无关时礼貌拒答。这是 CLAUDE.md「确定性系统给结论，Agent 给解释」原则在 Chat-first 场景的延伸——聊天可以自由展开，但事实性数字必须过 SQL，不能由 LLM 现编。
+
+历史持久化与报告问答（§5.10）同构：Redis 热层（`intake:history:{owner_key}`，7 天 TTL）+ PostgreSQL `intake_conversations` 表冷层兜底，限流 30 条/身份/天。`owner_key` 是登录用户的 `user_id` 或匿名会话的 `anonymous_id`（`anon:{anonymous_id}` 前缀）二选一——建档前还没有 `report_id` 可挂靠，前端需要先调用 `POST /api/v1/auth/anonymous-session` 换一个 `session_token` Cookie，否则本接口返回 401。
 
 ### 5.7 Agent run 与协作可视化 SSE 事件
 
@@ -637,6 +648,7 @@ data: {"conversation_id": "conv_abc", "message_id": "msg_007", "total_tokens": 1
 | province_thresholds | id、province、year、high_rush_rank_gap、rush_rank_gap_min/max、target_rank_gap、safe_rank_gap |
 | notifications | id、user_id、type、payload_json、read_at、created_at |
 | report_conversations | id、report_id、user_id、messages_json（JSONB，最多 50 条）、created_at、updated_at |
+| intake_conversations | id、owner_key（user_id 或 `anon:{anonymous_id}` 二选一，unique）、messages_json（JSONB，最多 50 条）、created_at、updated_at |
 
 **关于 checkpoint 存储**：LangGraph 使用独立内部表（`checkpoints`/`checkpoint_blobs`/`checkpoint_writes`）自动管理，不属于业务表。`agent_runs` 只存业务元数据，通过 `thread_id` 关联。
 

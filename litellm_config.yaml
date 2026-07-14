@@ -12,6 +12,13 @@ model_list:
       api_base: os.environ/MOONSHOT_BASE_URL
       api_key: os.environ/MOONSHOT_API_KEY
 
+  # Chat-first 建档前聊天（IntakeAgent，带 function calling，独立观测/成本口径）
+  - model_name: intake-agent
+    litellm_params:
+      model: openai/kimi-k2.6
+      api_base: os.environ/MOONSHOT_BASE_URL
+      api_key: os.environ/MOONSHOT_API_KEY
+
   # 主力模型：Report Agent、Reflection Agent、人工复核底稿
   - model_name: report-agent
     litellm_params:
@@ -45,6 +52,7 @@ router_settings:
     - reflection-agent: [report-agent]
     - profile-agent: [retrieval-agent]
     - retrieval-agent: [profile-agent]
+    - intake-agent: [profile-agent]
 
 litellm_settings:
   success_callback: ["langsmith"]

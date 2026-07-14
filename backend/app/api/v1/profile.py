@@ -1,22 +1,16 @@
-import json
-import logging
 from datetime import UTC, datetime
 from typing import Any, Literal, Optional
 from uuid import uuid4
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from app.config import settings
 from app.database import get_db, get_sync_db
 from app.models.admission import AdmissionScore, SubjectRequirement
 from app.models.profile import Preference, StudentProfile
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -350,72 +344,3 @@ def field_check(
         return FieldCheckOut(status="needs_clarification", issue=issue)
 
     return FieldCheckOut(status="ok", next_fields=_next_fields(known, body.field))
-
-
-# ── 建档意图识别（Chat-first 入口，docs/frontend-prd-v2.md §Chat-first 建档入口）─────
-
-_INTENT_AGENT_MODEL = "profile-agent"
-_INTENT_LLM_TIMEOUT = 8.0
-
-_START_PROFILE_KEYWORDS = [
-    "建档", "报志愿", "填志愿", "生成报告", "测算", "冲稳保",
-    "能上什么大学", "能上什么学校", "志愿表", "帮我选大学", "选专业", "分数线",
-]
-
-
-class IntentIn(BaseModel):
-    message: str
-
-
-class IntentOut(BaseModel):
-    intent: Literal["start_profile", "chitchat"]
-
-
-def _keyword_fallback_intent(message: str) -> Literal["start_profile", "chitchat"]:
-    return "start_profile" if any(kw in message for kw in _START_PROFILE_KEYWORDS) else "chitchat"
-
-
-@router.post("/intent", response_model=IntentOut)
-async def classify_intent(body: IntentIn) -> IntentOut:
-    """
-    判断用户消息是否表达了"开始建档/生成志愿报告"的意图，用于 Chat-first 首屏
-    决定是否内联渲染建档表单（generative UI）。LLM 超时/报错/输出格式不合法时
-    降级到确定性关键词兜底，接口恒可用，不阻塞前端交互。
-    """
-    fallback = _keyword_fallback_intent(body.message)
-    try:
-        async with httpx.AsyncClient(timeout=_INTENT_LLM_TIMEOUT) as client:
-            resp = await client.post(
-                f"{settings.litellm_base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.litellm_master_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": _INTENT_AGENT_MODEL,
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": (
-                                "你是高考志愿助手的意图分类器。判断用户消息是否表达了"
-                                "\"开始填写建档信息 / 生成志愿报告 / 测算能上的大学\"的意图。"
-                                '只输出 JSON，格式为 {"intent": "start_profile"} 或 '
-                                '{"intent": "chitchat"}，不要输出任何其他内容。'
-                            ),
-                        },
-                        {"role": "user", "content": body.message},
-                    ],
-                    "max_tokens": 20,
-                    "temperature": 0,
-                },
-            )
-            resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"].strip()
-        parsed = json.loads(content)
-        intent = parsed.get("intent")
-        if intent in ("start_profile", "chitchat"):
-            return IntentOut(intent=intent)
-        return IntentOut(intent=fallback)
-    except Exception as exc:
-        logger.warning("intent classify LLM call failed, using keyword fallback: %s", exc)
-        return IntentOut(intent=fallback)

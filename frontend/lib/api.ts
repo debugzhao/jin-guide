@@ -101,13 +101,13 @@ export const api = {
       }),
     }),
   /**
-   * Chat-first 首屏的建档意图判定：LLM 分类 + 关键词兜底，永远返回结果，
-   * 不阻塞对话（frontend-prd.md §Chat-first 建档入口）。
+   * 建立匿名会话（幂等）：Chat-first 首屏在未登录时用它换一个 session_token Cookie，
+   * 让 /intake/chat 的历史持久化有身份可挂靠；已登录/已有会话时是无副作用的空操作。
    */
-  classifyIntent: (message: string) =>
-    apiFetch<{ intent: 'start_profile' | 'chitchat' }>('/api/v1/profile/intent', {
+  createAnonymousSession: () =>
+    apiFetch<{ anonymous_id: string; session_id: string }>('/api/v1/auth/anonymous-session', {
       method: 'POST',
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({}),
     }),
   generateReport: async (data: { profileId: string }) => {
     const res = await apiFetch<{ run_id: string; status: string; stream_url: string }>(
@@ -304,6 +304,122 @@ export const chatApi = {
                   callbacks.onCitation({ source_id: data.source_id, text: data.text })
                 } else if (currentEvent === 'done') {
                   callbacks.onDone(data.citations ?? [])
+                } else if (currentEvent === 'compliance_warning') {
+                  callbacks.onComplianceWarning(data.issues ?? [])
+                } else if (currentEvent === 'error') {
+                  callbacks.onError(data.message ?? '未知错误')
+                }
+              } catch {
+                // ignore parse errors on non-JSON lines
+              }
+              currentEvent = ''
+            }
+          }
+        }
+      } catch (err) {
+        if (!aborted) {
+          callbacks.onError(err instanceof Error ? err.message : '连接中断')
+        }
+      }
+    }
+
+    run()
+    return () => {
+      aborted = true
+      controller.abort()
+    }
+  },
+}
+
+// ── Intake Chat API（Chat-first 建档前聊天，IntakeAgent）───────────────────────
+
+export interface IntakeChatHistoryMessage {
+  role: 'user' | 'assistant'
+  content: string
+  created_at: string
+}
+
+export interface IntakeChatHistoryResult {
+  messages: IntakeChatHistoryMessage[]
+  total: number
+}
+
+export const intakeChatApi = {
+  /** Load existing intake chat history for the current identity (user or anonymous session) */
+  getHistory: () => apiFetch<IntakeChatHistoryResult>('/api/v1/intake/chat/history'),
+
+  /** Clear intake conversation history */
+  clearHistory: () => apiFetch<void>('/api/v1/intake/chat', { method: 'DELETE' }),
+
+  /**
+   * Open a streaming SSE connection for an intake chat message.
+   * `onTriggerProfileCapture` fires when IntakeAgent's `start_profile_capture` tool
+   * is called — the caller should render the profile capture form inline.
+   */
+  streamMessage: (
+    message: string,
+    callbacks: {
+      onToken: (token: string) => void
+      onTriggerProfileCapture: () => void
+      onDone: () => void
+      onComplianceWarning: (issues: string[]) => void
+      onError: (msg: string) => void
+      onRateLimit: (message?: string) => void
+    }
+  ): (() => void) => {
+    const BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+    let aborted = false
+    const controller = new AbortController()
+
+    const run = async () => {
+      try {
+        const resp = await fetch(`${BASE_URL}/api/v1/intake/chat`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message }),
+          signal: controller.signal,
+        })
+
+        if (resp.status === 429) {
+          const body = await resp.json().catch(() => ({}))
+          const detail = body?.detail
+          callbacks.onRateLimit(typeof detail === 'object' ? detail?.message : undefined)
+          return
+        }
+        if (!resp.ok) {
+          const body = await resp.json().catch(() => ({}))
+          callbacks.onError(body?.detail?.message || body?.detail || `HTTP ${resp.status}`)
+          return
+        }
+        if (!resp.body) return
+
+        const reader = resp.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+
+        while (!aborted) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+
+          const lines = buffer.split('\n')
+          buffer = lines.pop() ?? ''
+
+          let currentEvent = ''
+          for (const line of lines) {
+            if (line.startsWith('event: ')) {
+              currentEvent = line.slice(7).trim()
+            } else if (line.startsWith('data: ')) {
+              const raw = line.slice(6).trim()
+              try {
+                const data = JSON.parse(raw)
+                if (currentEvent === 'token') {
+                  callbacks.onToken(data.content ?? '')
+                } else if (currentEvent === 'trigger_profile_capture') {
+                  callbacks.onTriggerProfileCapture()
+                } else if (currentEvent === 'done') {
+                  callbacks.onDone()
                 } else if (currentEvent === 'compliance_warning') {
                   callbacks.onComplianceWarning(data.issues ?? [])
                 } else if (currentEvent === 'error') {

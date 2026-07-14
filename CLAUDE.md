@@ -115,6 +115,10 @@ docker compose exec backend python -m pytest -q
 
 `backend/app/agent/conversation_agent.py` + `backend/app/api/v1/chat.py`（路由挂在 `/reports/{report_id}/chat`）。这是独立于主 LangGraph 流程的**同步 SSE 流式问答**，不经过 ARQ 队列：请求进来直接调 LiteLLM `report-agent` 模型 streaming，逐 token 转发。历史记录 Redis 热层（`chat:history:{report_id}:{user_id}`，7 天 TTL）+ PostgreSQL `report_conversations` 表冷层兜底；限流 30 条/用户/天（`chat:daily:{user_id}:{date}`）。回复末尾做一次全量合规检测（复用 `nodes/compliance.py` 的正则），命中禁词会做同义替换后再落库，不重新生成。
 
+### 建档前聊天（IntakeAgent）
+
+`backend/app/agent/intake_agent.py` + `backend/app/api/v1/intake_chat.py`（路由挂在 `/intake/chat`）。首页 Chat-first 首屏用的真正多轮聊天，不是"先分类再二选一"：每轮先发一次带 `tools` 的流式请求（`intake-agent` 模型），模型可以直接流式输出文本，也可以在同一轮里调用 function calling 工具——`lookup_university_score`/`lookup_subject_requirement`/`compare_universities` 三个纯 SQL 工具（`backend/app/engine/school_lookup.py`，不经过 LLM）负责查分数/位次/选科要求/多校对比，执行完把结果塞回 messages 再发起第二轮流式请求产出自然语言；`start_profile_capture` 是不返回数据的信号工具，命中后端直接发 SSE `trigger_profile_capture` 事件，前端收到即内联渲染建档表单。系统提示词把话题严格限定在高考志愿相关范围，硬性要求事实性数字必须过工具查询、禁止凭模型记忆回答。历史持久化与 ConversationAgent 同构：Redis 热层（`intake:history:{owner_key}`）+ PostgreSQL `intake_conversations` 冷层，`owner_key` 是 `user_id` 或匿名会话 `anonymous_id`（建档前还没有 `report_id` 可挂靠，需要先有 `session_token` Cookie，前端在聊天前会调 `POST /auth/anonymous-session` 兜底建立）。
+
 ### 可观测性 / Admin Debug Console
 
 `backend/app/api/v1/admin.py` 提供 `/admin/runs`、`/admin/runs/{id}`、`/admin/runs/{id}/debug-events`（SSE）、`/admin/metrics/summary`，**无鉴权、对所有访客开放**（数据本身不含 PII）。前端 `components/admin/debug/` 渲染 LangGraph 拓扑图和节点耗时时间线。调试事件由 `backend/app/agent/debug_events.py` 的 `emit_debug_event` 写入 **与用户 SSE 共用的同一条 Redis Stream**（`sse:{run_id}`），事件类型加 `debug:` 前缀区分，用户侧 SSE 生成器按前缀过滤掉，Admin SSE 端点则回放全部历史（`XREAD` 从 `0-0` 开始）再续接实时流。
@@ -196,7 +200,7 @@ GET /api/v1/reports?cursor=<opaque>&limit=20
 
 项目处于 Phase 1。已有：
 - 前端：Chat-first 首屏（`/`，纯聊天入口 `IntakeChat` → 命中建档意图后内联渲染建档表单 → 生成过程 → 报告问答，同一对话流）、报告工作台（`/reports/[id]`）、响应式三栏工作台壳（`SidebarNav` + `WorkspaceShell`，`<lg` 抽屉/BottomSheet，`≥lg` 三栏常驻）、Admin Debug 抽屉（`components/admin/debug/`）；Web 端居中 Modal 登录/注册
-- 后端：邮箱鉴权、LangGraph Agent 编排（Reflection 合规自检，无 HITL）、Resend 邮件验证码、报告问答 ConversationAgent（独立 SSE，不走 ARQ）、Chat-first 建档意图判定（`POST /profile/intent`，LLM + 关键词兜底）、Admin Debug Console（运行时指标 + LangGraph 拓扑回放）
+- 后端：邮箱鉴权、LangGraph Agent 编排（Reflection 合规自检，无 HITL）、Resend 邮件验证码、报告问答 ConversationAgent（独立 SSE，不走 ARQ）、Chat-first 建档前聊天 IntakeAgent（`POST /intake/chat`，function calling 查学校/分数/选科/对比 + `start_profile_capture` 触发建档表单，独立 SSE）、Admin Debug Console（运行时指标 + LangGraph 拓扑回放）
 - Agent 节点：data_resolver → 并行 retrieval/policy_rule → recommendation → risk → report → reflection（最多 3 轮重试后直接交付）
 - 工具层弹性设计：ToolResponse 三态协议、CircuitBreaker 熔断、ToolFilter 按 Agent 限制工具可见性
 
