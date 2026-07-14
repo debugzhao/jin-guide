@@ -89,7 +89,7 @@ export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) 
 
   if (messages.length === 0) {
     return (
-      <div className="py-10 flex flex-col items-center gap-5">
+      <div className="flex-1 flex flex-col items-center justify-center gap-5">
         <div className="w-12 h-12 rounded-full bg-gradient-to-br from-[#1E40AF] to-[#2563EB] flex items-center justify-center">
           <Sparkles className="w-6 h-6 text-white" />
         </div>
@@ -119,14 +119,18 @@ export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) 
   }
 
   return (
-    <div className="space-y-3">
-      {renderedMessages}
+    <div className="flex-1 flex flex-col">
+      <div className="space-y-3 pb-3">
+        {renderedMessages}
 
-      <button onClick={() => handlePromptClick('开始志愿建档')} className="text-xs text-[#1E40AF] hover:underline">
-        直接开始志愿建档 →
-      </button>
+        <button onClick={() => handlePromptClick('开始志愿建档')} className="text-xs text-[#1E40AF] hover:underline">
+          直接开始志愿建档 →
+        </button>
+      </div>
 
-      <ChatInput onSend={handleSend} disabled={classifying} placeholder="继续聊聊，或直接开始建档…" />
+      <div className="mt-auto sticky bottom-0 bg-white pt-1">
+        <ChatInput onSend={handleSend} disabled={classifying} placeholder="继续聊聊，或直接开始建档…" />
+      </div>
     </div>
   )
 }

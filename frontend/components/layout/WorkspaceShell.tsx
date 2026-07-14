@@ -66,7 +66,7 @@ export default function WorkspaceShell({
               : 'w-full lg:w-[46%] lg:flex-shrink-0 overflow-y-auto lg:border-r border-[#E2E8F0]'
           }
         >
-          <div className="max-w-[760px] mx-auto px-4 py-6">{left}</div>
+          <div className="min-h-full flex flex-col max-w-[760px] mx-auto px-4 py-6">{left}</div>
         </div>
 
         {hasRight && (

@@ -99,7 +99,7 @@ export default function ConversationStream({ onReportReady, onStageChange }: Con
   }
 
   return (
-    <div className="space-y-4">
+    <div className="flex-1 flex flex-col gap-4">
       <IntakeChat onStartProfile={() => setStage('profile')} locked={stage !== 'idle'} />
 
       {stage !== 'idle' && <ProfileChatFlow onReady={handleProfileReady} submitting={submitting} />}
