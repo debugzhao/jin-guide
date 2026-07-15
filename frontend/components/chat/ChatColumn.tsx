@@ -11,6 +11,16 @@ import type { ChatMessage } from '@/types'
 
 const HISTORY_WARNING_THRESHOLD = 40
 
+/** 消息列表本身不可滚动，向上找到 WorkspaceShell 里真正的 overflow-y 滚动祖先元素 */
+function getScrollParent(node: HTMLElement): HTMLElement | null {
+  let el = node.parentElement
+  while (el) {
+    if (/(auto|scroll)/.test(getComputedStyle(el).overflowY)) return el
+    el = el.parentElement
+  }
+  return null
+}
+
 interface Props {
   reportId: string
 }
@@ -64,7 +74,16 @@ export default function ChatColumn({ reportId }: Props) {
   }, [reportId, setChatMessages])
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const end = messagesEndRef.current
+    if (!end) return
+    // 流式 token 到达时高频触发，用 smooth 会和用户手动滚动/浏览器动量滚动相互打断产生回弹感，
+    // 改用瞬时跳转；且只在用户本就停留在底部附近时才跟随，避免打断向上翻看历史的手势
+    const scrollParent = getScrollParent(end)
+    if (scrollParent) {
+      const distanceFromBottom = scrollParent.scrollHeight - scrollParent.scrollTop - scrollParent.clientHeight
+      if (distanceFromBottom > 150) return
+    }
+    end.scrollIntoView({ behavior: 'auto', block: 'end' })
   }, [messages, streamingContent])
 
   useEffect(() => {

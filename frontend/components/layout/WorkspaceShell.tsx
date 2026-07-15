@@ -62,15 +62,15 @@ export default function WorkspaceShell({
         <div
           className={
             rightCollapsed || !hasRight
-              ? 'flex-1 overflow-y-auto'
-              : 'w-full lg:w-[46%] lg:flex-shrink-0 overflow-y-auto lg:border-r border-[#E2E8F0]'
+              ? 'flex-1 overflow-y-auto overscroll-contain'
+              : 'w-full lg:w-[46%] lg:flex-shrink-0 overflow-y-auto overscroll-contain lg:border-r border-[#E2E8F0]'
           }
         >
           <div className="min-h-full flex flex-col max-w-[760px] mx-auto px-4 py-6">{left}</div>
         </div>
 
         {hasRight && (
-          <div className={rightCollapsed ? 'hidden' : 'hidden lg:block flex-1 overflow-y-auto bg-[#F8FAFC]'}>
+          <div className={rightCollapsed ? 'hidden' : 'hidden lg:block flex-1 overflow-y-auto overscroll-contain bg-[#F8FAFC]'}>
             <div className="max-w-screen-md mx-auto px-4 py-6">
               <button
                 onClick={onToggleRight}
