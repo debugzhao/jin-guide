@@ -203,7 +203,7 @@ export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) 
         )}
       </div>
 
-      <div className="mt-auto sticky bottom-0 bg-white pt-1">
+      <div className="mt-auto sticky bottom-0 bg-white pt-1 pb-6">
         {!dailyLimitReached && (
           <ChatInput onSend={handleSend} disabled={isStreaming} placeholder="继续聊聊，或直接开始建档…" />
         )}
