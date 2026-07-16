@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
+from app.models.conversation import IntakeConversation
 from app.models.profile import StudentProfile
 from app.models.report import Report
 from app.models.user import AuthSession, User
@@ -119,6 +120,15 @@ async def _bind_anonymous_data(db: AsyncSession, anonymous_id: str, user_id: str
         update(Report)
         .where(Report.anonymous_id == anonymous_id, Report.user_id.is_(None))
         .values(user_id=user_id)
+    )
+    # IntakeConversation 没有独立的 anonymous_id/user_id 字段，owner_key 本身就是
+    # "user_id 或 anon:{anonymous_id}" 二选一——合并就是把 owner_key 整段改写成新
+    # user_id。多条匿名会话一次性全部转移，不影响该用户已有的（如果有）历史会话，
+    # 因为 owner_key 不再是唯一约束。
+    await db.execute(
+        update(IntakeConversation)
+        .where(IntakeConversation.owner_key == f"anon:{anonymous_id}")
+        .values(owner_key=user_id)
     )
 
 

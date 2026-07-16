@@ -253,9 +253,10 @@ sequenceDiagram
 | GET    | `/api/v1/profile/{id}`                  | 获取学生档案                                                    |
 | POST   | `/api/v1/profile/field-check`           | 建档单字段实时校验，命中矛盾/歧义时返回结构化追问               |
 | GET    | `/api/v1/intake/conversations`          | 建档前聊天会话列表（游标分页，侧栏历史用）                       |
+| PATCH  | `/api/v1/intake/conversations/{id}`     | 重命名建档前聊天会话                                             |
+| DELETE | `/api/v1/intake/conversations/{id}`     | 软删除建档前聊天会话（`deleted_at`，不物理删除）                 |
 | POST   | `/api/v1/intake/chat`                   | Chat-first 建档前聊天（IntakeAgent，SSE 流式，function calling） |
 | GET    | `/api/v1/intake/chat/history`           | 获取某个建档前聊天会话的历史（`?conversation_id=`）              |
-| DELETE | `/api/v1/intake/chat`                   | 删除某个建档前聊天会话（`?conversation_id=`）                    |
 | GET    | `/api/v1/data/availability`             | 查询省份数据可用性和版本状态                                    |
 | POST   | `/api/v1/risk/preview`                  | 生成风险画像（同步，< 2s）                                      |
 | POST   | `/api/v1/volunteer/check`               | 志愿草稿风险体检（同步，< 5s），由对话内志愿草稿卡片调用；不支持上传/OCR 自动解析 |
@@ -396,17 +397,22 @@ POST /api/v1/profile/field-check
 前端首屏是一个真正的多轮流式 chatbot（Chat-first，见 `docs/frontend-prd-v2.md` §6.1），话题限定在高考志愿相关范围（查学校/查分数/查专业/对比学校/引导建档），不是"先分类再二选一"的旧版 `/profile/intent`（已废弃移除）。
 
 ```http
-GET    /api/v1/intake/conversations       — 当前身份下的会话列表（游标分页，侧栏历史用）
-POST   /api/v1/intake/chat                — 发消息，不传 conversation_id 则懒创建新会话
-GET    /api/v1/intake/chat/history        — 取某个会话的历史（?conversation_id=）
-DELETE /api/v1/intake/chat                — 删除某个会话（?conversation_id=）
+GET    /api/v1/intake/conversations        — 当前身份下的会话列表（游标分页，侧栏历史用）
+PATCH  /api/v1/intake/conversations/{id}   — 重命名会话
+DELETE /api/v1/intake/conversations/{id}   — 软删除会话（deleted_at，不物理删除）
+POST   /api/v1/intake/chat                 — 发消息，不传 conversation_id 则懒创建新会话
+GET    /api/v1/intake/chat/history         — 取某个会话的历史（?conversation_id=）
 ```
 
 ```json
 { "message": "浙江大学在河南大概多少分", "conversation_id": null }
 ```
 
-多会话模型：`intake_conversations.id` 即会话/thread id。首次发消息不传 `conversation_id`，后端在这轮对话产出 `done` 事件前懒创建新会话（避免"新建对话"点一下就产生空行）；`done` 事件的 payload 带上 `conversation_id`，前端记下后续发消息都带着它，追加到同一会话。传入的 `conversation_id` 必须属于当前身份（`owner_key`），否则 404，防止越权读写他人会话。
+多会话模型：`intake_conversations.id` 即会话/thread id。首次发消息不传 `conversation_id`，后端在这轮对话产出 `done` 事件前懒创建新会话（避免"新建对话"点一下就产生空行）；`done` 事件的 payload 带上 `conversation_id`，前端记下后续发消息都带着它，追加到同一会话。传入的 `conversation_id` 必须属于当前身份（`owner_key`）且未被软删除，否则 404，防止越权读写他人会话或复活已删除会话。
+
+**标题**：首条用户消息截断生成（≤20 字）作为即时兜底；`done` 事件产出后，`POST /intake/chat` 用 FastAPI `BackgroundTasks`（挂在 `StreamingResponse(background=...)` 上，见 CLAUDE.md「Agent run 不用 BackgroundTasks」的例外情形——这里只是丢了也无所谓的标题美化，不是业务数据）异步调用轻量虚拟模型 `profile-agent` 把标题升级成自然语言摘要，失败/超时静默回退到截断标题，只在标题仍是创建时的截断态（未被用户手动重命名）才覆盖。**踩过的坑**：Moonshot Kimi 是推理模型，即使这么简单的任务也会先输出上百字 `reasoning_content` 才产出最终 `content`，`max_tokens` 给不够（实测 30~150 不够）时 `content` 永远是空字符串；且该模型只接受 `temperature=1`，其他值直接被 LiteLLM 拒绝 400。
+
+**匿名转登录合并**：登录/注册成功时 `auth.py::_bind_anonymous_data` 把 `owner_key == "anon:{anonymous_id}"` 的会话整段改写为 `user_id`（同一函数已经在做 `StudentProfile`/`Report` 的合并，这里是第三处），多条匿名会话一次性转移，不影响该账号已有的历史会话（`owner_key` 非唯一）。
 
 SSE 响应事件：`token`（增量文本）、`trigger_profile_capture`（前端收到即内联渲染建档表单）、`compliance_warning`、`done`（`{"conversation_id": "..."}`）、`error`。
 

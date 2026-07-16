@@ -347,3 +347,121 @@ graph.add_edge("policy_rule_agent", "recommendation")
 `intake_conversations` 曾经是 `owner_key` 唯一约束——每个用户/匿名会话只有一条历史，没有会话/线程维度。已改造为多会话模型（`id` 即会话/thread id，`owner_key` 去掉唯一约束改为普通索引，见迁移 009）：不传 `conversation_id` 时懒创建新会话（首条消息产出 `done` 事件前才建行，避免"新建对话"点一下就产生空行），传了则校验属于当前 `owner_key` 才允许读写。持久化必须在 SSE `done` 事件 yield 之前完成，否则客户端收到 `done` 立即刷新侧栏列表会有竞态（读到写入提交前的旧数据）。
 
 改造过程中顺带修了一个预先存在的 bug：匿名会话的 `owner_key` 是 `"anon:" + 36 位 uuid`（41 字符），超出原 `owner_key varchar(36)` 上限，写入时被 `StringDataRightTruncationError` 打断，又被 `_persist_history_to_db` 的 best-effort try/except 悄悄吞掉——实际后果是匿名用户的建档聊天历史从未真正落过 Postgres 冷层，只靠 Redis 7 天 TTL 硬撑。现已加宽到 `varchar(48)`。
+
+### 9.4 会话重命名/删除、LLM 标题摘要、匿名转登录合并（已实现）
+
+在 9.3 多会话模型基础上补的三个增强：
+
+1. **重命名/删除**：`PATCH /intake/conversations/{id}` 改标题；`DELETE /intake/conversations/{id}` 软删除（`deleted_at`，对齐 `reports`/`documents` 表的既有约定，见 `backend/docs/03_data_model.md` §4），`_get_owned_conversation` 默认过滤 `deleted_at IS NULL`，删除后的会话再传 `conversation_id` 发消息会 404，不能"复活"。
+2. **LLM 标题摘要**：`done` 事件里持久化时先用截断标题即时兜底，随后通过 FastAPI `BackgroundTasks`（挂在手动构造的 `StreamingResponse(background=...)` 上——FastAPI 不会像处理普通返回值那样自动挂载注入的 `background_tasks`，必须显式传）异步调用轻量虚拟模型 `profile-agent` 生成自然语言标题，失败或已被用户重命名则不覆盖。这是 CLAUDE.md「FastAPI BackgroundTasks 仅用于不重要的轻量操作」原则的一个恰当应用场景——标题美化丢了完全无所谓，不是需要可靠交付的业务数据，不需要 ARQ。**踩坑**：Moonshot Kimi 是推理模型，`max_tokens` 给太小时预算全耗在 `reasoning_content` 上，`content` 输出为空；且只接受 `temperature=1`。
+3. **匿名转登录合并**：复用 `auth.py::_bind_anonymous_data`（已经在合并 `StudentProfile`/`Report`），批量把 `owner_key == "anon:{anonymous_id}"` 的会话改写成 `owner_key = user_id`。
+
+---
+
+## 10. 四条 Agent 路径总览与现状核对
+
+> 本节汇总当前系统里并行存在的四条 Agent 路径，并逐一核对代码是否真的落地了设计文档描述的能力——`docs/backend-prd-v2.md` §10.9 描述的 ConversationAgent 是唯一一处"文档写的是目标架构、代码还停在更简单实现"的地方，核对方式和结论见 §10.4。主图/refine 子图的详细节点图见 §3/§3.1，本节只画总览和另外两条路径（IntakeAgent、ConversationAgent）此前没有图的部分。
+
+### 10.1 总览：四条路径 + 确定性引擎
+
+```mermaid
+flowchart TB
+    FE["前端 Next.js"]
+
+    FE -->|"POST /reports/generate<br/>202 立即返回 run_id"| API["FastAPI API 层"]
+    FE -->|"POST /intake/chat（SSE）"| API
+    FE -->|"POST /reports/{id}/refine<br/>202 立即返回 run_id"| API
+    FE -->|"POST /reports/{id}/chat（SSE）"| API
+
+    API -->|入队| ARQ["ARQ Worker（独立进程）"]
+    ARQ --> MAIN["主报告生成图<br/>create_graph()<br/>8 节点，见 §3"]
+    ARQ --> REFINE["局部重新生成子图<br/>create_refine_graph()<br/>4 节点，见 §3.1"]
+
+    API -->|同步直调，不经 ARQ| INTAKE["IntakeAgent<br/>真 tool-calling"]
+    API -->|同步直调，不经 ARQ| CONV["ConversationAgent<br/>纯流式，无 tool-calling"]
+
+    MAIN --> DE["确定性引擎<br/>Rule / Recommendation / Risk Engine"]
+    REFINE --> DE
+    INTAKE -->|SQL 工具，不过 LLM| DE
+
+    MAIN --> GW["LiteLLM Proxy"]
+    REFINE --> GW
+    INTAKE --> GW
+    CONV --> GW
+    GW --> KIMI["Moonshot Kimi k2.6"]
+
+    MAIN -.->|node_started/completed 等| REDIS["Redis Stream sse:{run_id}"]
+    REFINE -.-> REDIS
+    REDIS -.-> FE
+
+    style DE fill:#e8f5e9,stroke:#4CAF50
+    style CONV fill:#fff3e0,stroke:#FF9800
+    style INTAKE fill:#e8f4fd,stroke:#2196F3
+```
+
+### 10.2 IntakeAgent（建档前聊天）—— 真正的 tool-calling 时序
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant FE as 前端
+    participant API as intake_chat.py
+    participant LLM as LiteLLM(kimi-k2.6)
+    participant SQL as school_lookup.py
+
+    U->>FE: 输入"浙大在河南多少分"
+    FE->>API: POST /intake/chat {message, conversation_id}
+    API->>LLM: 第一次流式请求（带 tools）
+    alt 模型直接输出文本
+        LLM-->>FE: SSE token 流
+    else 模型命中 lookup_university_score
+        LLM-->>API: tool_calls
+        API->>SQL: 执行 SQL 查询（不过 LLM）
+        SQL-->>API: 结构化结果
+        API->>LLM: 第二次流式请求（结果塞回messages，不带tools）
+        LLM-->>FE: SSE token 流（基于查询结果的自然语言）
+    else 命中 start_profile_capture
+        LLM-->>API: tool_calls
+        API-->>FE: SSE trigger_profile_capture<br/>（前端内联渲染建档表单）
+    end
+    API->>API: done 前持久化（懒创建会话+<br/>后台任务升级标题，见 §9.3/§9.4）
+    API-->>FE: SSE done {conversation_id}
+```
+
+### 10.3 ConversationAgent（报告问答）—— 现状：纯流式，无 tool-calling
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant FE as 前端
+    participant API as chat.py
+    participant LLM as LiteLLM(kimi-k2.6, report-agent)
+
+    U->>FE: "为什么推荐郑州大学"
+    FE->>API: POST /reports/{id}/chat {message}
+    API->>API: 组装上下文<br/>(plan_json裁剪 + evidence_json + 历史)
+    API->>LLM: 单次流式请求（不带 tools）
+    LLM-->>API: 增量 token
+    API-->>FE: SSE token 流（逐字转发）
+    API->>API: 全量拼接后跑正则合规检测
+    alt 命中禁词
+        API->>API: 同义替换（不重新生成）
+        API-->>FE: SSE compliance_warning
+    end
+    API->>API: 落库 report_conversations（best-effort）
+```
+
+### 10.4 PRD 与代码的落差：ConversationAgent 缺的是 tool-calling
+
+`docs/backend-prd-v2.md` §10.9 描述的目标态是把 ConversationAgent 升级成 tool-calling Agent：能调 `switch_tab`/`highlight_candidates`/`open_compare_view`（UI 操作类，纯前端状态变更，无需用户确认）和 `regenerate_recommendations`（数据变更类，触发 `/refine`，需用户二次确认）。这是"AI 全程协作者"重新设计（`docs/prd-redesign-ai-collaborator.md` §3.2）的核心能力之一。
+
+核对方式：直接读 `backend/app/agent/conversation_agent.py` 的代码和它自己的模块 docstring——
+
+```
+Flow (per message):
+    load_report_context → [optional] vector_search → LLM streaming → compliance_check → yield
+```
+
+全文没有任何 `tools=`/function calling，就是 §10.3 画的那个纯流式 completion 流程。PRD §10.9 末尾其实也自己标注了"技术风险：需要验证 Kimi k2.6 在流式+工具调用同时开启场景下的稳定性，建议先做 spike"——这个 spike/落地看起来一直没有真正发生。
+
+其余三条路径（主图、refine 子图、IntakeAgent）的设计文档和代码是一致的，都已落地；如果要把 ConversationAgent 升级到 tool-calling，PRD 里的工具清单、System Prompt、Token 预算都已经设计好（§10.9），缺的只是实现。

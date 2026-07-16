@@ -18,6 +18,10 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
     }
     throw new Error(message)
   }
+  // 204/无内容响应没有 body，res.json() 会因为空字符串解析失败直接抛错
+  if (res.status === 204 || res.headers.get('content-length') === '0') {
+    return undefined as T
+  }
   return res.json()
 }
 
@@ -369,9 +373,16 @@ export const intakeChatApi = {
       `/api/v1/intake/chat/history?conversation_id=${encodeURIComponent(conversationId)}`
     ),
 
-  /** Delete one conversation's history */
-  clearHistory: (conversationId: string) =>
-    apiFetch<void>(`/api/v1/intake/chat?conversation_id=${encodeURIComponent(conversationId)}`, {
+  /** Rename a conversation (sidebar history label) */
+  renameConversation: (conversationId: string, title: string) =>
+    apiFetch<IntakeConversationListItem>(
+      `/api/v1/intake/conversations/${encodeURIComponent(conversationId)}`,
+      { method: 'PATCH', body: JSON.stringify({ title }) }
+    ),
+
+  /** Soft-delete a conversation */
+  deleteConversation: (conversationId: string) =>
+    apiFetch<void>(`/api/v1/intake/conversations/${encodeURIComponent(conversationId)}`, {
       method: 'DELETE',
     }),
 

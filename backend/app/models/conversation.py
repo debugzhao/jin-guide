@@ -70,3 +70,7 @@ class IntakeConversation(Base):
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
     )
+    # 软删除（对齐 reports/documents 表的约定，见 backend/docs/03_data_model.md §4）
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )

@@ -2,16 +2,17 @@
 Intake Chat API — 建档前 Chat-first 聊天（IntakeAgent）
 
 Endpoints:
-  GET    /intake/conversations — list current owner_key 下的会话（游标分页，侧栏用）
-  POST   /intake/chat          — send message, SSE streaming response
-  GET    /intake/chat/history  — fetch conversation history (cold layer)
-  DELETE /intake/chat          — clear a conversation's history
+  GET    /intake/conversations             — list current owner_key 下的会话（游标分页，侧栏用）
+  PATCH  /intake/conversations/{id}         — 重命名会话
+  DELETE /intake/conversations/{id}         — 软删除会话
+  POST   /intake/chat                       — send message, SSE streaming response
+  GET    /intake/chat/history               — fetch conversation history (cold layer)
 
 多会话模型：`intake_conversations.id` 即会话/thread id，不传 `conversation_id`
 时后端在首条用户消息产出后懒创建新会话（避免"新建对话"点一下就产生空行）；
-传了则校验该会话确实属于当前 owner_key 后追加。取代旧版 `/profile/intent`
-二分类接口：这里是一段真正的多轮流式聊天，命中建档意图时通过 SSE
-`trigger_profile_capture` 事件通知前端内联渲染建档表单，见
+传了则校验该会话确实属于当前 owner_key 且未被删除后追加。取代旧版
+`/profile/intent` 二分类接口：这里是一段真正的多轮流式聊天，命中建档意图时
+通过 SSE `trigger_profile_capture` 事件通知前端内联渲染建档表单，见
 `docs/frontend-prd-v2.md` §Chat-first 建档入口、`docs/backend-prd-v2.md` §5.6b。
 """
 from __future__ import annotations
@@ -21,8 +22,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Optional
 from uuid import uuid4
 
+import httpx
 import redis.asyncio as aioredis
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -42,6 +44,8 @@ _MAX_MESSAGES_STORED = 50
 _REDIS_HISTORY_TTL = 7 * 24 * 3600  # 7 days
 _MAX_MESSAGE_LENGTH = 200
 _TITLE_MAX_LENGTH = 20
+_RENAME_TITLE_MAX_LENGTH = 50
+_TITLE_SUMMARY_MODEL = "profile-agent"  # 轻量虚拟模型，见 litellm_config.yaml
 
 
 def _owner_key(identity: Identity) -> str | None:
@@ -106,15 +110,86 @@ async def _save_history_to_redis(owner_key: str, conversation_id: str, messages:
 
 
 async def _get_owned_conversation(
-    db: AsyncSession, owner_key: str, conversation_id: str
+    db: AsyncSession, owner_key: str, conversation_id: str, *, include_deleted: bool = False
 ) -> IntakeConversation | None:
-    result = await db.execute(
-        select(IntakeConversation).where(
-            IntakeConversation.id == conversation_id,
-            IntakeConversation.owner_key == owner_key,
-        )
-    )
+    conditions = [
+        IntakeConversation.id == conversation_id,
+        IntakeConversation.owner_key == owner_key,
+    ]
+    if not include_deleted:
+        conditions.append(IntakeConversation.deleted_at.is_(None))
+    result = await db.execute(select(IntakeConversation).where(*conditions))
     return result.scalar_one_or_none()
+
+
+async def _summarize_title(message: str, full_response: str) -> str | None:
+    """用轻量模型把首条消息拟成一句自然标题，失败返回 None（调用方 fallback 到截断标题）。"""
+    prompt = (
+        "为下面这轮高考志愿咨询对话拟一个不超过 14 个字的简短标题，"
+        "只输出标题本身，不要引号、句末标点或任何解释。\n"
+        f"用户：{message}\n"
+        f"助手：{full_response[:200]}"
+    )
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
+            f"{settings.litellm_base_url}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {settings.litellm_master_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": _TITLE_SUMMARY_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                # kimi-k2.6 是推理模型，即使这么简单的任务也会先输出几百字的
+                # reasoning_content 才产出最终 content——实测 max_tokens=30~150 时
+                # token 预算全部耗在推理过程上，content 永远是空字符串，必须给够预算。
+                "max_tokens": 500,
+                # Moonshot Kimi 只允许 temperature=1，传其他值会被 LiteLLM 直接 400（见
+                # backend/app/agent/intake_agent.py 里同样固定传 1 的先例）
+                "temperature": 1,
+            },
+        )
+        resp.raise_for_status()
+        text = resp.json()["choices"][0]["message"]["content"].strip()
+    text = text.strip("\"'“”。.， ").strip()
+    if not text:
+        return None
+    return text[:_TITLE_MAX_LENGTH]
+
+
+async def _maybe_upgrade_title(
+    owner_key: str, conversation_id: str, seed_title: str, message: str, full_response: str
+) -> None:
+    """
+    Best-effort 后台任务（FastAPI BackgroundTasks，允许进程重启丢失——只是标题从截断态
+    升级成 LLM 摘要，不是需要可靠交付的业务数据，符合 CLAUDE.md 对 BackgroundTasks 的使用边界）：
+    把首条消息截断生成的标题升级成更自然的一句话摘要。只在标题仍是创建时的截断态（没被用户
+    手动改过）才覆盖，失败/超时静默跳过。
+    """
+    from app.database import async_session_maker
+
+    try:
+        new_title = await _summarize_title(message, full_response)
+    except Exception:
+        return
+    if not new_title or new_title == seed_title:
+        return
+
+    try:
+        async with async_session_maker() as db:
+            result = await db.execute(
+                select(IntakeConversation).where(
+                    IntakeConversation.id == conversation_id,
+                    IntakeConversation.owner_key == owner_key,
+                    IntakeConversation.title == seed_title,
+                )
+            )
+            conv = result.scalar_one_or_none()
+            if conv:
+                conv.title = new_title
+                await db.commit()
+    except Exception:
+        pass
 
 
 async def _persist_history_to_db(
@@ -189,7 +264,9 @@ async def list_intake_conversations(
     if not owner_key:
         return IntakeConversationListOut(items=[], next_cursor=None, has_more=False)
 
-    stmt = select(IntakeConversation).where(IntakeConversation.owner_key == owner_key)
+    stmt = select(IntakeConversation).where(
+        IntakeConversation.owner_key == owner_key, IntakeConversation.deleted_at.is_(None)
+    )
 
     if cursor:
         try:
@@ -221,9 +298,63 @@ async def list_intake_conversations(
     )
 
 
+class IntakeConversationRenameIn(BaseModel):
+    title: str
+
+
+@router.patch("/conversations/{conversation_id}", response_model=IntakeConversationListItem)
+async def rename_intake_conversation(
+    conversation_id: str,
+    body: IntakeConversationRenameIn,
+    db: AsyncSession = Depends(get_db),
+    identity: Identity = Depends(get_identity),
+):
+    """重命名会话，仅限当前 owner_key 拥有的会话。不改变 updated_at——重命名不算"活跃"，
+    避免侧栏排序因为改名而跳动。"""
+    owner_key = _require_owner_key(identity)
+
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="标题不能为空")
+    title = title[:_RENAME_TITLE_MAX_LENGTH]
+
+    conv = await _get_owned_conversation(db, owner_key, conversation_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="会话不存在或无权访问")
+
+    conv.title = title
+    await db.commit()
+
+    return IntakeConversationListItem(id=conv.id, title=conv.title, updated_at=conv.updated_at.isoformat())
+
+
+@router.delete("/conversations/{conversation_id}", status_code=204)
+async def delete_intake_conversation(
+    conversation_id: str,
+    db: AsyncSession = Depends(get_db),
+    identity: Identity = Depends(get_identity),
+):
+    """软删除会话（Redis 热层直接物理删，Postgres 冷层打 deleted_at 标记）。"""
+    owner_key = _require_owner_key(identity)
+
+    conv = await _get_owned_conversation(db, owner_key, conversation_id)
+    if not conv:
+        return
+
+    conv.deleted_at = datetime.now(UTC)
+    await db.commit()
+
+    redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
+    try:
+        await redis_client.delete(_history_key(owner_key, conversation_id))
+    finally:
+        await redis_client.aclose()
+
+
 @router.post("/chat")
 async def intake_chat(
     body: IntakeChatIn,
+    background_tasks: BackgroundTasks,
     request: Request,
     identity: Identity = Depends(get_identity),
 ):
@@ -298,16 +429,20 @@ async def intake_chat(
                 new_history = new_history[-_MAX_MESSAGES_STORED:]
                 await _save_history_to_redis(owner_key, conversation_id, new_history)
 
+                seed_title = _derive_title(message) if is_new_conversation else None
+
                 # 持久化在 yield done 之前完成：客户端收到 done 后会立即用 conversation_id
                 # 刷新侧栏会话列表，必须保证这时数据库已经能查到这条会话，否则会有竞态
                 # （侧栏刷新跑在 DB 写入提交之前，读到的还是旧列表）。
                 async with async_session_maker() as persist_db:
                     await _persist_history_to_db(
-                        persist_db,
-                        owner_key,
-                        conversation_id,
-                        new_history,
-                        seed_title=_derive_title(message) if is_new_conversation else None,
+                        persist_db, owner_key, conversation_id, new_history, seed_title=seed_title
+                    )
+
+                if seed_title:
+                    # 标题升级是纯锦上添花，不阻塞 done 事件；进程重启丢失也无所谓
+                    background_tasks.add_task(
+                        _maybe_upgrade_title, owner_key, conversation_id, seed_title, message, full_response
                     )
 
                 yield f"event: done\ndata: {json.dumps({'conversation_id': conversation_id}, ensure_ascii=False)}\n\n"
@@ -320,6 +455,9 @@ async def intake_chat(
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
+        # StreamingResponse 是我们手动构造返回的，FastAPI 不会像处理普通返回值那样自动挂载
+        # 注入的 background_tasks——必须显式传进来，否则 add_task 注册的任务永远不会被执行。
+        background=background_tasks,
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
@@ -348,28 +486,3 @@ async def get_intake_chat_history(
         messages = conv.messages_json or []
 
     return IntakeChatHistoryOut(messages=messages, total=len(messages))
-
-
-@router.delete("/chat", status_code=204)
-async def clear_intake_chat_history(
-    conversation_id: Optional[str] = Query(None),
-    db: AsyncSession = Depends(get_db),
-    identity: Identity = Depends(get_identity),
-):
-    """Delete one conversation's history (Redis + PostgreSQL)."""
-    owner_key = _owner_key(identity)
-    if not owner_key or not conversation_id:
-        return
-
-    conv = await _get_owned_conversation(db, owner_key, conversation_id)
-    if not conv:
-        return
-
-    redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
-    try:
-        await redis_client.delete(_history_key(owner_key, conversation_id))
-    finally:
-        await redis_client.aclose()
-
-    await db.delete(conv)
-    await db.commit()

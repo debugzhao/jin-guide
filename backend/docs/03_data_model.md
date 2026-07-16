@@ -252,20 +252,27 @@ CREATE TABLE province_thresholds (
 CREATE TABLE intake_conversations (
     id              VARCHAR(36) PRIMARY KEY,       -- 即会话/thread id
     owner_key       VARCHAR(48) NOT NULL,           -- user_id 或 "anon:{anonymous_id}"，非唯一
-    title           VARCHAR(100),                   -- 首条用户消息截断生成
+    title           VARCHAR(100),                   -- 首条用户消息截断生成，之后可能被 LLM 摘要升级或用户重命名
     messages_json   JSONB NOT NULL DEFAULT '[]',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at      TIMESTAMPTZ                      -- 软删除，见 §4
 );
 CREATE INDEX ix_intake_conversations_owner_key ON intake_conversations (owner_key);
 CREATE INDEX ix_intake_conversations_owner_key_updated_at ON intake_conversations (owner_key, updated_at, id);
 ```
 
-最初版本 `owner_key` 有唯一约束——一个用户/匿名会话只存一条建档前聊天历史，没有会话维度，导致侧栏无法展示"新建对话 + 历史列表 + 点击恢复"（首页每次都是同一条历史）。迁移 009 去掉唯一约束，`id` 变成真正的会话/thread id，一个 owner_key 下可以有多条会话，按 `updated_at` 倒序做游标分页（参考 `reports` 表的分页范式）。
+最初版本 `owner_key` 有唯一约束——一个用户/匿名会话只存一条建档前聊天历史，没有会话维度，导致侧栏无法展示"新建对话 + 历史列表 + 点击恢复"（首页每次都是同一条历史）。迁移 009 去掉唯一约束，`id` 变成真正的会话/thread id，一个 owner_key 下可以有多条会话，按 `updated_at` 倒序做游标分页（参考 `reports` 表的分页范式）。迁移 010 补了 `deleted_at`，支持会话软删除（对齐 §4 reports/documents 的既有约定）。
 
 **懒创建**：`POST /intake/chat` 不传 `conversation_id` 时不会立即建行，而是等这轮对话的 `done` 事件产出、拿到完整回复后才 upsert——避免"新建对话"按钮点一下、或用户中途放弃没发消息，就在表里留一堆空会话。
 
+**标题三层来源，优先级从低到高**：① 首条消息截断（≤20 字，同步产生，即时可用）→ ② `done` 事件后台任务用轻量模型 `profile-agent` 生成的自然语言摘要（best-effort，只在标题还是①的截断态时才覆盖）→ ③ 用户手动重命名（`PATCH /intake/conversations/{id}`，覆盖一切，且不再被②覆盖）。重命名不更新 `updated_at`——避免侧栏排序因为改名而跳动，只有真实消息往来才算"活跃"。
+
+**匿名转登录合并**：`auth.py::_bind_anonymous_data`（登录/注册成功时调用，已经在合并 `StudentProfile`/`Report`）批量把 `owner_key == "anon:{anonymous_id}"` 的行改写成 `owner_key = user_id`，多条匿名会话一次性转移。这是个 ORM 层 `update()` 批量语句，会触发 `updated_at` 的 `onupdate` 回调一并刷新——副作用是合并后的会话在侧栏会排到比较靠前的位置，属于可接受的良性副作用，不需要特殊处理。
+
 **owner_key 长度踩过的坑**：最初 `owner_key VARCHAR(36)` 是照抄 uuid 长度设的，但匿名会话的 owner_key 实际是 `"anon:" + 36 位 uuid`（41 字符），插入时被 `StringDataRightTruncationError` 打断——而这个错误被写库函数的 best-effort `try/except Exception: pass` 悄悄吞掉，长期没有暴露：匿名用户的建档聊天历史事实上从未真正落过 Postgres 冷层，只靠 Redis 7 天 TTL 硬撑。教训：`owner_key` 这类"多种 ID 拼前缀"的复合字段，列宽要按最长的那种取值算，不能照抄单一 ID 类型的长度；best-effort 的 `except: pass` 至少要考虑加一条监控/日志，否则这类静默截断可以完全不被发现。
+
+**LLM 标题摘要踩过的坑**：Moonshot Kimi（`kimi-k2.6`）是推理模型，即使"拟一个 14 字标题"这么简单的任务也会先输出几百字 `reasoning_content` 才产出最终 `content`——实测 `max_tokens=30~150` 时预算全部耗在推理过程上，`content` 字段永远是空字符串，直到给到 `max_tokens=500` 才能看到真正的标题输出；且该模型只接受 `temperature=1`，传其他值会被 LiteLLM 直接拒绝 400。这类"reasoning 模型"调小任务的 token 预算，不能照搬非推理模型的经验值估算。
 
 ---
 
