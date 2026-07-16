@@ -319,3 +319,29 @@ graph.add_edge("policy_rule_agent", "recommendation")
 ```
 
 报告生成 P95 目标 45s（见 `docs/backend-prd-v2.md` §14.2）。
+
+---
+
+## 9. 记忆管理：本系统里的几类记忆机制与实现模式
+
+> 面试常见问题："这套系统的记忆管理是怎么设计的？"——"记忆"在本项目里不是单一机制，而是按寿命和用途分层实现，没有一处是"把全部历史无差别塞给 LLM"。
+
+### 9.1 按寿命/用途分类
+
+| 类型 | 场景 | 本项目实现 | 通用实现模式 |
+|---|---|---|---|
+| 会话内工作记忆 | 单次 Agent 执行 / 单轮对话内，多节点间共享上下文 | `VolunteerPlanState`（§4）+ LangGraph Checkpoint（Redis 热层，7 天 TTL，见 §1）；`intake_agent.py` 单次请求只取最近 16 条消息传给 LLM，滑动窗口截断 | 消息列表直接塞进上下文，配合窗口截断防止超长 |
+| 跨会话长期记忆（对话历史） | 用户下次回来想接上之前的聊天 | `report_conversations`（按 `report_id` 隔离）、`intake_conversations`（按 `owner_key`）：Redis 热层（`chat:history:*`/`intake:history:*`，7 天 TTL）+ Postgres 冷层 best-effort 异步写入兜底 | Redis 热层（低延迟、有 TTL）+ DB 冷层（持久化），按会话/线程 ID 隔离读写；ID 一般对应 URL 里的资源 id（本项目是 `report_id`），或独立的 `conversation_id`/`thread_id` |
+| 结构化用户画像 | "预算 8 万""选了物理化学生物"这类必须参与规则判断的信息 | `profiles` 表 + Profile Agent 追问机制（只写 `profile`/`profile_complete`/`profile_pending_questions`，§2） | LLM/规则从对话中抽取字段写入普通业务表，不留在语义记忆里——高风险判断必须能被规则引擎直接读取和审计 |
+| 检索增强记忆（外部知识） | 记忆量大、按需召回、大部分内容跟当前请求无关 | pgvector 向量库存招生政策/院校信息（Retrieval Agent，§2/§3），检索 top-8 相关证据注入 Report Agent，而非全量塞入 | 内容 embedding 化存向量库，检索时取 top-k 相关片段注入 prompt |
+| 摘要压缩记忆 | 上下文超长但不想完全丢弃早期信息 | 当前系统未启用；Reflection 的定向修正复用的是 `compliance_issues`（问题摘要）而非全量历史重放，可视为该模式的局部体现 | 定期把旧内容压缩成摘要，替代原文注入上下文 |
+
+### 9.2 选型原则
+
+一句话：**能结构化就结构化存（可被规则/代码直接验证），结构化不了但需要精确复现就分层存储按线程隔离，量大但稀疏相关就上向量检索，超长上下文兜底用摘要压缩。**
+
+高风险决策场景（志愿填报）尤其要优先第一种——语义记忆只负责"聊天体验的连续性"，不能替代结构化数据参与规则判断。这是 §2.3（`docs/01_architecture_overview.md`）"规则引擎给结论，Agent 给解释"原则在记忆设计上的延伸：能沉淀成结构化字段的，就不要只留在对话记录里。
+
+### 9.3 已知缺口
+
+`intake_conversations` 当前是 `owner_key` 唯一约束——每个用户/匿名会话只有**一条**历史，没有会话/线程维度，不支持"多会话列表 + 切换历史会话继续聊"（`report_conversations` 按 `report_id` 天然具备这个维度，可作为改造参考范式）。
