@@ -246,6 +246,27 @@ CREATE TABLE province_thresholds (
 
 现在通过 `province_thresholds` 表配置，数据运营可以直接修改阈值，算法代码只读这张表，不需要改代码。
 
+### 2.6 intake_conversations 多会话设计
+
+```sql
+CREATE TABLE intake_conversations (
+    id              VARCHAR(36) PRIMARY KEY,       -- 即会话/thread id
+    owner_key       VARCHAR(48) NOT NULL,           -- user_id 或 "anon:{anonymous_id}"，非唯一
+    title           VARCHAR(100),                   -- 首条用户消息截断生成
+    messages_json   JSONB NOT NULL DEFAULT '[]',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX ix_intake_conversations_owner_key ON intake_conversations (owner_key);
+CREATE INDEX ix_intake_conversations_owner_key_updated_at ON intake_conversations (owner_key, updated_at, id);
+```
+
+最初版本 `owner_key` 有唯一约束——一个用户/匿名会话只存一条建档前聊天历史，没有会话维度，导致侧栏无法展示"新建对话 + 历史列表 + 点击恢复"（首页每次都是同一条历史）。迁移 009 去掉唯一约束，`id` 变成真正的会话/thread id，一个 owner_key 下可以有多条会话，按 `updated_at` 倒序做游标分页（参考 `reports` 表的分页范式）。
+
+**懒创建**：`POST /intake/chat` 不传 `conversation_id` 时不会立即建行，而是等这轮对话的 `done` 事件产出、拿到完整回复后才 upsert——避免"新建对话"按钮点一下、或用户中途放弃没发消息，就在表里留一堆空会话。
+
+**owner_key 长度踩过的坑**：最初 `owner_key VARCHAR(36)` 是照抄 uuid 长度设的，但匿名会话的 owner_key 实际是 `"anon:" + 36 位 uuid`（41 字符），插入时被 `StringDataRightTruncationError` 打断——而这个错误被写库函数的 best-effort `try/except Exception: pass` 悄悄吞掉，长期没有暴露：匿名用户的建档聊天历史事实上从未真正落过 Postgres 冷层，只靠 Redis 7 天 TTL 硬撑。教训：`owner_key` 这类"多种 ID 拼前缀"的复合字段，列宽要按最长的那种取值算，不能照抄单一 ID 类型的长度；best-effort 的 `except: pass` 至少要考虑加一条监控/日志，否则这类静默截断可以完全不被发现。
+
 ---
 
 ## 3. 关键索引策略

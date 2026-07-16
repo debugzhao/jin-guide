@@ -47,7 +47,9 @@ class IntakeConversation(Base):
 
     这里还没有 report_id 可以挂靠（建档表单甚至可能还没触发），所以不能像
     ReportConversation 一样按 report_id 分表；owner_key 是登录用户的 user_id
-    或匿名会话的 anonymous_id 二选一，同一个人只保留一条会话记录。
+    或匿名会话的 anonymous_id 二选一，本身不再是唯一约束——同一个人可以有
+    多条会话（多会话历史，`id` 即会话/thread id），列表按 owner_key 查询、
+    按 updated_at 倒序展示，见 `docs/backend-prd-v2.md` §5.6b。
     """
 
     __tablename__ = "intake_conversations"
@@ -55,7 +57,10 @@ class IntakeConversation(Base):
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid4())
     )
-    owner_key: Mapped[str] = mapped_column(String(36), unique=True, nullable=False)
+    # 登录用户是 user_id（36 位 uuid），匿名会话是 "anon:" + 36 位 uuid（41 字符）
+    owner_key: Mapped[str] = mapped_column(String(48), nullable=False)
+    # 首条用户消息截断生成，供侧栏会话列表展示；None 表示尚未产生过消息
+    title: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     messages_json: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)

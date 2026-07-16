@@ -8,6 +8,7 @@ import SidebarNav from '@/components/layout/SidebarNav'
 import WorkspaceShell from '@/components/layout/WorkspaceShell'
 import ChatColumn from '@/components/chat/ChatColumn'
 import LiveReportPanel from '@/components/report/LiveReportPanel'
+import { useAppStore } from '@/lib/store'
 
 /**
  * 报告工作台 —— `/` 页面实时报告面板拿到可分享 report_id 后的独立路由呈现
@@ -20,6 +21,7 @@ export default function ReportWorkspacePage() {
   const { id } = useParams<{ id: string }>()
   const router = useRouter()
   const [rightCollapsed, setRightCollapsed] = useState(false)
+  const setCurrentIntakeConversationId = useAppStore((s) => s.setCurrentIntakeConversationId)
 
   const handleShare = async () => {
     try {
@@ -43,7 +45,16 @@ export default function ReportWorkspacePage() {
       />
 
       <WorkspaceShell
-        sidebar={<SidebarNav onNewConversation={() => router.push('/')} onLoginClick={() => router.push('/')} />}
+        sidebar={
+          <SidebarNav
+            onNewConversation={() => router.push('/')}
+            onSelectConversation={(conversationId) => {
+              setCurrentIntakeConversationId(conversationId)
+              router.push('/')
+            }}
+            onLoginClick={() => router.push('/')}
+          />
+        }
         left={<ChatColumn reportId={id} />}
         right={<LiveReportPanel reportId={id} />}
         hasRight

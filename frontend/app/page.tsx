@@ -25,7 +25,7 @@ export default function HomePage() {
   const [stage, setStage] = useState<Stage>('idle')
   const [reportId, setReportId] = useState<string | null>(null)
   const [rightCollapsed, setRightCollapsed] = useState(false)
-  const { setUser, clearUser } = useAppStore()
+  const { setUser, clearUser, setCurrentIntakeConversationId } = useAppStore()
 
   useEffect(() => {
     api.me().then(setUser).catch(() => clearUser())
@@ -44,6 +44,18 @@ export default function HomePage() {
     setStage('idle')
     setRightCollapsed(false)
     setMobileSidebarOpen(false)
+    setCurrentIntakeConversationId(null)
+    window.history.replaceState(null, '', '/')
+    setConversationKey((k) => k + 1)
+  }
+
+  /** 侧栏点击某条历史会话：切到该会话继续聊，同一套 remount 机制，见 handleNewConversation */
+  const handleSelectConversation = (conversationId: string) => {
+    setReportId(null)
+    setStage('idle')
+    setRightCollapsed(false)
+    setMobileSidebarOpen(false)
+    setCurrentIntakeConversationId(conversationId)
     window.history.replaceState(null, '', '/')
     setConversationKey((k) => k + 1)
   }
@@ -64,7 +76,13 @@ export default function HomePage() {
       </header>
 
       <WorkspaceShell
-        sidebar={<SidebarNav onNewConversation={handleNewConversation} onLoginClick={() => setLoginOpen(true)} />}
+        sidebar={
+          <SidebarNav
+            onNewConversation={handleNewConversation}
+            onSelectConversation={handleSelectConversation}
+            onLoginClick={() => setLoginOpen(true)}
+          />
+        }
         left={<ConversationStream key={conversationKey} onReportReady={handleReportReady} onStageChange={setStage} />}
         right={<LiveReportPanel reportId={reportId} />}
         hasRight={stage !== 'idle'}

@@ -342,6 +342,8 @@ graph.add_edge("policy_rule_agent", "recommendation")
 
 高风险决策场景（志愿填报）尤其要优先第一种——语义记忆只负责"聊天体验的连续性"，不能替代结构化数据参与规则判断。这是 §2.3（`docs/01_architecture_overview.md`）"规则引擎给结论，Agent 给解释"原则在记忆设计上的延伸：能沉淀成结构化字段的，就不要只留在对话记录里。
 
-### 9.3 已知缺口
+### 9.3 多会话改造（已实现）
 
-`intake_conversations` 当前是 `owner_key` 唯一约束——每个用户/匿名会话只有**一条**历史，没有会话/线程维度，不支持"多会话列表 + 切换历史会话继续聊"（`report_conversations` 按 `report_id` 天然具备这个维度，可作为改造参考范式）。
+`intake_conversations` 曾经是 `owner_key` 唯一约束——每个用户/匿名会话只有一条历史，没有会话/线程维度。已改造为多会话模型（`id` 即会话/thread id，`owner_key` 去掉唯一约束改为普通索引，见迁移 009）：不传 `conversation_id` 时懒创建新会话（首条消息产出 `done` 事件前才建行，避免"新建对话"点一下就产生空行），传了则校验属于当前 `owner_key` 才允许读写。持久化必须在 SSE `done` 事件 yield 之前完成，否则客户端收到 `done` 立即刷新侧栏列表会有竞态（读到写入提交前的旧数据）。
+
+改造过程中顺带修了一个预先存在的 bug：匿名会话的 `owner_key` 是 `"anon:" + 36 位 uuid`（41 字符），超出原 `owner_key varchar(36)` 上限，写入时被 `StringDataRightTruncationError` 打断，又被 `_persist_history_to_db` 的 best-effort try/except 悄悄吞掉——实际后果是匿名用户的建档聊天历史从未真正落过 Postgres 冷层，只靠 Redis 7 天 TTL 硬撑。现已加宽到 `varchar(48)`。

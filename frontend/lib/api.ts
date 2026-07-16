@@ -344,24 +344,52 @@ export interface IntakeChatHistoryResult {
   total: number
 }
 
-export const intakeChatApi = {
-  /** Load existing intake chat history for the current identity (user or anonymous session) */
-  getHistory: () => apiFetch<IntakeChatHistoryResult>('/api/v1/intake/chat/history'),
+export interface IntakeConversationListItem {
+  id: string
+  title: string | null
+  updated_at: string
+}
 
-  /** Clear intake conversation history */
-  clearHistory: () => apiFetch<void>('/api/v1/intake/chat', { method: 'DELETE' }),
+export interface IntakeConversationListResult {
+  items: IntakeConversationListItem[]
+  next_cursor: string | null
+  has_more: boolean
+}
+
+export const intakeChatApi = {
+  /** List the current identity's intake chat conversations (cursor-paginated, sidebar history list) */
+  listConversations: (cursor?: string) =>
+    apiFetch<IntakeConversationListResult>(
+      `/api/v1/intake/conversations${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`
+    ),
+
+  /** Load one conversation's history. `conversationId` must belong to the current identity. */
+  getHistory: (conversationId: string) =>
+    apiFetch<IntakeChatHistoryResult>(
+      `/api/v1/intake/chat/history?conversation_id=${encodeURIComponent(conversationId)}`
+    ),
+
+  /** Delete one conversation's history */
+  clearHistory: (conversationId: string) =>
+    apiFetch<void>(`/api/v1/intake/chat?conversation_id=${encodeURIComponent(conversationId)}`, {
+      method: 'DELETE',
+    }),
 
   /**
    * Open a streaming SSE connection for an intake chat message.
+   * `conversationId` — pass null to let the backend lazily create a new conversation on
+   * first message; `onDone` then receives the newly created id so the caller can persist it
+   * for subsequent messages in the same thread.
    * `onTriggerProfileCapture` fires when IntakeAgent's `start_profile_capture` tool
    * is called — the caller should render the profile capture form inline.
    */
   streamMessage: (
     message: string,
+    conversationId: string | null,
     callbacks: {
       onToken: (token: string) => void
       onTriggerProfileCapture: () => void
-      onDone: () => void
+      onDone: (conversationId?: string) => void
       onComplianceWarning: (issues: string[]) => void
       onError: (msg: string) => void
       onRateLimit: (message?: string) => void
@@ -377,7 +405,7 @@ export const intakeChatApi = {
           method: 'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message }),
+          body: JSON.stringify({ message, conversation_id: conversationId ?? undefined }),
           signal: controller.signal,
         })
 
@@ -419,7 +447,7 @@ export const intakeChatApi = {
                 } else if (currentEvent === 'trigger_profile_capture') {
                   callbacks.onTriggerProfileCapture()
                 } else if (currentEvent === 'done') {
-                  callbacks.onDone()
+                  callbacks.onDone(data.conversation_id)
                 } else if (currentEvent === 'compliance_warning') {
                   callbacks.onComplianceWarning(data.issues ?? [])
                 } else if (currentEvent === 'error') {

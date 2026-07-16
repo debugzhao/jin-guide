@@ -5,6 +5,7 @@ import { AlertCircle, RefreshCw, Sparkles } from 'lucide-react'
 import ChatInput from '@/components/chat/ChatInput'
 import ChatMessageBubble, { ChatStreamingBubble } from '@/components/chat/ChatMessageBubble'
 import { api, intakeChatApi } from '@/lib/api'
+import { useAppStore } from '@/lib/store'
 import type { ChatMessage } from '@/types'
 
 interface IntakeChatProps {
@@ -34,6 +35,9 @@ const toMessage = (role: ChatMessage['role'], content: string): ChatMessage => (
  * 何时调用 start_profile_capture 触发建档表单——不再是旧版"先分类再二选一"。
  */
 export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) {
+  const currentIntakeConversationId = useAppStore((s) => s.currentIntakeConversationId)
+  const setCurrentIntakeConversationId = useAppStore((s) => s.setCurrentIntakeConversationId)
+  const bumpConversationListVersion = useAppStore((s) => s.bumpConversationListVersion)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [isStreaming, setIsStreaming] = useState(false)
   const [streamingContent, setStreamingContent] = useState('')
@@ -53,8 +57,11 @@ export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) 
       } catch {
         // best-effort：拿不到匿名会话时聊天仍可用，只是历史不会持久化
       }
+      // 没有 conversation_id = 全新对话，不拉历史，直接展示欢迎态
+      // （父组件在切换/新建会话时会用 key 强制重新挂载本组件，见 app/page.tsx）
+      if (!currentIntakeConversationId) return
       try {
-        const res = await intakeChatApi.getHistory()
+        const res = await intakeChatApi.getHistory(currentIntakeConversationId)
         if (!cancelled && res.messages.length > 0) {
           setMessages(res.messages.map((m) => toMessage(m.role, m.content)))
         }
@@ -67,6 +74,7 @@ export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) 
     return () => {
       cancelled = true
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
@@ -83,18 +91,22 @@ export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) 
     setStreamingContent('')
     streamBufferRef.current = ''
 
-    const abort = intakeChatApi.streamMessage(text, {
+    const abort = intakeChatApi.streamMessage(text, currentIntakeConversationId, {
       onToken: (token) => {
         streamBufferRef.current += token
         setStreamingContent(streamBufferRef.current)
       },
       onTriggerProfileCapture: () => onStartProfile(),
-      onDone: () => {
+      onDone: (conversationId) => {
         if (streamBufferRef.current) {
           setMessages((prev) => [...prev, toMessage('assistant', streamBufferRef.current)])
         }
         setStreamingContent('')
         setIsStreaming(false)
+        if (conversationId && conversationId !== currentIntakeConversationId) {
+          setCurrentIntakeConversationId(conversationId)
+        }
+        bumpConversationListVersion()
       },
       onComplianceWarning: () => {},
       onError: (msg) => {

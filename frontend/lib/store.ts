@@ -98,6 +98,15 @@ interface AppStore extends ChatSlice, DebugSlice, AuthSlice {
   setProfileId: (id: string) => void
   currentTab: PlanType
   setCurrentTab: (tab: PlanType) => void
+
+  /** 当前建档前聊天（IntakeAgent）会话 id；null = 全新对话，不拉历史。不持久化——
+   *  每次全新打开 `/` 都应该是空白对话，历史通过侧栏会话列表点选恢复。 */
+  currentIntakeConversationId: string | null
+  setCurrentIntakeConversationId: (id: string | null) => void
+  /** 侧栏会话列表的重新拉取信号：新建会话产生新 id、或一轮对话完成更新了
+   *  updated_at 排序时递增，触发侧栏重新 fetch，避免跨组件传函数式 refetch。 */
+  conversationListVersion: number
+  bumpConversationListVersion: () => void
 }
 
 export const useAppStore = create<AppStore>()(
@@ -108,6 +117,12 @@ export const useAppStore = create<AppStore>()(
       setProfileId: (id) => set({ profileId: id }),
       currentTab: 'balanced',
       setCurrentTab: (tab) => set({ currentTab: tab }),
+
+      currentIntakeConversationId: null,
+      setCurrentIntakeConversationId: (id) => set({ currentIntakeConversationId: id }),
+      conversationListVersion: 0,
+      bumpConversationListVersion: () =>
+        set((s) => ({ conversationListVersion: s.conversationListVersion + 1 })),
 
       // ── chat slice ──
       activeReportId: null,
