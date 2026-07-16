@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { FileText, PanelRightOpen } from 'lucide-react'
+import { FileText, PanelLeftOpen, PanelRightOpen } from 'lucide-react'
 import BottomSheet from '@/components/ui/BottomSheet'
 
 interface WorkspaceShellProps {
@@ -12,6 +12,9 @@ interface WorkspaceShellProps {
   hasRight: boolean
   rightCollapsed: boolean
   onToggleRight: () => void
+  /** 桌面端左侧导航栏整体折叠；折叠时不卸载 DOM，只隐藏，对齐右栏折叠的处理方式 */
+  sidebarCollapsed: boolean
+  onToggleSidebar: () => void
   mobileSidebarOpen: boolean
   onCloseMobileSidebar: () => void
 }
@@ -36,6 +39,8 @@ export default function WorkspaceShell({
   hasRight,
   rightCollapsed,
   onToggleRight,
+  sidebarCollapsed,
+  onToggleSidebar,
   mobileSidebarOpen,
   onCloseMobileSidebar,
 }: WorkspaceShellProps) {
@@ -44,9 +49,26 @@ export default function WorkspaceShell({
   return (
     <div className="flex-1 flex overflow-hidden relative">
       {/* 桌面常驻侧栏 */}
-      <div className="hidden lg:flex lg:w-[260px] lg:flex-shrink-0 lg:flex-col border-r border-[#E2E8F0] bg-white">
+      <div
+        className={
+          sidebarCollapsed
+            ? 'hidden'
+            : 'hidden lg:flex lg:w-[260px] lg:flex-shrink-0 lg:flex-col border-r border-[#E2E8F0] bg-white'
+        }
+      >
         {sidebar}
       </div>
+
+      {sidebarCollapsed && (
+        <button
+          onClick={onToggleSidebar}
+          className="hidden lg:flex fixed bottom-6 left-6 items-center gap-2 px-4 py-2.5 rounded-full
+            wj-glass-card text-[#0F172A] text-sm shadow-lg hover:border-[#1E40AF]/40 transition-colors z-30"
+        >
+          <PanelLeftOpen className="w-4 h-4" />
+          展开侧栏
+        </button>
+      )}
 
       {/* 移动端侧栏抽屉 */}
       {mobileSidebarOpen && (

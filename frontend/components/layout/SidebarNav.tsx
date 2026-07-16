@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { MessageSquare, MoreHorizontal, Pencil, Plus, Trash2 } from 'lucide-react'
+import { MessageSquare, MoreHorizontal, PanelLeftClose, Pencil, Plus, Trash2 } from 'lucide-react'
 import Button from '@/components/ui/Button'
 import Modal from '@/components/ui/Modal'
 import UserMenu from '@/components/ui/UserMenu'
@@ -13,6 +13,8 @@ interface SidebarNavProps {
   /** 点击某条历史会话——切到该会话并继续对话，见 app/page.tsx handleSelectConversation */
   onSelectConversation: (conversationId: string) => void
   onLoginClick: () => void
+  /** 桌面端收起整个侧栏；不传则不渲染收起按钮（移动端抽屉场景用不到） */
+  onToggleSidebar?: () => void
 }
 
 interface ConversationRowProps {
@@ -124,7 +126,7 @@ function ConversationRow({ conversation, active, onSelect, onRename, onRequestDe
 }
 
 /** 左侧持久导航栏（对齐千问式布局）：新建对话 + 建档前聊天的历史会话列表（可重命名/删除）。 */
-export default function SidebarNav({ onNewConversation, onSelectConversation, onLoginClick }: SidebarNavProps) {
+export default function SidebarNav({ onNewConversation, onSelectConversation, onLoginClick, onToggleSidebar }: SidebarNavProps) {
   const { user, authChecked, currentIntakeConversationId, conversationListVersion } = useAppStore()
   const [conversations, setConversations] = useState<IntakeConversationListItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -186,11 +188,22 @@ export default function SidebarNav({ onNewConversation, onSelectConversation, on
 
   return (
     <div className="h-full flex flex-col">
-      <div className="px-4 py-4 flex-shrink-0">
-        <h1 className="text-base font-bold text-[#0F172A]">
-          问津 <span className="text-[#1E40AF]">Agent</span>
-        </h1>
-        <p className="text-[11px] text-[#64748B] mt-0.5">AI 志愿决策助理</p>
+      <div className="px-4 py-4 flex-shrink-0 flex items-start justify-between gap-2">
+        <div>
+          <h1 className="text-base font-bold text-[#0F172A]">
+            问津 <span className="text-[#1E40AF]">Agent</span>
+          </h1>
+          <p className="text-[11px] text-[#64748B] mt-0.5">AI 志愿决策助理</p>
+        </div>
+        {onToggleSidebar && (
+          <button
+            onClick={onToggleSidebar}
+            aria-label="收起侧栏"
+            className="hidden lg:inline-flex p-1.5 -mr-1 rounded-btn text-[#94A3B8] hover:text-[#0F172A] hover:bg-[#F1F5F9] transition-colors flex-shrink-0"
+          >
+            <PanelLeftClose className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
       <div className="px-3 flex-shrink-0">

@@ -25,6 +25,7 @@ export default function HomePage() {
   const [stage, setStage] = useState<Stage>('idle')
   const [reportId, setReportId] = useState<string | null>(null)
   const [rightCollapsed, setRightCollapsed] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const { setUser, clearUser, setCurrentIntakeConversationId } = useAppStore()
 
   useEffect(() => {
@@ -81,6 +82,7 @@ export default function HomePage() {
             onNewConversation={handleNewConversation}
             onSelectConversation={handleSelectConversation}
             onLoginClick={() => setLoginOpen(true)}
+            onToggleSidebar={() => setSidebarCollapsed((v) => !v)}
           />
         }
         left={<ConversationStream key={conversationKey} onReportReady={handleReportReady} onStageChange={setStage} />}
@@ -88,6 +90,8 @@ export default function HomePage() {
         hasRight={stage !== 'idle'}
         rightCollapsed={rightCollapsed}
         onToggleRight={() => setRightCollapsed((v) => !v)}
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleSidebar={() => setSidebarCollapsed((v) => !v)}
         mobileSidebarOpen={mobileSidebarOpen}
         onCloseMobileSidebar={() => setMobileSidebarOpen(false)}
       />

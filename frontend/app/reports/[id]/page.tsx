@@ -21,6 +21,7 @@ export default function ReportWorkspacePage() {
   const { id } = useParams<{ id: string }>()
   const router = useRouter()
   const [rightCollapsed, setRightCollapsed] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const setCurrentIntakeConversationId = useAppStore((s) => s.setCurrentIntakeConversationId)
 
   const handleShare = async () => {
@@ -53,6 +54,7 @@ export default function ReportWorkspacePage() {
               router.push('/')
             }}
             onLoginClick={() => router.push('/')}
+            onToggleSidebar={() => setSidebarCollapsed((v) => !v)}
           />
         }
         left={<ChatColumn reportId={id} />}
@@ -60,6 +62,8 @@ export default function ReportWorkspacePage() {
         hasRight
         rightCollapsed={rightCollapsed}
         onToggleRight={() => setRightCollapsed((v) => !v)}
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleSidebar={() => setSidebarCollapsed((v) => !v)}
         mobileSidebarOpen={false}
         onCloseMobileSidebar={() => {}}
       />
