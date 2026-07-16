@@ -62,7 +62,7 @@ export default function WorkspaceShell({
       {sidebarCollapsed && (
         <button
           onClick={onToggleSidebar}
-          className="hidden lg:flex fixed bottom-6 left-6 items-center gap-2 px-4 py-2.5 rounded-full
+          className="hidden lg:flex fixed top-6 left-6 items-center gap-2 px-4 py-2.5 rounded-full
             wj-glass-card text-[#0F172A] text-sm shadow-lg hover:border-[#1E40AF]/40 transition-colors z-30"
         >
           <PanelLeftOpen className="w-4 h-4" />
