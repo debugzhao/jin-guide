@@ -41,19 +41,19 @@ function buildMarkdownComponents(citations: ChatCitation[]): Components {
     ol: ({ children }) => <ol className="mb-2 last:mb-0 list-decimal pl-5 space-y-0.5">{children}</ol>,
     li: ({ children }) => <li>{children}</li>,
     h1: ({ children }) => <h1 className="mb-2 mt-1 text-base font-semibold">{children}</h1>,
-    h2: ({ children }) => <h2 className="mb-2 mt-1 text-[15px] font-semibold">{children}</h2>,
+    h2: ({ children }) => <h2 className="mb-2 mt-1 text-body font-semibold">{children}</h2>,
     h3: ({ children }) => <h3 className="mb-1.5 mt-1 text-sm font-semibold">{children}</h3>,
     code: ({ children }) => (
-      <code className="rounded bg-neutral-border/60 px-1 py-0.5 font-mono text-[13px]">{children}</code>
+      <code className="rounded bg-neutral-border/60 px-1 py-0.5 font-mono text-caption">{children}</code>
     ),
     pre: ({ children }) => (
-      <pre className="mb-2 last:mb-0 overflow-x-auto rounded-lg bg-[#0F172A] p-3 text-[13px] text-white">
+      <pre className="mb-2 last:mb-0 overflow-x-auto rounded-btn bg-[#0F172A] p-3 text-caption text-white">
         {children}
       </pre>
     ),
     table: ({ children }) => (
       <div className="mb-2 last:mb-0 overflow-x-auto">
-        <table className="min-w-full border-collapse text-[13px]">{children}</table>
+        <table className="min-w-full border-collapse text-caption">{children}</table>
       </div>
     ),
     thead: ({ children }) => <thead className="bg-neutral-border/40">{children}</thead>,
@@ -70,7 +70,7 @@ export default function ChatMessageBubble({ message }: Props) {
   if (isUser) {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[80%] px-3.5 py-2.5 rounded-2xl rounded-tr-sm
+        <div className="max-w-[80%] px-3.5 py-2.5 rounded-bubble rounded-tr-sm
           bg-[#EFF6FF] text-[#0F172A] text-sm leading-relaxed break-words">
           {message.content}
         </div>
@@ -84,8 +84,7 @@ export default function ChatMessageBubble({ message }: Props) {
         flex items-center justify-center mt-0.5">
         <Bot className="w-4 h-4 text-white" />
       </div>
-      <div className="max-w-[85%] px-3.5 py-2.5 rounded-2xl rounded-tl-sm
-        wj-glass-card text-sm leading-relaxed text-[#0F172A] break-words">
+      <div className="max-w-[85%] pt-1 text-sm leading-relaxed text-[#0F172A] break-words">
         <ReactMarkdown remarkPlugins={[remarkGfm]} components={buildMarkdownComponents(message.citations)}>
           {preprocessCitations(message.content)}
         </ReactMarkdown>
@@ -102,7 +101,7 @@ export function ChatTypingIndicator() {
         flex items-center justify-center">
         <Bot className="w-4 h-4 text-white" />
       </div>
-      <div className="px-3.5 py-2.5 rounded-2xl rounded-tl-sm wj-glass-card">
+      <div className="pt-1.5">
         <div className="flex gap-1 items-center h-4">
           <span className="w-1.5 h-1.5 rounded-full bg-[#94A3B8] animate-bounce [animation-delay:0ms]" />
           <span className="w-1.5 h-1.5 rounded-full bg-[#94A3B8] animate-bounce [animation-delay:150ms]" />
@@ -121,8 +120,7 @@ export function ChatStreamingBubble({ content }: { content: string }) {
         flex items-center justify-center mt-0.5">
         <Bot className="w-4 h-4 text-white" />
       </div>
-      <div className="max-w-[85%] px-3.5 py-2.5 rounded-2xl rounded-tl-sm
-        wj-glass-card text-sm leading-relaxed text-[#0F172A] break-words">
+      <div className="max-w-[85%] pt-1 text-sm leading-relaxed text-[#0F172A] break-words">
         {content ? (
           <ReactMarkdown remarkPlugins={[remarkGfm]} components={buildMarkdownComponents([])}>
             {preprocessCitations(content)}

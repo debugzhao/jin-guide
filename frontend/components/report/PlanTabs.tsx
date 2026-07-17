@@ -25,7 +25,7 @@ export default function PlanTabs({ currentTab, onChange }: PlanTabsProps) {
             'flex-1 py-2 px-2 rounded-[6px] text-sm font-medium transition-colors',
             'flex flex-col items-center gap-0.5',
             currentTab === tab.value
-              ? 'bg-white text-[#1E40AF] shadow-sm'
+              ? 'bg-white text-[#1E40AF] shadow-card'
               : 'text-[#64748B] hover:text-[#0F172A]'
           )}
         >

@@ -42,7 +42,7 @@ export default function Modal({ isOpen, onClose, title, children }: ModalProps) 
         role="dialog"
         aria-modal="true"
         aria-labelledby={title ? 'modal-title' : undefined}
-        className="relative w-full max-w-[420px] overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white shadow-2xl"
+        className="relative w-full max-w-[420px] overflow-hidden rounded-bubble border border-[#E2E8F0] bg-white shadow-modal"
       >
         <div className="flex items-center justify-between border-b border-[#E2E8F0] px-6 py-5">
           {title && (

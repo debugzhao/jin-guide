@@ -55,7 +55,7 @@ export default function WorkspaceShell({
         }`}
       >
         <div
-          className={`w-[260px] flex-shrink-0 flex flex-col h-full border-r border-[#E2E8F0] bg-white transition-opacity duration-200 ${
+          className={`w-[260px] flex-shrink-0 flex flex-col h-full border-r border-[#E2E8F0] bg-[#F8FAFC] transition-opacity duration-200 ${
             sidebarCollapsed ? 'opacity-0' : 'opacity-100'
           }`}
         >
@@ -67,7 +67,7 @@ export default function WorkspaceShell({
         <button
           onClick={onToggleSidebar}
           className="hidden lg:flex fixed top-6 left-6 items-center gap-2 px-4 py-2.5 rounded-full
-            wj-glass-card text-[#0F172A] text-sm shadow-lg hover:border-[#1E40AF]/40 transition-colors z-30"
+            bg-white border border-[#E2E8F0] text-[#0F172A] text-sm shadow-floating hover:border-[#1E40AF]/40 transition-colors z-30"
         >
           <PanelLeftOpen className="w-4 h-4" />
           展开侧栏
@@ -78,7 +78,7 @@ export default function WorkspaceShell({
       {mobileSidebarOpen && (
         <div className="fixed inset-0 z-40 lg:hidden">
           <div className="absolute inset-0 bg-black/40" onClick={onCloseMobileSidebar} />
-          <div className="absolute left-0 top-0 bottom-0 w-[280px] bg-white shadow-xl flex flex-col">
+          <div className="absolute left-0 top-0 bottom-0 w-[280px] bg-[#F8FAFC] shadow-modal flex flex-col">
             {sidebar}
           </div>
         </div>
@@ -113,7 +113,7 @@ export default function WorkspaceShell({
           <button
             onClick={onToggleRight}
             className="hidden lg:flex fixed bottom-6 right-6 items-center gap-2 px-4 py-2.5 rounded-full
-              wj-glass-card text-[#0F172A] text-sm shadow-lg hover:border-[#1E40AF]/40 transition-colors z-30"
+              bg-white border border-[#E2E8F0] text-[#0F172A] text-sm shadow-floating hover:border-[#1E40AF]/40 transition-colors z-30"
           >
             <PanelRightOpen className="w-4 h-4" />
             展开报告
@@ -124,7 +124,7 @@ export default function WorkspaceShell({
           <button
             onClick={() => setMobileReportOpen(true)}
             className="lg:hidden fixed bottom-6 right-6 flex items-center gap-2 px-4 py-2.5 rounded-full
-              wj-glass-card text-[#0F172A] text-sm shadow-lg z-30"
+              bg-white border border-[#E2E8F0] text-[#0F172A] text-sm shadow-floating z-30"
           >
             <FileText className="w-4 h-4" />
             查看报告

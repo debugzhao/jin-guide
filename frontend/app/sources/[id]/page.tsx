@@ -117,9 +117,9 @@ export default function SourceDetailPage() {
 
       <div className="max-w-2xl mx-auto px-4 py-6 space-y-5">
         {/* Metadata card */}
-        <div className="bg-white rounded-xl border border-gray-200 p-5 shadow-sm">
+        <div className="bg-white rounded-card border border-gray-200 p-5 shadow-card">
           <div className="flex items-start gap-3">
-            <div className="w-10 h-10 bg-blue-50 rounded-xl flex items-center justify-center shrink-0">
+            <div className="w-10 h-10 bg-blue-50 rounded-card flex items-center justify-center shrink-0">
               <FileText className="w-5 h-5 text-blue-600" />
             </div>
             <div className="flex-1">
@@ -173,7 +173,7 @@ export default function SourceDetailPage() {
             {source.chunks.map((chunk, idx) => (
               <div
                 key={chunk.id}
-                className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm"
+                className="bg-white rounded-card border border-gray-200 p-4 shadow-card"
               >
                 <div className="flex items-center gap-2 mb-2">
                   <span className="text-xs font-medium text-gray-400">第 {idx + 1} 段</span>
@@ -188,7 +188,7 @@ export default function SourceDetailPage() {
             ))}
           </div>
         ) : (
-          <div className="bg-white rounded-xl border border-gray-200 p-6 text-center text-sm text-gray-400">
+          <div className="bg-white rounded-card border border-gray-200 p-6 text-center text-sm text-gray-400">
             该文档暂无内容摘要
           </div>
         )}

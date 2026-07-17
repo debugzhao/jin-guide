@@ -187,7 +187,7 @@ export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) 
             <button
               key={p}
               onClick={() => handlePromptClick(p)}
-              className="w-full text-left px-3.5 py-2.5 rounded-xl wj-glass-card
+              className="w-full text-left px-3.5 py-2.5 rounded-card wj-glass-card
                 hover:border-[#1E40AF]/30 text-sm text-[#64748B] hover:text-[#0F172A] transition-colors"
             >
               {p}

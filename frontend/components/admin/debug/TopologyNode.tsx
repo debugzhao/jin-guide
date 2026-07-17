@@ -66,7 +66,7 @@ export default function TopologyNode({
     <button
       onClick={onClick}
       style={{ left: x - width / 2, top: y, width, height }}
-      className={`absolute flex flex-col items-center justify-center rounded-xl border-2 transition-colors ${style.border} ${style.bg} ${style.extra ?? ''} ${
+      className={`absolute flex flex-col items-center justify-center rounded-card border-2 transition-colors ${style.border} ${style.bg} ${style.extra ?? ''} ${
         selected ? 'ring-2 ring-offset-1 ring-blue-400' : ''
       }`}
     >

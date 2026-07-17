@@ -47,7 +47,7 @@ export default function ChatInput({
 
   return (
     <div className="border-t border-[#E2E8F0] pt-2.5 flex-shrink-0">
-      <div className="flex items-end gap-2 bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl
+      <div className="flex items-end gap-2 bg-white border border-[#E2E8F0] rounded-card shadow-floating
         focus-within:border-[#1E40AF]/40 transition-all px-3 py-2">
         <textarea
           ref={textareaRef}
@@ -73,7 +73,7 @@ export default function ChatInput({
         </button>
       </div>
       {value.length > maxLength * 0.8 && (
-        <p className="text-[10px] text-[#94A3B8] text-right mt-1 pr-1">
+        <p className="text-micro text-[#94A3B8] text-right mt-1 pr-1">
           {value.length}/{maxLength}
         </p>
       )}

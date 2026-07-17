@@ -141,16 +141,16 @@ export default function ChatColumn({ reportId }: Props) {
       <div className="flex items-center justify-between pb-3 border-b border-[#E2E8F0]">
         <div>
           <p className="text-sm font-semibold text-[#0F172A]">问津助手</p>
-          <p className="text-[10px] text-[#94A3B8]">基于你的志愿报告解答问题</p>
+          <p className="text-micro text-[#94A3B8]">基于你的志愿报告解答问题</p>
         </div>
         {messages.length > 0 && (
           confirmingClear ? (
             <div className="flex items-center gap-1.5">
-              <span className="text-[11px] text-[#64748B]">确定清除？</span>
-              <button onClick={() => setConfirmingClear(false)} className="text-[11px] text-[#94A3B8] hover:text-[#64748B] px-1">
+              <span className="text-micro text-[#64748B]">确定清除？</span>
+              <button onClick={() => setConfirmingClear(false)} className="text-micro text-[#94A3B8] hover:text-[#64748B] px-1">
                 取消
               </button>
-              <button onClick={handleClearChat} className="text-[11px] text-[#DC2626] hover:opacity-80 font-medium px-1">
+              <button onClick={handleClearChat} className="text-micro text-[#DC2626] hover:opacity-80 font-medium px-1">
                 确定
               </button>
             </div>
@@ -161,7 +161,7 @@ export default function ChatColumn({ reportId }: Props) {
               aria-label="清除对话"
             >
               <Trash2 className="w-3.5 h-3.5" />
-              <span className="text-[11px]">清除对话</span>
+              <span className="text-micro">清除对话</span>
             </button>
           )
         )}
@@ -173,7 +173,7 @@ export default function ChatColumn({ reportId }: Props) {
         ) : (
           <>
             {messages.length > HISTORY_WARNING_THRESHOLD && (
-              <p className="text-center text-[11px] text-[#94A3B8] py-1">
+              <p className="text-center text-micro text-[#94A3B8] py-1">
                 对话较长，建议清除后重新提问以保持上下文准确
               </p>
             )}
@@ -208,7 +208,7 @@ export default function ChatColumn({ reportId }: Props) {
 
       {!dailyLimitReached && <ChatInput onSend={handleSend} disabled={isStreaming} />}
 
-      <p className="text-[10px] text-[#94A3B8] text-center pt-2 flex-shrink-0">
+      <p className="text-micro text-[#94A3B8] text-center pt-2 flex-shrink-0">
         以上分析基于报告数据，最终填报请以省级考试院为准
       </p>
     </div>

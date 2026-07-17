@@ -23,14 +23,14 @@ function formatValue(value: unknown): string {
  */
 export default function CapturedInfoSummary({ values }: CapturedInfoSummaryProps) {
   return (
-    <div className="bg-[#EFF6FF] border border-[#BFDBFE] rounded-2xl rounded-tl-sm px-4 py-3 max-w-[96%] space-y-2">
+    <div className="bg-[#EFF6FF] border border-[#BFDBFE] rounded-bubble rounded-tl-sm px-4 py-3 max-w-[96%] space-y-2">
       <div className="text-xs text-[#64748B]">已采集信息</div>
       <p className="text-sm text-[#0F172A]">
         这些不是手动发送的聊天内容，而是从上方基础建档信息卡片里沉淀出的结构化档案。
       </p>
       <div className="grid grid-cols-[repeat(auto-fit,minmax(110px,1fr))] gap-2">
         {FIELD_LABELS.map(([key, label]) => (
-          <div key={key} className="border border-[#E2E8F0] rounded-lg bg-[#F8FAFC] p-2.5">
+          <div key={key} className="border border-[#E2E8F0] rounded-btn bg-[#F8FAFC] p-2.5">
             <span className="text-xs text-[#64748B]">{label}</span>
             <strong className="block text-sm text-[#0F172A] mt-0.5">{formatValue(values[key])}</strong>
           </div>

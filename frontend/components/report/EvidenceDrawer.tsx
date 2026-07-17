@@ -66,10 +66,10 @@ function SourceCard({ source }: { source: SourceDetail }) {
   const authColor = AUTH_COLORS[source.authorityLevel ?? ''] ?? 'bg-gray-100 text-gray-600'
 
   return (
-    <div className="border border-[#E2E8F0] rounded-xl overflow-hidden">
+    <div className="border border-[#E2E8F0] rounded-card overflow-hidden">
       <div className="p-4">
         <div className="flex items-start gap-3">
-          <div className="w-8 h-8 bg-[#EFF6FF] rounded-lg flex items-center justify-center shrink-0">
+          <div className="w-8 h-8 bg-[#EFF6FF] rounded-btn flex items-center justify-center shrink-0">
             <FileText className="w-4 h-4 text-[#1E40AF]" />
           </div>
           <div className="flex-1 min-w-0">
@@ -166,7 +166,7 @@ export default function EvidenceDrawer({
       />
 
       {/* Bottom sheet */}
-      <div className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t border-[#E2E8F0] rounded-t-2xl shadow-2xl max-h-[75vh] flex flex-col">
+      <div className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t border-[#E2E8F0] rounded-t-bubble shadow-modal max-h-[75vh] flex flex-col">
         {/* Handle + header */}
         <div className="flex-shrink-0 px-4 pt-3 pb-4 border-b border-[#E2E8F0]">
           <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-3" />

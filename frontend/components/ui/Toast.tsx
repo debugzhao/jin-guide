@@ -36,7 +36,7 @@ export default function Toast({ type, message, duration = 3000, onClose }: Toast
     <div
       className={cn(
         'fixed top-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2',
-        'px-4 py-3 rounded-btn border shadow-md transition-opacity duration-300 max-w-xs w-full',
+        'px-4 py-3 rounded-btn border shadow-floating transition-opacity duration-300 max-w-xs w-full',
         className,
         !visible && 'opacity-0'
       )}

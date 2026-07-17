@@ -18,7 +18,7 @@ interface ProfileCaptureCardProps {
 }
 
 const inputClass =
-  'wj-glass-card w-full rounded-lg px-3 py-2 text-sm text-[#0F172A] placeholder:text-[#94A3B8] focus:outline-none focus:ring-2 focus:ring-[#1E40AF]/40'
+  'wj-glass-card w-full rounded-btn px-3 py-2 text-sm text-[#0F172A] placeholder:text-[#94A3B8] focus:outline-none focus:ring-2 focus:ring-[#1E40AF]/40'
 
 const chipClass = (active: boolean) =>
   cn(
@@ -30,7 +30,7 @@ const chipClass = (active: boolean) =>
 
 const pillClass = (active: boolean) =>
   cn(
-    'flex-1 px-3 py-2 rounded-lg text-sm border text-center transition-colors',
+    'flex-1 px-3 py-2 rounded-btn text-sm border text-center transition-colors',
     active
       ? 'border-[#1E40AF] bg-[#EFF6FF] text-[#1E40AF]'
       : 'border-[#E2E8F0] text-[#64748B] hover:border-[#CBD5E1]'
@@ -120,13 +120,13 @@ export default function ProfileCaptureCard({ profileId, onSubmit, submitting }: 
   }
 
   return (
-    <div className="wj-glass-card rounded-2xl rounded-tl-sm px-4 py-3 max-w-[96%] space-y-3">
+    <div className="wj-glass-card rounded-bubble rounded-tl-sm px-4 py-3 max-w-[96%] space-y-3">
       <div className="text-xs text-[#64748B]">问津助手</div>
       <p className="text-sm text-[#0F172A]">
         先填写生成志愿报告必须依赖的基础信息。这里不完整时，我只能做快速答疑，不能渲染右侧报告。
       </p>
 
-      <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg p-3.5 space-y-3">
+      <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-btn p-3.5 space-y-3">
         <div className="flex items-center justify-between gap-2">
           <strong className="text-sm text-[#0F172A]">基础建档信息</strong>
           <span className="text-xs px-2 py-0.5 rounded-tag bg-[#FEF2F2] text-[#DC2626] border border-[#FECACA]">
@@ -218,7 +218,7 @@ export default function ProfileCaptureCard({ profileId, onSubmit, submitting }: 
 
           <div className="md:col-span-2 flex flex-col gap-1.5 text-xs text-[#64748B]">
             {PROFILE_FIELD_SCHEMA.has_physical_limits.label}
-            <p className="text-[11px] text-[#94A3B8]">{PROFILE_FIELD_SCHEMA.has_physical_limits.helpText}</p>
+            <p className="text-micro text-[#94A3B8]">{PROFILE_FIELD_SCHEMA.has_physical_limits.helpText}</p>
             <div className="flex gap-2">
               <button type="button" className={pillClass(hasMedicalLimit === false)} onClick={() => { setHasMedicalLimit(false); setMedicalDetails([]) }}>
                 无限制

@@ -9,7 +9,7 @@ interface ProfileSummaryStatusProps {
  */
 export default function ProfileSummaryStatus({ hasPreferences, reportVersion }: ProfileSummaryStatusProps) {
   return (
-    <div className="wj-glass-card rounded-2xl rounded-tl-sm px-4 py-3 max-w-[96%]">
+    <div className="wj-glass-card rounded-bubble rounded-tl-sm px-4 py-3 max-w-[96%]">
       <div className="text-xs text-[#64748B] mb-1">档案摘要</div>
       <div className="flex justify-between gap-2.5 text-xs text-[#64748B] py-2 border-b border-dashed border-[#E2E8F0]">
         <span>基础建档信息</span>

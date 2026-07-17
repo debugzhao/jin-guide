@@ -72,7 +72,7 @@ export default function LangGraphTopology({ selectedNode, onSelectNode }: Props)
       <div className="relative mx-auto my-6" style={{ width: CANVAS_WIDTH, height: CANVAS_HEIGHT }}>
         {/* Parallel-execution grouping box behind retrieval/policy_rule nodes */}
         <div
-          className="absolute rounded-2xl bg-slate-100/70 border border-dashed border-slate-300"
+          className="absolute rounded-bubble bg-slate-100/70 border border-dashed border-slate-300"
           style={{ left: 20, top: 118, width: CANVAS_WIDTH - 40, height: NODE_H + 40 }}
         >
           <span className="absolute -top-2.5 left-3 bg-slate-50 px-1.5 text-[10px] text-slate-400">

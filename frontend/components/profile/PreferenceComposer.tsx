@@ -36,7 +36,7 @@ export default function PreferenceComposer({ onSubmit }: PreferenceComposerProps
   }
 
   return (
-    <div className="sticky bottom-0 wj-glass-card rounded-2xl p-2.5 flex items-center gap-2 mt-2">
+    <div className="sticky bottom-0 wj-glass-card rounded-bubble p-2.5 flex items-center gap-2 mt-2">
       <input
         value={text}
         onChange={(e) => setText(e.target.value)}

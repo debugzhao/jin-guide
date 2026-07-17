@@ -12,7 +12,7 @@ interface Props {
 export default function PreferenceCard({ entry }: Props) {
   if (!entry.matched) {
     return (
-      <div className="wj-glass-card rounded-2xl rounded-tl-sm px-4 py-3 max-w-[96%] space-y-1">
+      <div className="wj-glass-card rounded-bubble rounded-tl-sm px-4 py-3 max-w-[96%] space-y-1">
         <div className="text-xs text-[#64748B]">问津助手</div>
         <p className="text-sm text-[#0F172A]">
           我会继续按当前基础档案维护右侧报告。你也可以补充城市、专业或学费偏好，我会渲染偏好卡并更新右侧报告。
@@ -22,12 +22,12 @@ export default function PreferenceCard({ entry }: Props) {
   }
 
   return (
-    <div className="wj-glass-card rounded-2xl rounded-tl-sm px-4 py-3 max-w-[96%] space-y-3">
+    <div className="wj-glass-card rounded-bubble rounded-tl-sm px-4 py-3 max-w-[96%] space-y-3">
       <div className="text-xs text-[#64748B]">问津助手</div>
       <p className="text-sm text-[#0F172A]">
         我识别到你在补充城市、专业或学费偏好。下面这张偏好卡不会改变基础建档，只会让推荐报告更精细。
       </p>
-      <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg p-3.5 space-y-2">
+      <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-btn p-3.5 space-y-2">
         <div className="flex items-center justify-between gap-2">
           <strong className="text-sm text-[#0F172A]">推荐偏好</strong>
           <span className="text-xs px-2 py-0.5 rounded-tag bg-[#EFF6FF] text-[#1E40AF] border border-[#BFDBFE]">

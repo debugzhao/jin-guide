@@ -32,7 +32,7 @@ export default function ChatSuggestedQuestions({ onSelect }: Props) {
           <button
             key={q}
             onClick={() => onSelect(q)}
-            className="w-full text-left px-3.5 py-2.5 rounded-xl wj-glass-card
+            className="w-full text-left px-3.5 py-2.5 rounded-card wj-glass-card
               hover:border-[#1E40AF]/30 text-sm text-[#64748B]
               hover:text-[#0F172A] transition-colors"
           >
@@ -41,7 +41,7 @@ export default function ChatSuggestedQuestions({ onSelect }: Props) {
         ))}
       </div>
 
-      <p className="text-[10px] text-[#94A3B8] text-center px-4">
+      <p className="text-micro text-[#94A3B8] text-center px-4">
         AI 回复仅供参考，不构成录取承诺。最终填报决定请结合实际情况自主判断。
       </p>
     </div>

@@ -31,7 +31,7 @@ export default function BottomSheet({ isOpen, onClose, title, children }: Bottom
       />
       <div
         className={cn(
-          'absolute bottom-0 left-0 right-0 bg-white rounded-t-2xl',
+          'absolute bottom-0 left-0 right-0 bg-white rounded-t-bubble shadow-modal',
           'transition-transform duration-300',
           isOpen ? 'translate-y-0' : 'translate-y-full'
         )}

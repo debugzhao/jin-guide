@@ -109,7 +109,7 @@ export default function DebugConsole() {
       <div className="flex items-center gap-2 px-4 py-2.5 border-b border-gray-200 bg-white flex-shrink-0">
         <button
           onClick={() => router.push('/')}
-          className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+          className="p-1.5 rounded-btn text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
           aria-label="返回"
         >
           <ArrowLeft className="w-4 h-4" />

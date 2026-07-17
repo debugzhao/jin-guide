@@ -83,13 +83,13 @@ export default function ReportsPage() {
 
         {!loading && !error && reports.length === 0 && (
           <div className="flex flex-col items-center justify-center py-16 gap-4">
-            <div className="w-16 h-16 bg-[#EFF6FF] rounded-2xl flex items-center justify-center">
+            <div className="w-16 h-16 bg-[#EFF6FF] rounded-bubble flex items-center justify-center">
               <FileText className="w-8 h-8 text-[#1E40AF]" />
             </div>
             <p className="text-sm text-[#64748B]">暂无志愿报告</p>
             <button
               onClick={() => router.push('/')}
-              className="flex items-center gap-1.5 bg-[#1E40AF] hover:bg-[#1E3A8A] text-white text-sm font-medium px-4 py-2 rounded-xl transition-colors"
+              className="flex items-center gap-1.5 bg-[#1E40AF] hover:bg-[#1E3A8A] text-white text-sm font-medium px-4 py-2 rounded-card transition-colors"
             >
               <PlusCircle className="w-4 h-4" />
               建档生成报告
@@ -110,12 +110,12 @@ export default function ReportsPage() {
                   onClick={() => isCompleted && router.push(`/reports/${r.id}`)}
                   disabled={!isCompleted}
                   className={[
-                    'w-full wj-glass-card rounded-xl p-4',
+                    'w-full wj-glass-card rounded-card p-4',
                     'flex items-center gap-3 text-left',
                     isCompleted ? 'hover:border-[#1E40AF]/30 transition-colors cursor-pointer' : 'opacity-70',
                   ].join(' ')}
                 >
-                  <div className="w-10 h-10 bg-[#EFF6FF] rounded-xl flex items-center justify-center shrink-0">
+                  <div className="w-10 h-10 bg-[#EFF6FF] rounded-card flex items-center justify-center shrink-0">
                     <FileText className="w-5 h-5 text-[#1E40AF]" />
                   </div>
 
