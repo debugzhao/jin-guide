@@ -48,15 +48,19 @@ export default function WorkspaceShell({
 
   return (
     <div className="flex-1 flex overflow-hidden relative">
-      {/* 桌面常驻侧栏 */}
+      {/* 桌面常驻侧栏：外层做宽度过渡动画，内层固定宽度避免文字挤压变形 */}
       <div
-        className={
-          sidebarCollapsed
-            ? 'hidden'
-            : 'hidden lg:flex lg:w-[260px] lg:flex-shrink-0 lg:flex-col border-r border-[#E2E8F0] bg-white'
-        }
+        className={`hidden lg:flex lg:flex-shrink-0 overflow-hidden transition-[width] duration-300 ease-in-out ${
+          sidebarCollapsed ? 'lg:w-0' : 'lg:w-[260px]'
+        }`}
       >
-        {sidebar}
+        <div
+          className={`w-[260px] flex-shrink-0 flex flex-col h-full border-r border-[#E2E8F0] bg-white transition-opacity duration-200 ${
+            sidebarCollapsed ? 'opacity-0' : 'opacity-100'
+          }`}
+        >
+          {sidebar}
+        </div>
       </div>
 
       {sidebarCollapsed && (
