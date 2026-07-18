@@ -114,7 +114,10 @@ if [[ -n "$DRY_RUN" ]]; then
 fi
 
 echo "==> 2/3 远程构建并重启容器：${SERVICES[*]:-(全部服务)}"
-ssh "${REMOTE_HOST}" "cd ${REMOTE_DIR} && docker compose build ${SERVICES[*]:-} && docker compose up -d ${SERVICES[*]:-}"
+# -V/--renew-anon-volumes：frontend 服务用匿名卷隔离 node_modules/.next 做热重载，
+# recreate 容器时 docker compose 默认会复用旧容器的匿名卷内容而不是新镜像装好的依赖，
+# 不加这个参数的话，新增 npm 包后线上会报 Module not found（backend/worker 无匿名卷，不受影响）。
+ssh "${REMOTE_HOST}" "cd ${REMOTE_DIR} && docker compose build ${SERVICES[*]:-} && docker compose up -d -V ${SERVICES[*]:-}"
 
 echo "==> 3/3 容器状态"
 ssh "${REMOTE_HOST}" "cd ${REMOTE_DIR} && docker compose ps"
