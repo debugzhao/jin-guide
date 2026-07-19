@@ -32,6 +32,7 @@ LiteLLM 首屏是很典型的 SaaS / developer tool 产品站结构：
 客户 logo → 大数字指标 → What is LiteLLM → Features。
 
 这个顺序非常产品化：先说我是谁，再证明有人用，再解释怎么用。
+这个顺序非常产品化：先说我是谁，再证明有人用，再解释怎么用。
 
 ## 视觉
 
