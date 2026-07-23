@@ -204,7 +204,42 @@ PostgreSQL：report_conversations
 
 ---
 
-# 二、优缺点总结
+# 二、大型 Agent 项目的标准记忆分层与设计原则
+
+当前项目的记忆分类是从“现有代码里已经保存了什么”出发；大型 Agent 项目通常还会从“记忆服务于什么认知能力”出发，采用下面的标准分层：
+
+| 类型 | 主要使用场景 | 常见设计 | 问津当前对应能力 |
+|---|---|---|---|
+| Working Memory | 单次 Agent 推理、多节点协作 | State + Checkpoint | `VolunteerPlanState`，但尚无持久化 Checkpoint |
+| Conversation Memory | 多轮聊天连续性 | 最近消息窗口 + 历史摘要 | Redis/PostgreSQL 历史 + 最近 10/16 条窗口，尚无摘要 |
+| User Memory | 偏好、身份、长期目标 | 结构化数据库，可查看和修改 | `StudentProfile` / `Preference`，缺少来源与变化历史 |
+| Episodic Memory | 记住“上次为什么这样决定” | 保存事件、结果、时间和决策原因 | Report 版本链和运行摘要，尚未自动参与下一次推理 |
+| Semantic Memory | 从大量历史中召回相关经验 | Embedding + Vector DB | 当前主要用于公共招生知识，尚未用于用户个人经历 |
+| Procedural Memory | Agent 的规则、技能和操作经验 | Prompt、Skill、Workflow、工具说明 | System Prompt、LangGraph 流程和 Tool Registry |
+| External Knowledge | 企业文档、政策和产品知识 | RAG、权限过滤、数据版本管理 | SQL + pgvector + Rerank + Evidence Chain |
+
+需要特别注意三个边界：
+
+1. **Episodic Memory 不等于日志**：日志只有在能够按用户、任务和原因被召回，并参与后续决策时，才真正成为情景记忆。
+2. **Semantic Memory 不等于 RAG 的全部**：向量检索既可以召回公共知识，也可以召回用户历史；两者必须使用不同权限和索引范围。
+3. **Procedural Memory 通常不属于用户数据**：它描述 Agent“应该怎么做”，而不是“这个用户是谁”。
+
+## 标准设计原则
+
+大型项目通常遵循以下原则：
+
+1. **能结构化就存数据库，不要全部塞向量库。** 分数、位次、预算、确认状态等字段需要精确查询、更新和审计。
+2. **最近消息保留原文，旧消息生成摘要。** 原始消息是证据，摘要只是可重建的压缩结果。
+3. **按 user / thread / tenant 严格隔离。** 每次读写和召回都必须带完整作用域，不能只依赖 Prompt 约束。
+4. **记忆写入需要置信度和来源。** 模型推断不能直接升级为事实，高影响偏好必须经过用户确认。
+5. **用户可以查看、修改和删除长期记忆。** 删除需要同步影响数据库、缓存、摘要和向量索引。
+6. **Checkpoint 与 Conversation Memory 分离。** 前者负责执行恢复，后者负责聊天连续性，二者生命周期和数据治理完全不同。
+7. **Context Builder 按 Token 预算选择记忆。** 记住不等于每次都注入，应该按相关性、可信度、时效性和优先级选择。
+8. **敏感信息设置 TTL、访问控制、脱敏和审计。** 高风险业务中，“错误地记住”通常比“不记得”更危险。
+
+---
+
+# 三、优缺点总结
 
 ## 优点
 
@@ -234,7 +269,7 @@ PostgreSQL：report_conversations
 
 ---
 
-# 三、是否需要重新设计
+# 四、是否需要重新设计
 
 结论：
 
@@ -274,7 +309,7 @@ flowchart TD
 
 ---
 
-# 四、第一步：PostgreSQL Checkpoint
+# 五、第一步：PostgreSQL Checkpoint
 
 ## 它解决什么
 
@@ -329,7 +364,7 @@ Checkpoint 通常意味着至少一次执行，同一节点可能被重复执行
 
 ---
 
-# 五、第二步：对话摘要
+# 六、第二步：对话摘要
 
 ## 当前问题
 
@@ -402,7 +437,7 @@ Checkpoint 通常意味着至少一次执行，同一节点可能被重复执行
 
 ---
 
-# 六、第三步：统一 Context Builder
+# 七、第三步：统一 Context Builder
 
 这是整个重构的核心。
 
@@ -488,7 +523,7 @@ Token 上限
 
 ---
 
-# 七、第四步：用户长期偏好记忆
+# 八、第四步：用户长期偏好记忆
 
 你现在已经有 `Preference`，但它更像当前配置，不是完整长期记忆。
 
@@ -568,7 +603,7 @@ user_memories
 
 ---
 
-# 八、建议的实施顺序
+# 九、建议的实施顺序
 
 ## P0：先修正确性问题
 
@@ -606,7 +641,36 @@ conversation_summaries
 
 ---
 
-# 九、最终验收指标
+# 十、当前记忆系统应该怎么测试
+
+下面这组测试针对当前已经存在的 Memory 能力，目的是先建立基线，再验证后续重构是否真的改善了记忆质量。
+
+| 测试 | 操作 | 当前系统的期望结果 |
+|---|---|---|
+| 多轮记忆 | 先说“预算 5 万”，几轮后询问预算 | 在消息窗口内应正确回忆；超出窗口后可能遗忘，作为摘要改造基线 |
+| 会话隔离 | A 会话说喜欢北京，B 会话询问偏好 | B 不能读取 A 的对话历史 |
+| 用户隔离 | 使用两个账号分别聊天并查询历史 | 不得串数据，跨用户泄漏必须为 0 |
+| Redis 降级 | 聊天后删除对应 Redis 缓存，再读取历史 | 应从 PostgreSQL 恢复；记录 Intake 与 Report 两条路径是否一致 |
+| 窗口截断 | 连续发送 20 条带编号的信息后检查实际 Prompt | Intake 只注入最近 16 条，ConversationAgent 只注入最近 10 条 |
+| API 重启恢复 | 重启 API 后重新打开旧会话 | PostgreSQL 已持久化的历史仍然存在 |
+| 删除测试 | 删除 Intake 会话后再次读取或继续发送 | 返回 404，软删除会话不能被重新激活 |
+| 匿名合并 | 匿名聊天后注册或登录 | 历史和档案归属登录用户；同时暴露 Report Chat 匿名 Key 的现有问题 |
+| Context 超限 | 构造超长报告、大量 Evidence 和长对话 | 请求不崩溃；记录被截断内容、最终 Prompt Token 和答案正确性 |
+| Checkpoint 基线 | 报告生成中杀死 Worker | 当前应无法节点级恢复，以此证明 Checkpointer 尚未实现 |
+
+测试时重点记录三个基础指标：
+
+| 指标 | 含义 | 最低要求 |
+|---|---|---|
+| Recall Accuracy | 应该记住的信息是否能正确召回 | 关键硬事实不能记错；窗口内事实应稳定召回 |
+| Isolation Accuracy | 不该读取的信息是否被正确隔离 | 跨用户泄漏为 0，跨会话默认不串用 |
+| Token Cost | 记忆注入后 Prompt 增长多少 | 记录各区块 Token，为摘要和 Context Builder 提供基线 |
+
+除结果正确性外，还要保留每个用例的 `user_id / conversation_id / thread_id / run_id`，以便从数据库、Redis、Prompt 和 Trace 四个位置交叉定位问题。
+
+---
+
+# 十一、最终验收指标
 
 | 能力 | 指标 |
 |---|---|
