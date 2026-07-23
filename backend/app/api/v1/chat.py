@@ -14,19 +14,18 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import redis.asyncio as aioredis
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.conversation_agent import stream_conversation_response
-from app.api.dependencies import get_current_user
+from app.api.dependencies import Identity, get_identity
 from app.config import settings
 from app.database import get_db
 from app.models.conversation import ReportConversation
 from app.models.report import Report
-from app.models.user import User
 
 router = APIRouter()
 
@@ -35,25 +34,49 @@ _MAX_MESSAGES_STORED = 50
 _REDIS_HISTORY_TTL = 7 * 24 * 3600  # 7 days
 _MAX_MESSAGE_LENGTH = 200
 
+# ── Identity ─────────────────────────────────────────────────────────────────
+
+def _owner_key(identity: Identity) -> str | None:
+    """Redis/rate-limit owner key: real user id, or anon:{anonymous_id} for
+    anonymous sessions. Must stay the single source of truth used by the
+    send/history/clear endpoints alike — a per-endpoint fallback (e.g. client
+    IP) will drift from this and desync Redis history across the three routes."""
+    if identity.user:
+        return identity.user.id
+    if identity.anonymous_id:
+        return f"anon:{identity.anonymous_id}"
+    return None
+
+
+def _require_owner_key(identity: Identity) -> str:
+    owner_key = _owner_key(identity)
+    if not owner_key:
+        raise HTTPException(
+            status_code=401,
+            detail="需要先建立匿名会话或登录才能进行报告问答，请先调用 /auth/anonymous-session",
+        )
+    return owner_key
+
+
 # ── Redis helpers ──────────────────────────────────────────────────────────────
 
-def _rate_limit_key(user_id: str) -> str:
+def _rate_limit_key(owner_key: str) -> str:
     today = datetime.now(UTC).strftime("%Y%m%d")
-    return f"chat:daily:{user_id}:{today}"
+    return f"chat:daily:{owner_key}:{today}"
 
 
-def _history_key(report_id: str, user_id: str) -> str:
-    return f"chat:history:{report_id}:{user_id}"
+def _history_key(report_id: str, owner_key: str) -> str:
+    return f"chat:history:{report_id}:{owner_key}"
 
 
-async def _check_and_increment_rate_limit(user_id: str) -> int:
+async def _check_and_increment_rate_limit(owner_key: str) -> int:
     """
-    Increment today's message counter for user.
+    Increment today's message counter for the owner.
     Returns the new count. Caller should check count > _DAILY_LIMIT.
     """
     redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
     try:
-        key = _rate_limit_key(user_id)
+        key = _rate_limit_key(owner_key)
         count = await redis_client.incr(key)
         if count == 1:
             # Set expiry to end of UTC day
@@ -68,11 +91,11 @@ async def _check_and_increment_rate_limit(user_id: str) -> int:
         await redis_client.aclose()
 
 
-async def _load_history_from_redis(report_id: str, user_id: str) -> list[dict]:
+async def _load_history_from_redis(report_id: str, owner_key: str) -> list[dict]:
     """Load conversation history from Redis hot layer."""
     redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
     try:
-        raw = await redis_client.get(_history_key(report_id, user_id))
+        raw = await redis_client.get(_history_key(report_id, owner_key))
         if raw:
             return json.loads(raw)
         return []
@@ -83,12 +106,12 @@ async def _load_history_from_redis(report_id: str, user_id: str) -> list[dict]:
 
 
 async def _save_history_to_redis(
-    report_id: str, user_id: str, messages: list[dict]
+    report_id: str, owner_key: str, messages: list[dict]
 ) -> None:
     """Write conversation history to Redis hot layer."""
     redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
     try:
-        key = _history_key(report_id, user_id)
+        key = _history_key(report_id, owner_key)
         await redis_client.setex(key, _REDIS_HISTORY_TTL, json.dumps(messages, ensure_ascii=False))
     except Exception:
         pass
@@ -145,9 +168,8 @@ class ChatHistoryOut(BaseModel):
 async def chat_with_report(
     report_id: str,
     body: ChatIn,
-    request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User | None = Depends(get_current_user),
+    identity: Identity = Depends(get_identity),
 ):
     """
     Send a message to ConversationAgent about a specific report.
@@ -183,8 +205,8 @@ async def chat_with_report(
         )
 
     # ── Rate limit ─────────────────────────────────────────────────────────
-    user_id = current_user.id if current_user else f"anon:{request.client.host if request.client else 'unknown'}"
-    count = await _check_and_increment_rate_limit(user_id)
+    owner_key = _require_owner_key(identity)
+    count = await _check_and_increment_rate_limit(owner_key)
     if count > _DAILY_LIMIT:
         raise HTTPException(
             status_code=429,
@@ -197,7 +219,7 @@ async def chat_with_report(
         )
 
     # ── Load history ───────────────────────────────────────────────────────
-    history = await _load_history_from_redis(report_id, user_id)
+    history = await _load_history_from_redis(report_id, owner_key)
 
     # ── Stream response ────────────────────────────────────────────────────
     async def event_generator():
@@ -247,12 +269,12 @@ async def chat_with_report(
                     },
                 ]
                 new_history = new_history[-_MAX_MESSAGES_STORED:]
-                await _save_history_to_redis(report_id, user_id, new_history)
+                await _save_history_to_redis(report_id, owner_key, new_history)
                 # Best-effort DB persist (fire and forget — use separate session)
                 if report_id != "demo-report":
                     from app.database import async_session_maker
                     async with async_session_maker() as persist_db:
-                        await _persist_history_to_db(persist_db, report_id, current_user.id if current_user else None, new_history)
+                        await _persist_history_to_db(persist_db, report_id, identity.user.id if identity.user else None, new_history)
 
             elif event_type == "error":
                 payload = json.dumps({"message": event.get("message", "未知错误")}, ensure_ascii=False)
@@ -274,17 +296,17 @@ async def chat_with_report(
 async def get_chat_history(
     report_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User | None = Depends(get_current_user),
-    request: Request = None,
+    identity: Identity = Depends(get_identity),
 ):
     """
     Return the conversation history for a report.
     Tries Redis hot layer first; falls back to PostgreSQL.
     """
-    user_id = current_user.id if current_user else "anon"
+    owner_key = _require_owner_key(identity)
+    db_user_id = identity.user.id if identity.user else None
 
     if report_id == "demo-report":
-        messages = await _load_history_from_redis(report_id, user_id)
+        messages = await _load_history_from_redis(report_id, owner_key)
     else:
         result = await db.execute(
             select(Report).where(Report.id == report_id, Report.deleted_at.is_(None))
@@ -293,14 +315,14 @@ async def get_chat_history(
             raise HTTPException(status_code=404, detail="报告不存在")
 
         # Try hot layer first
-        messages = await _load_history_from_redis(report_id, user_id)
+        messages = await _load_history_from_redis(report_id, owner_key)
 
         if not messages:
             # Fall back to DB
             conv_result = await db.execute(
                 select(ReportConversation).where(
                     ReportConversation.report_id == report_id,
-                    ReportConversation.user_id == (current_user.id if current_user else None),
+                    ReportConversation.user_id == db_user_id,
                 )
             )
             conv = conv_result.scalar_one_or_none()
@@ -318,15 +340,16 @@ async def get_chat_history(
 async def clear_chat_history(
     report_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User | None = Depends(get_current_user),
+    identity: Identity = Depends(get_identity),
 ):
     """Clear conversation history from both Redis and PostgreSQL."""
-    user_id = current_user.id if current_user else "anon"
+    owner_key = _require_owner_key(identity)
+    db_user_id = identity.user.id if identity.user else None
 
     # Clear Redis
     redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
     try:
-        await redis_client.delete(_history_key(report_id, user_id))
+        await redis_client.delete(_history_key(report_id, owner_key))
     finally:
         await redis_client.aclose()
 
@@ -341,7 +364,7 @@ async def clear_chat_history(
         conv_result = await db.execute(
             select(ReportConversation).where(
                 ReportConversation.report_id == report_id,
-                ReportConversation.user_id == (current_user.id if current_user else None),
+                ReportConversation.user_id == db_user_id,
             )
         )
         conv = conv_result.scalar_one_or_none()
