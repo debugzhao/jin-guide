@@ -29,6 +29,9 @@ class ReportConversation(Base):
     user_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+    # 匿名会话标识（登录用户为 null）；避免所有匿名用户共享 user_id IS NULL 导致
+    # 同一份报告下不同匿名人互相读到对方的问答历史
+    anonymous_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     # List of message dicts: {role: "user"|"assistant", content: str, citations: [...], created_at: ISO}
     messages_json: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
     created_at: Mapped[datetime] = mapped_column(

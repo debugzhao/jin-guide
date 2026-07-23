@@ -399,7 +399,10 @@ Agent 类型 + 用户身份 + Conversation/Thread + 当前问题 + State + Token
 
 ### P0：先修正确性和统一边界
 
-- 修复匿名报告问答 Memory Key；
+- ✅ **已修复**（`backend/app/api/v1/chat.py` + 迁移 `011_report_conversation_anonymous_id`）：
+  - Redis 层——POST/GET/DELETE 三个端点统一改用 `get_identity` 解析身份（`user.id` 或 `anon:{anonymous_id}`），不再各写各的（发消息用 IP、读/删用固定字符串 `"anon"`），修复了发消息后读不到、删除后旧消息又复活的问题；
+  - Postgres 层——`report_conversations` 新增 `anonymous_id` 字段，回源查询按 `user_id`（登录）或 `anonymous_id`（匿名）精确匹配，不再用 `user_id IS NULL` 一刀切，修复了不同匿名用户在同一份报告下互相读到对方历史的串读问题；
+  - 已用真实匿名会话端到端验证：发消息→读历史、清空→再发不复活、两个独立匿名身份互不可见。
 - 统一用户、匿名用户和 Thread 的身份作用域；
 - 明确 PostgreSQL 是消息权威源，Redis 是热缓存；
 - 抽出统一 Memory Facade 和 Key Builder；

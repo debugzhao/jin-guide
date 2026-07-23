@@ -119,10 +119,26 @@ async def _save_history_to_redis(
         await redis_client.aclose()
 
 
+def _db_owner_filter(user_id: str | None, anonymous_id: str | None):
+    """
+    Row-scoping filter for report_conversations. Logged-in users are scoped by
+    user_id; anonymous sessions must additionally match anonymous_id — matching
+    only `user_id IS NULL` would let every anonymous visitor share one row
+    (and read each other's history) for the same report_id.
+    """
+    if user_id:
+        return (ReportConversation.user_id == user_id,)
+    return (
+        ReportConversation.user_id.is_(None),
+        ReportConversation.anonymous_id == anonymous_id,
+    )
+
+
 async def _persist_history_to_db(
     db: AsyncSession,
     report_id: str,
     user_id: str | None,
+    anonymous_id: str | None,
     messages: list[dict],
 ) -> None:
     """Upsert conversation history to PostgreSQL cold layer."""
@@ -130,7 +146,7 @@ async def _persist_history_to_db(
         result = await db.execute(
             select(ReportConversation).where(
                 ReportConversation.report_id == report_id,
-                ReportConversation.user_id == user_id,
+                *_db_owner_filter(user_id, anonymous_id),
             )
         )
         conv = result.scalar_one_or_none()
@@ -142,6 +158,7 @@ async def _persist_history_to_db(
                 id=str(uuid4()),
                 report_id=report_id,
                 user_id=user_id,
+                anonymous_id=anonymous_id,
                 messages_json=messages[-_MAX_MESSAGES_STORED:],
             )
             db.add(conv)
@@ -274,7 +291,13 @@ async def chat_with_report(
                 if report_id != "demo-report":
                     from app.database import async_session_maker
                     async with async_session_maker() as persist_db:
-                        await _persist_history_to_db(persist_db, report_id, identity.user.id if identity.user else None, new_history)
+                        await _persist_history_to_db(
+                            persist_db,
+                            report_id,
+                            identity.user.id if identity.user else None,
+                            identity.anonymous_id if not identity.user else None,
+                            new_history,
+                        )
 
             elif event_type == "error":
                 payload = json.dumps({"message": event.get("message", "未知错误")}, ensure_ascii=False)
@@ -304,6 +327,7 @@ async def get_chat_history(
     """
     owner_key = _require_owner_key(identity)
     db_user_id = identity.user.id if identity.user else None
+    db_anonymous_id = identity.anonymous_id if not identity.user else None
 
     if report_id == "demo-report":
         messages = await _load_history_from_redis(report_id, owner_key)
@@ -322,7 +346,7 @@ async def get_chat_history(
             conv_result = await db.execute(
                 select(ReportConversation).where(
                     ReportConversation.report_id == report_id,
-                    ReportConversation.user_id == db_user_id,
+                    *_db_owner_filter(db_user_id, db_anonymous_id),
                 )
             )
             conv = conv_result.scalar_one_or_none()
@@ -345,6 +369,7 @@ async def clear_chat_history(
     """Clear conversation history from both Redis and PostgreSQL."""
     owner_key = _require_owner_key(identity)
     db_user_id = identity.user.id if identity.user else None
+    db_anonymous_id = identity.anonymous_id if not identity.user else None
 
     # Clear Redis
     redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
@@ -364,7 +389,7 @@ async def clear_chat_history(
         conv_result = await db.execute(
             select(ReportConversation).where(
                 ReportConversation.report_id == report_id,
-                ReportConversation.user_id == db_user_id,
+                *_db_owner_filter(db_user_id, db_anonymous_id),
             )
         )
         conv = conv_result.scalar_one_or_none()

@@ -657,7 +657,7 @@ data: {"conversation_id": "conv_abc", "message_id": "msg_007", "total_tokens": 1
 | agent_runs | id、thread_id、user_id、profile_id、task_type、status、cost_tokens、cost_usd、trace_url、error_msg、**debug_summary_json**（Admin Debug 用，含 node_timings/tool_call_summary/state_summary/cost_breakdown）、created_at、completed_at |
 | province_thresholds | id、province、year、high_rush_rank_gap、rush_rank_gap_min/max、target_rank_gap、safe_rank_gap |
 | notifications | id、user_id、type、payload_json、read_at、created_at |
-| report_conversations | id、report_id、user_id、messages_json（JSONB，最多 50 条）、created_at、updated_at |
+| report_conversations | id、report_id、user_id、**anonymous_id**（匿名会话标识，与 user_id 二选一为空；避免所有匿名用户共享 `user_id IS NULL` 导致同一报告下不同匿名人读到彼此历史）、messages_json（JSONB，最多 50 条）、created_at、updated_at |
 | intake_conversations | id（会话/thread id）、owner_key（user_id 或 `anon:{anonymous_id}` 二选一，**非唯一**——一个 owner_key 可有多条会话）、title（首条用户消息截断生成，nullable）、messages_json（JSONB，最多 50 条）、created_at、updated_at |
 
 **关于 checkpoint 存储**：LangGraph 使用独立内部表（`checkpoints`/`checkpoint_blobs`/`checkpoint_writes`）自动管理，不属于业务表。`agent_runs` 只存业务元数据，通过 `thread_id` 关联。
