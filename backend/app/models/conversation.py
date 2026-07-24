@@ -34,6 +34,12 @@ class ReportConversation(Base):
     anonymous_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     # List of message dicts: {role: "user"|"assistant", content: str, citations: [...], created_at: ISO}
     messages_json: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    version: Mapped[int] = mapped_column(default=0, nullable=False)
+    # 乐观锁：两个并发请求同时 SELECT 到同一份旧 messages_json 时，后 commit 的一方
+    # version 不匹配会被 SQLAlchemy 拒绝（StaleDataError），调用方据此重试而不是让
+    # 后写请求悄悄覆盖丢失先写请求追加的消息。必须在 version 列定义*之后*声明，
+    # __mapper_args__ 在类体执行到这一行时才能引用到上面绑定的列对象。
+    __mapper_args__ = {"version_id_col": version}
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -65,6 +71,9 @@ class IntakeConversation(Base):
     # 首条用户消息截断生成，供侧栏会话列表展示；None 表示尚未产生过消息
     title: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     messages_json: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    version: Mapped[int] = mapped_column(default=0, nullable=False)
+    # 乐观锁，理由同 ReportConversation；同样必须放在 version 列定义之后
+    __mapper_args__ = {"version_id_col": version}
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )

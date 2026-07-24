@@ -14,16 +14,19 @@ Endpoints:
 `/profile/intent` 二分类接口：这里是一段真正的多轮流式聊天，命中建档意图时
 通过 SSE `trigger_profile_capture` 事件通知前端内联渲染建档表单，见
 `docs/frontend-prd-v2.md` §Chat-first 建档入口、`docs/backend-prd-v2.md` §5.6b。
+
+Redis/PostgreSQL persistence mechanics (key shape, identity resolution, CAS
+writes, DB failure logging) live in app.services.conversation_store, shared
+with ConversationAgent's chat.py — see docs/memory-architecture.md §六 P0.
 """
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Optional
 from uuid import uuid4
 
 import httpx
-import redis.asyncio as aioredis
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -36,33 +39,16 @@ from app.api.dependencies import Identity, get_identity
 from app.config import settings
 from app.database import get_db
 from app.models.conversation import IntakeConversation
+from app.services import conversation_store as store
 
 router = APIRouter()
 
+_NAMESPACE = "intake"
 _DAILY_LIMIT = 30
-_MAX_MESSAGES_STORED = 50
-_REDIS_HISTORY_TTL = 7 * 24 * 3600  # 7 days
 _MAX_MESSAGE_LENGTH = 200
 _TITLE_MAX_LENGTH = 20
 _RENAME_TITLE_MAX_LENGTH = 50
 _TITLE_SUMMARY_MODEL = "profile-agent"  # 轻量虚拟模型，见 litellm_config.yaml
-
-
-def _owner_key(identity: Identity) -> str | None:
-    if identity.user:
-        return identity.user.id
-    if identity.anonymous_id:
-        return f"anon:{identity.anonymous_id}"
-    return None
-
-
-def _rate_limit_key(owner_key: str) -> str:
-    today = datetime.now(UTC).strftime("%Y%m%d")
-    return f"intake:daily:{owner_key}:{today}"
-
-
-def _history_key(owner_key: str, conversation_id: str) -> str:
-    return f"intake:history:{owner_key}:{conversation_id}"
 
 
 def _derive_title(message: str) -> str:
@@ -70,43 +56,6 @@ def _derive_title(message: str) -> str:
     if len(text) > _TITLE_MAX_LENGTH:
         return text[:_TITLE_MAX_LENGTH] + "…"
     return text
-
-
-async def _check_and_increment_rate_limit(owner_key: str) -> int:
-    redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
-    try:
-        key = _rate_limit_key(owner_key)
-        count = await redis_client.incr(key)
-        if count == 1:
-            now = datetime.now(UTC)
-            tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-            await redis_client.expire(key, int((tomorrow - now).total_seconds()))
-        return count
-    finally:
-        await redis_client.aclose()
-
-
-async def _load_history_from_redis(owner_key: str, conversation_id: str) -> list[dict]:
-    redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
-    try:
-        raw = await redis_client.get(_history_key(owner_key, conversation_id))
-        return json.loads(raw) if raw else []
-    except Exception:
-        return []
-    finally:
-        await redis_client.aclose()
-
-
-async def _save_history_to_redis(owner_key: str, conversation_id: str, messages: list[dict]) -> None:
-    redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
-    try:
-        await redis_client.setex(
-            _history_key(owner_key, conversation_id), _REDIS_HISTORY_TTL, json.dumps(messages, ensure_ascii=False)
-        )
-    except Exception:
-        pass
-    finally:
-        await redis_client.aclose()
 
 
 async def _get_owned_conversation(
@@ -192,33 +141,6 @@ async def _maybe_upgrade_title(
         pass
 
 
-async def _persist_history_to_db(
-    db: AsyncSession,
-    owner_key: str,
-    conversation_id: str,
-    messages: list[dict],
-    *,
-    seed_title: str | None,
-) -> None:
-    """Upsert conversation history to PostgreSQL cold layer (best-effort)."""
-    try:
-        conv = await _get_owned_conversation(db, owner_key, conversation_id)
-        if conv:
-            conv.messages_json = messages[-_MAX_MESSAGES_STORED:]
-            conv.updated_at = datetime.now(UTC)
-        else:
-            conv = IntakeConversation(
-                id=conversation_id,
-                owner_key=owner_key,
-                title=seed_title,
-                messages_json=messages[-_MAX_MESSAGES_STORED:],
-            )
-            db.add(conv)
-        await db.commit()
-    except Exception:
-        pass  # DB persistence is best-effort; Redis is the hot layer
-
-
 class IntakeChatIn(BaseModel):
     message: str
     # 不传则懒创建新会话；传了则必须是当前 owner_key 已拥有的会话
@@ -242,16 +164,6 @@ class IntakeConversationListOut(BaseModel):
     has_more: bool
 
 
-def _require_owner_key(identity: Identity) -> str:
-    owner_key = _owner_key(identity)
-    if not owner_key:
-        raise HTTPException(
-            status_code=401,
-            detail="需要先建立匿名会话或登录才能开始对话，请先调用 /auth/anonymous-session",
-        )
-    return owner_key
-
-
 @router.get("/conversations", response_model=IntakeConversationListOut)
 async def list_intake_conversations(
     cursor: Optional[str] = Query(None),
@@ -260,7 +172,7 @@ async def list_intake_conversations(
     identity: Identity = Depends(get_identity),
 ):
     """当前 owner_key 下的建档聊天会话列表，游标分页 (CLAUDE.md「分页规范」)，按最近活跃倒序。"""
-    owner_key = _owner_key(identity)
+    owner_key = store.owner_key(identity)
     if not owner_key:
         return IntakeConversationListOut(items=[], next_cursor=None, has_more=False)
 
@@ -311,7 +223,7 @@ async def rename_intake_conversation(
 ):
     """重命名会话，仅限当前 owner_key 拥有的会话。不改变 updated_at——重命名不算"活跃"，
     避免侧栏排序因为改名而跳动。"""
-    owner_key = _require_owner_key(identity)
+    owner_key = store.require_owner_key(identity)
 
     title = body.title.strip()
     if not title:
@@ -335,7 +247,7 @@ async def delete_intake_conversation(
     identity: Identity = Depends(get_identity),
 ):
     """软删除会话（Redis 热层直接物理删，Postgres 冷层打 deleted_at 标记）。"""
-    owner_key = _require_owner_key(identity)
+    owner_key = store.require_owner_key(identity)
 
     conv = await _get_owned_conversation(db, owner_key, conversation_id)
     if not conv:
@@ -344,11 +256,7 @@ async def delete_intake_conversation(
     conv.deleted_at = datetime.now(UTC)
     await db.commit()
 
-    redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
-    try:
-        await redis_client.delete(_history_key(owner_key, conversation_id))
-    finally:
-        await redis_client.aclose()
+    await store.delete_history_from_redis(store.history_key(_NAMESPACE, owner_key, conversation_id))
 
 
 @router.post("/chat")
@@ -364,7 +272,7 @@ async def intake_chat(
 
     Rate limit: 30 messages per identity per day (across all of that identity's conversations).
     """
-    owner_key = _require_owner_key(identity)
+    owner_key = store.require_owner_key(identity)
 
     message = body.message.strip()
     if not message:
@@ -384,7 +292,7 @@ async def intake_chat(
     else:
         conversation_id = str(uuid4())
 
-    count = await _check_and_increment_rate_limit(owner_key)
+    count = await store.check_and_increment_rate_limit(_NAMESPACE, owner_key)
     if count > _DAILY_LIMIT:
         raise HTTPException(
             status_code=429,
@@ -396,7 +304,8 @@ async def intake_chat(
             },
         )
 
-    history = await _load_history_from_redis(owner_key, conversation_id)
+    redis_key = store.history_key(_NAMESPACE, owner_key, conversation_id)
+    history = await store.load_history_from_redis(redis_key)
 
     async def event_generator():
         full_response = ""
@@ -418,7 +327,7 @@ async def intake_chat(
             elif event_type == "done":
                 full_response = event.get("full_response", "")
 
-                new_history = history + [
+                new_messages = [
                     {"role": "user", "content": message, "created_at": datetime.now(UTC).isoformat()},
                     {
                         "role": "assistant",
@@ -426,8 +335,11 @@ async def intake_chat(
                         "created_at": datetime.now(UTC).isoformat(),
                     },
                 ]
-                new_history = new_history[-_MAX_MESSAGES_STORED:]
-                await _save_history_to_redis(owner_key, conversation_id, new_history)
+
+                def build_new_messages(current: list[dict]) -> list[dict]:
+                    return current + new_messages
+
+                await store.append_history_to_redis(redis_key, new_messages)
 
                 seed_title = _derive_title(message) if is_new_conversation else None
 
@@ -435,8 +347,22 @@ async def intake_chat(
                 # 刷新侧栏会话列表，必须保证这时数据库已经能查到这条会话，否则会有竞态
                 # （侧栏刷新跑在 DB 写入提交之前，读到的还是旧列表）。
                 async with async_session_maker() as persist_db:
-                    await _persist_history_to_db(
-                        persist_db, owner_key, conversation_id, new_history, seed_title=seed_title
+                    await store.upsert_conversation_row(
+                        persist_db,
+                        model_cls=IntakeConversation,
+                        match=(
+                            IntakeConversation.id == conversation_id,
+                            IntakeConversation.owner_key == owner_key,
+                            IntakeConversation.deleted_at.is_(None),
+                        ),
+                        build_new_messages=build_new_messages,
+                        make_new_row=lambda msgs: IntakeConversation(
+                            id=conversation_id,
+                            owner_key=owner_key,
+                            title=seed_title,
+                            messages_json=msgs,
+                        ),
+                        log_context={"conversation_id": conversation_id, "owner_key": owner_key},
                     )
 
                 if seed_title:
@@ -473,7 +399,7 @@ async def get_intake_chat_history(
     identity: Identity = Depends(get_identity),
 ):
     """Return one conversation's history. No conversation_id → empty (fresh conversation state)."""
-    owner_key = _owner_key(identity)
+    owner_key = store.owner_key(identity)
     if not owner_key or not conversation_id:
         return IntakeChatHistoryOut(messages=[], total=0)
 
@@ -481,7 +407,7 @@ async def get_intake_chat_history(
     if not conv:
         raise HTTPException(status_code=404, detail="会话不存在或无权访问")
 
-    messages = await _load_history_from_redis(owner_key, conversation_id)
+    messages = await store.load_history_from_redis(store.history_key(_NAMESPACE, owner_key, conversation_id))
     if not messages:
         messages = conv.messages_json or []
 
