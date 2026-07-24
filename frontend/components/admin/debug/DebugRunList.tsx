@@ -12,9 +12,12 @@ const STATUS_ICON: Record<string, React.ReactNode> = {
   queued: <PauseCircle className="w-3.5 h-3.5 text-gray-400" />,
   failed: <XCircle className="w-3.5 h-3.5 text-red-600" />,
   timeout: <XCircle className="w-3.5 h-3.5 text-red-600" />,
+  // worker 被杀/重启导致的提前取消（非 job_timeout、非节点异常），区别于 failed/timeout
+  // 用琥珀色警示而非红色错误色——这不代表报告生成本身出了错
+  interrupted: <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />,
 }
 
-const STATUS_FILTERS = ['running', 'completed', 'failed'] as const
+const STATUS_FILTERS = ['running', 'completed', 'failed', 'timeout', 'interrupted'] as const
 
 function formatDuration(seconds: number | null): string {
   if (seconds == null) return '—'

@@ -47,7 +47,7 @@ function DebugConsoleBody() {
         adminApi
           .getRun(selectedRunId)
           .then((run) => {
-            if (run.status === 'failed' || run.status === 'timeout') markRunningNodesFailed()
+            if (['failed', 'timeout', 'interrupted'].includes(run.status)) markRunningNodesFailed()
           })
           .catch(() => {})
       },
