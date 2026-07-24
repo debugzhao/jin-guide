@@ -399,28 +399,37 @@ Agent 类型 + 用户身份 + Conversation/Thread + 当前问题 + State + Token
 
 ### P0：先修正确性和统一边界
 
-- ✅ **已修复**（`backend/app/api/v1/chat.py` + 迁移 `011_report_conversation_anonymous_id`）：
-  - Redis 层——POST/GET/DELETE 三个端点统一改用 `get_identity` 解析身份（`user.id` 或 `anon:{anonymous_id}`），不再各写各的（发消息用 IP、读/删用固定字符串 `"anon"`），修复了发消息后读不到、删除后旧消息又复活的问题；
-  - Postgres 层——`report_conversations` 新增 `anonymous_id` 字段，回源查询按 `user_id`（登录）或 `anonymous_id`（匿名）精确匹配，不再用 `user_id IS NULL` 一刀切，修复了不同匿名用户在同一份报告下互相读到对方历史的串读问题；
-  - 已用真实匿名会话端到端验证：发消息→读历史、清空→再发不复活、两个独立匿名身份互不可见。
-- ✅ **统一用户、匿名用户和 Thread 的身份作用域**：ConversationAgent 改为和 IntakeAgent 共用同一套 `owner_key(identity)` 解析（`app/services/conversation_store.py`），三处身份计算方式收敛为一处；`thread_id` 明确只用于 LangGraph 执行维度，不参与任何记忆归属判断。
-- ✅ **明确 PostgreSQL 是消息权威源，Redis 是热缓存**：策略本身此前就是"先写 Redis、DB best-effort"且读写一致，本次把它显式固化成 `conversation_store` 里的注释约定，并把原来裸 `except: pass` 换成 `structlog` 结构化日志（`conversation_db_persist_failed`），用真实触发的 DB 写入失败验证过——日志能看到失败原因和 `report_id`/`conversation_id` 上下文，不再是完全黑盒。
-- ✅ **抽出统一 Memory Facade 和 Key Builder**：新增 `backend/app/services/conversation_store.py`，把身份解析、限流 key、Redis 读写、Postgres upsert 这几块公共逻辑收进去，`chat.py`/`intake_chat.py` 都改为调用它，各自只保留业务特有部分（IntakeAgent 的多会话/软删除/标题升级，ConversationAgent 的单行 upsert）。重构后跑了两边的完整业务流程（发消息/读历史/清空/重命名/删除）确认行为未变。
-- ✅ **增加会话并发写入控制**：Redis 侧改用服务端 Lua 脚本原子 append+trim（第一版用 WATCH/MULTI 客户端重试，在 20 并发下仍然丢消息，验证后换成真正原子的方案）；Postgres 侧给 `report_conversations`/`intake_conversations` 加 `version` 字段接入 SQLAlchemy `version_id_col` 乐观锁，冲突时自动重试。已用并发脚本验证：20 个并发请求写 Redis 无丢失，5 个并发请求写 DB 无丢失（`total messages` 均等于预期条数）。
-- ⏸️ **修正文档中"Checkpoint 已实现"的错误描述**——**暂缓**：处理这条时发现 P1 阶段的 PostgreSQL Checkpointer 正在被并行实现（`graph.py`/`worker.py` 已引入 `AsyncPostgresSaver`），过程中一度因为 `langgraph-checkpoint-postgres` 未安装导致 worker 崩溃重启，已顺手修复（`docker compose build worker backend` 重新装上依赖）。文档描述"是否已实现"这件事本身正随 P1 进度变化，等 P1 验证通过后再统一修正，避免文档改动和另一个进行中的任务冲突。
+**为什么会出现这个问题**
 
-业务价值：先解决串数据、丢历史和文档失真的高风险问题——前四项已验证生效；最后一项文档修正待 P1 完工后收尾。
+Intake 建档前聊天和 Report 报告问答是两条先后独立长出来的功能线，各自在没有共享抽象的前提下自己发明了一遍"这条记忆归属于谁"的判断逻辑：同一个 `chat.py` 里，发消息、读历史、清空历史三个端点分别手写了一遍身份计算——发消息时用 IP，读和删时却用一个固定占位符。这不是一次性疏忽，而是分散式记忆架构必然会积累的一致性债务：没有统一入口时，同一个语义会在不同代码路径上被略微不同地重新实现一次，功能越多，分叉点越多，出错只是时间问题。
+
+会话并发丢消息也是同一类根因的另一种表现：最早的存储模型是"整条历史 JSON 覆盖式写入"，这是原型阶段最简单的实现方式，但没有为"用户同时开着两个标签页、或网络重试导致同一条消息被发送两次"这类必然会发生的现实情况做防护——多个请求同时读到旧值、各自在内存里追加、后写的直接覆盖先写的，是竞态条件的教科书表现。
+
+**业务价值**
+
+Chat-first 首屏的核心流量入口是匿名用户（建档前还没有登录），身份识别一旦错配，后果是两种同样致命的体验：要么用户清空后再发消息，历史却"复活"或读不回来（体验上等同于 AI 失忆）；要么更严重——不同匿名用户在同一份报告下彼此看到对方的问答历史（数据隔离和信任问题）。志愿填报是强隐私、高决策风险场景，一旦被用户感知到"串号"，对信任的伤害远大于一般产品里的同类 bug；并发丢消息则会让用户上一轮谈好的预算、排除院校等关键信息凭空消失，规则引擎和推荐会拿着不完整的上下文做决策。
+
+**如何解决的**
+
+没有满足于"改对这一处 key 拼接"，而是把"这条记忆归属于谁"收敛成一个共享的身份解析入口，Intake 和 Conversation 两条链路复用同一套实现，`thread_id` 被明确限定只表示 LangGraph 的执行维度、不再参与任何记忆归属判断；同时把身份解析、限流、Redis 读写这类本质上是"记忆基础设施"而非各自业务逻辑的部分，从两个 API handler 里抽出来收进一个共享的 store 层，让"两个 Agent 各自发明一遍"这件事在源头上不再可能发生。修复后没有止步于代码走查，而是用两个真实独立的匿名身份跑了完整流程（发消息、读、清空、再发）验证隔离确实生效。
+
+并发丢消息的解法遵循同一个原则：没有停留在应用层"重试"这种缓解手段（实测在较高并发下仍然会丢），而是把"读-改-写"下沉到存储层做成原子操作——这类问题的正解通常是让并发控制发生在离数据最近的地方，而不是指望业务代码层层加锁去弥补。
+
+另外，文档里"Checkpoint 已实现"这条描述性错误当时选择了暂缓修正，原因是 P1 的 PostgreSQL Checkpointer 正在并行推进，文档要描述的"是否已实现"本身是个随进度移动的目标，贸然改会和另一个进行中的任务打架，等 P1 验证通过后再一次性收口更划算。
 
 ### P1：PostgreSQL Checkpoint
 
-- ✅ **已修复**（`backend/app/agent/graph.py` + `backend/app/worker.py` + `backend/app/api/v1/agent.py` + 迁移 `013_report_run_id_unique`）：
-  - Checkpointer——`langgraph-checkpoint-postgres`（`AsyncPostgresSaver`）在 worker 进程 `on_startup` 建一次长连接池并 `.setup()`，`create_graph`/`create_refine_graph` 编译时带上它，每个 superstep 后自动落盘到 `checkpoints`/`checkpoint_blobs`/`checkpoint_writes` 三张表；
-  - Resume/Retry/Refine 三态——`run_agent`/`run_refine` 默认按 `thread_id` 查是否已有 checkpoint：有则 `graph_input=None`（从断点续跑，跳过已完成节点），没有则从头构建初始 state；新增 `POST /api/v1/agent/runs/{id}/retry`，只对 `failed`/`timeout`/`interrupted` 生效，显式 `adelete_thread` 清空 checkpoint 后强制从头重跑，与"默认续跑"的 Resume 明确区分；`/refine` 语义不变（复用父报告证据的局部子图，产出新版本）；
-  - 幂等——`report_agent.py` 改成按 `run_id` upsert（查到就更新同一行，查不到才插入），不再每次 `uuid4()` 新插一行；`reports.run_id` 加唯一约束兜底；去掉 report 节点内提前的 `completed`/`failed` SSE 推送，只保留 worker 收尾时的单次终态推送；
-  - Worker 故障可观测性——区分 `asyncio.CancelledError` 是 `job_timeout` 触发（记 `timeout`）还是外部提前取消（记 `interrupted`），不再统一归并成 `failed`；成功收尾时清掉上一次失败尝试遗留的 `error_msg`。
-  - 已用真实场景验证：一次真实报告生成中途撞上 `job_timeout` 被 ARQ 自动重试，日志证实续跑正确跳过了 `data_resolver/retrieval_agent/policy_rule_agent/recommendation/risk` 五个已完成节点，只重新执行了 `report`→`reflection`；期间 `report` 节点因 reflection 循环被多次调用，但最终该 run 在 `reports` 表里只有 1 行（无孤儿重复行）；`agent_runs.status` 正确落到 `timeout` 而非笼统的 `failed`；另外手动模拟 `failed` 状态调用 `/retry`，验证到确实清空 checkpoint 后从 `data_resolver` 整体重跑，且报告行按 `run_id` 复用同一个 `id` 被覆盖更新。
+**为什么会出现这个问题**
 
-业务价值：减少失败后的重复等待、LLM 成本和外部调用。
+主报告生成链路要串起多个 LangGraph 节点，中间多次调用 LLM 和外部工具，是一个可能持续几十秒到几分钟的异步任务，跑在 ARQ worker 进程里。而 worker 进程在生产环境中因为超时、发布重启、资源回收等原因被杀掉是必然会发生的事，区别只是什么时候发生。最初选择不带 checkpointer 的图编译方式，是 MVP 阶段"先把功能跑通"的合理取舍，但这个取舍的代价是：一旦进程被杀，就没有任何中间状态可用，只能整体重来——把一件基础设施必然发生的事，转嫁成了用户和系统一起从头再来一遍的成本。
+
+**业务价值**
+
+每个节点背后都是真实的模型调用，report 节点还叠加了 Reflection 合规自检的多轮循环，一次报告生成如果失败后只能整体重跑，意味着重复消耗真实的 token 成本，也意味着用户要重新等待几十秒到几分钟。对于高考志愿这种决策窗口短、体验高度敏感的场景，"失败了就当没发生过、全部重来"无论在成本还是体验上都难以接受。
+
+**如何解决的**
+
+真正的难点不是"接入一个 checkpointer 库"这个动作本身，而是接入之后随之而来的新问题：从断点续跑意味着部分节点可能被重复触发，如果不做额外处理，反而会产生重复的报告记录和重复的完成通知——checkpoint 解决了"能不能恢复"，但没有配套的幂等设计，恢复本身会引入新的数据一致性问题。所以解决思路是让"执行恢复"和"副作用去重"同时成立：用一个稳定的执行线程标识表示"从哪断点续跑"，把报告落库从"每次都插入新行"改成"按结果覆盖同一行"，并且把"从断点续跑"（默认行为）和"清空重来"（显式触发）拆成两种边界清晰、不会被混用的操作，避免自动重试机制在不知情的情况下选错语义。同时把 worker 失败原因区分成"超时"和"被外部取消"两类而不是笼统的"失败"——如果所有失败都塞进同一个标签，运维和工程师就没法判断这是基础设施正常回收资源，还是任务本身执行出了错，这直接决定了要不要允许自动重试、要不要报警。修复后没有只在测试环境验证，而是等到一次真实报告生成中途撞上超时被自动重试时，用日志证实流程只重新执行了未完成的节点，报告表里也确实只留了一行，没有产生孤儿重复数据。
 
 ### P2：追加式消息和对话摘要
 
