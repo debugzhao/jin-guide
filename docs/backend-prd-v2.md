@@ -563,7 +563,7 @@ POST /api/v1/reports/{report_id}/refine
 **处理逻辑**：
 
 1. 判断 `patch` 涉及**轻量约束**还是**重大约束**：
-   - 轻量约束（预算、城市偏好、排除院校/专业等不影响证据检索范围的字段）→ 创建异步 refine run，只重跑 `Recommendation Agent → Risk Agent → Report Agent`，复用当前报告 checkpoint 中的 `evidence_list`/`rule_results`，不重新走 Data Resolver/Retrieval/Policy Rule，预计 5-10 秒完成。
+   - 轻量约束（预算、城市偏好、排除院校/专业等不影响证据检索范围的字段）→ 创建异步 refine run，只重跑 `Recommendation Agent → Risk Agent → Report Agent`，复用父报告 `reports.evidence_json` 字段里保存的证据（不是 LangGraph checkpoint——refine 子图走的是全新 `thread_id`），不重新走 Data Resolver/Retrieval/Policy Rule，预计 5-10 秒完成。
    - 重大约束（省份、选科、批次变更）→ 返回 `422 requires_full_regenerate`，引导前端走完整的 `POST /api/v1/reports/generate`。
 2. 轻量约束请求校验通过后立即返回 `202 Accepted`，前端用返回的 `run_id` 订阅 SSE，在报告工作台左侧对话栏展示局部重新生成状态。
 3. Worker 完成轻量重跑后创建新的 `reports` 记录：`parent_report_id` 指向原报告，`version` 在同一血缘链内递增，并通过 `completed` SSE 返回新 `report_id`。
@@ -592,7 +592,7 @@ data: {"report_id": "report_456", "parent_report_id": "report_123", "version": 2
 | --- | --- | --- |
 | 422 | `requires_full_regenerate` | patch 涉及重大约束，需完整重新生成 |
 | 404 | `not_found` | `report_id` 不存在 |
-| 409 | `checkpoint_not_found` | 原报告 checkpoint 已超出 7 天 TTL，无法复用，需走完整生成 |
+| 409 | `checkpoint_not_found` | 原报告缺少 `profile_id` 或对应档案已被删除，无法复用其证据，需走完整生成（历史命名，与 LangGraph checkpoint 无关） |
 
 ### 5.10 报告问答（ConversationAgent）
 
@@ -1010,12 +1010,13 @@ flowchart TD
 
 | 类型 | 存储 | Key 结构 | TTL | 内容 |
 | --- | --- | --- | --- | --- |
-| 短期记忆 | LangGraph checkpoint（Redis） | `checkpoint:{thread_id}:{run_id}` | 7 天 | 完整 State 快照、对话历史、工具调用中间结果 |
+| 短期记忆 | LangGraph checkpoint（PostgreSQL，`langgraph-checkpoint-postgres` `AsyncPostgresSaver`） | `checkpoints`/`checkpoint_blobs`/`checkpoint_writes` 三张表，按 `thread_id` 检索 | 无 TTL，随 `agent_runs.thread_id` 永久保留，直到 `/retry` 显式 `adelete_thread` 清空 | 每个 superstep 之后的完整 State 快照 |
 
-- 每个节点执行完成后，LangGraph 自动写入 checkpoint。
-- run 完成后 checkpoint 在 TTL 内保留，支持调试回放和 §5.9 局部重新生成复用 `evidence_list`/`rule_results`。
-- **Profile Agent 连续追问期间**（等待用户回答，最多 3 轮）checkpoint 同样依赖此 TTL；超过 7 天未回答，重新提交会收到 `checkpoint_not_found`，前端提示"会话已过期，请重新开始建档"。
-- Redis 内存不足时可能提前驱逐（LRU）。生产环境建议 PostgreSQL checkpointer 双写，Redis 仅作热层；Redis 不可用时自动降级读 PostgreSQL，仅牺牲延迟。
+- worker 进程启动时建一次长连接的 `AsyncPostgresSaver`，`agent_graph`/`refine_graph` 编译时带上它；每个节点执行完成后 LangGraph 自动写入 checkpoint（`backend/app/worker.py` on_startup）。
+- **Resume（默认）**：`run_agent`/`run_refine` 被重新 enqueue 时，先按 `thread_id` 查是否已有 checkpoint——有则从断点续跑（跳过已完成节点），没有则视为全新 run。这是 worker 进程被杀/`job_timeout` 触发 ARQ 自动重试后的默认行为，不需要额外调用任何接口。
+- **Retry（显式）**：`POST /api/v1/agent/runs/{id}/retry` 只对 `failed`/`timeout`/`interrupted` 状态生效，会先 `adelete_thread` 清空该 `thread_id` 的 checkpoint，再从头重新构建初始 State——与"默认续跑"的语义明确区分，用于确定性失败（如某节点逻辑有 bug）后需要完全重来的场景。
+- §5.9 局部重新生成（`/refine`）走的是**全新 `thread_id`**，复用的是父报告 `reports.evidence_json` 列里的证据，不依赖也不读取 LangGraph checkpoint。
+- Profile Agent 目前没有"暂停恢复"能力：档案不完整时图在 `profile_agent` 节点后直接 `END`，用户补充信息后是重新调用 `POST /reports/generate` 发起一个新 run（新 `thread_id`），而不是续跑同一个 checkpoint。
 
 ### 10.6 Reflection 循环保护
 
@@ -1042,14 +1043,14 @@ else:
 
 ### 10.7 Agent 通信机制
 
-**所有 Agent 节点之间不进行直接 API 调用，唯一通信介质是 LangGraph State**（checkpoint 持久化到 Redis）。
+**所有 Agent 节点之间不进行直接 API 调用，唯一通信介质是 LangGraph State**（checkpoint 持久化到 PostgreSQL，见 §10.5）。
 
 | 模式 | 实现方式 | 使用场景 |
 | --- | --- | --- |
 | 顺序传递 | 上游写 State 字段，下游读 | Retrieval → Recommendation |
 | 并行扇出 | LangGraph `Send` API | Retrieval + Policy Rule 并发 |
 | 条件路由 | `conditional_edge` | 根据 `profile_complete` 决定下一节点 |
-| 暂停恢复 | checkpoint 持久化 | Profile Agent 追问，等待用户回答后恢复 |
+| 崩溃续跑 | checkpoint 持久化 | worker 被杀/`job_timeout` 后重新 enqueue，从最后一个已完成节点继续（见 §10.5 Resume） |
 | 回退修正 | 路由回 Report Agent | Reflection 自检失败，携带 `compliance_issues` 定向修正 |
 
 **State 字段所有权**：
@@ -1320,7 +1321,7 @@ Prompt 注入防护（RAG 文档作为数据，不允许覆盖系统规则）；
 - BM25 通过 `pg_bm25` 实现；`chunks` 表有 `embedding_model` 字段。
 - ConversationAgent 回复不含禁词；不调用 `update_profile`/`generate_candidates`/`render_report_template`（ToolFilter 隔离，可通过单元测试验证）。
 - ConversationAgent 的 UI 操作类工具调用不经过用户二次确认即执行，数据变更类工具必须先发送 `refine_confirm_required` 再等待前端调用 `/refine`。
-- `POST /api/v1/reports/{id}/refine` 对轻量约束只重跑 Recommendation→Risk→Report（可通过验证 checkpoint 中 `evidence_list` 未变化来断言未重新检索）；对重大约束正确返回 `422 requires_full_regenerate`。
+- `POST /api/v1/reports/{id}/refine` 对轻量约束只重跑 Recommendation→Risk→Report（可通过验证新报告的 `evidence_json` 与父报告一致来断言未重新检索）；对重大约束正确返回 `422 requires_full_regenerate`。
 - `GET /api/v1/admin/*` 对 `role != admin` 返回 403；`debug-events` 历史回放正确从 `0-0` 读取，完成后发送 `stream_end`；Debug 事件不含用户 PII。
 - 用户侧协作事件（`agents_parallel_started/merged`、`self_check_round`、`degraded_notice`）与 Admin 全量事件源自同一份数据，可通过对比同一 run 两个端点的事件时间戳验证一致性。
 

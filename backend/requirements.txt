@@ -10,6 +10,8 @@ email-validator==2.2.0
 redis[hiredis]==5.2.1
 arq==0.26.1
 langgraph==0.2.60
+langgraph-checkpoint-postgres==2.0.21
+psycopg[binary]==3.3.4
 langchain-core>=0.3.27,<0.4.0
 langchain-openai==0.2.14
 langsmith==0.1.147

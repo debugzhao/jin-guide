@@ -104,6 +104,53 @@ async def create_agent_run(
     )
 
 
+@router.post("/runs/{run_id}/retry", response_model=AgentRunOut)
+async def retry_agent_run(
+    run_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Explicit full restart: discards this run's LangGraph checkpoint and
+    re-invokes the graph from scratch, even though a checkpoint may exist.
+    This is deliberately distinct from the default re-enqueue behavior in
+    run_agent (which resumes from checkpoint) — see docs/memory-architecture.md
+    §六 P1 Resume/Retry/Refine semantics. Only allowed for runs that stopped
+    without producing a report (failed/timeout/interrupted); a completed run
+    should be revised via /refine, not restarted.
+    """
+    arq_pool = getattr(request.app.state, "arq_pool", None)
+    if not arq_pool:
+        raise HTTPException(status_code=503, detail="ARQ pool unavailable")
+
+    result = await db.execute(select(AgentRun).where(AgentRun.id == run_id))
+    run = result.scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="run not found")
+
+    if run.status not in ("failed", "timeout", "interrupted"):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": {
+                    "code": "conflict",
+                    "message": f"run 当前状态为 {run.status}，只有 failed/timeout/interrupted 才能重试",
+                }
+            },
+        )
+
+    run.status = "queued"
+    await db.commit()
+
+    await arq_pool.enqueue_job("run_agent", run_id, force_restart=True)
+
+    return AgentRunOut(
+        run_id=run.id,
+        status="queued",
+        stream_url=f"/api/v1/agent/runs/{run.id}/events",
+    )
+
+
 @router.get("/runs/{run_id}", response_model=AgentRunStatus)
 async def get_agent_run(
     run_id: str,

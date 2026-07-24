@@ -11,9 +11,10 @@ from datetime import UTC, datetime
 import redis.asyncio as aioredis
 import structlog
 from arq.connections import RedisSettings
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from sqlalchemy import select
 
-from app.agent.graph import agent_graph, refine_graph
+from app.agent.graph import create_graph, create_refine_graph
 from app.agent.state import VolunteerPlanState
 from app.config import settings
 from app.database import async_session_maker
@@ -29,6 +30,35 @@ if settings.langsmith_api_key:
 
 configure_logging()
 logger = structlog.get_logger()
+
+
+def _checkpoint_dsn() -> str:
+    """AsyncPostgresSaver uses psycopg3, not the +asyncpg driver SQLAlchemy needs."""
+    return settings.database_url.replace("postgresql+asyncpg://", "postgresql://")
+
+
+async def on_startup(ctx: dict) -> None:
+    """
+    Open one long-lived AsyncPostgresSaver connection pool for the worker
+    process's lifetime and compile the checkpointed graphs once, so every
+    job invocation resumes/persists against the same checkpointer instead of
+    the graph state living only in memory (see docs/memory-architecture.md
+    §六 P1 — a killed/restarted worker used to lose all in-flight state).
+    """
+    checkpointer_cm = AsyncPostgresSaver.from_conn_string(_checkpoint_dsn())
+    checkpointer = await checkpointer_cm.__aenter__()
+    await checkpointer.setup()
+    ctx["checkpointer_cm"] = checkpointer_cm
+    ctx["checkpointer"] = checkpointer
+    ctx["agent_graph"] = create_graph(checkpointer=checkpointer)
+    ctx["refine_graph"] = create_refine_graph(checkpointer=checkpointer)
+    logger.info("worker_checkpointer_ready")
+
+
+async def on_shutdown(ctx: dict) -> None:
+    checkpointer_cm = ctx.get("checkpointer_cm")
+    if checkpointer_cm:
+        await checkpointer_cm.__aexit__(None, None, None)
 
 
 async def _push_run_sse(run_id: str, event: str, data: dict) -> None:
@@ -288,7 +318,7 @@ async def _write_run_summary_to_report(run_id: str, debug_summary: dict) -> None
 async def _run_graph_and_finalize(
     *,
     graph,
-    state: VolunteerPlanState,
+    graph_input: VolunteerPlanState | None,
     run: AgentRun,
     on_success,
 ) -> None:
@@ -297,6 +327,10 @@ async def _run_graph_and_finalize(
     and local refine (run_refine): drive the graph, write AgentRun status/cost/
     debug_summary, and call `on_success(run_id, debug_summary)` for the
     run-type-specific terminal SSE event (their `completed` payload shapes differ).
+
+    `graph_input=None` means "resume from the last checkpoint for this
+    thread_id" (see run_agent's is_resume check) instead of starting a fresh
+    VolunteerPlanState — the checkpointer fills in the rest.
     """
     run_id = run.id
     ls_run_id = uuid.uuid4()
@@ -316,7 +350,7 @@ async def _run_graph_and_finalize(
     logger.info("agent_run_started", run_id=run_id, node="run", stage="run_started")
 
     try:
-        debug_summary = await _stream_graph(graph, state, config, run_id)
+        debug_summary = await _stream_graph(graph, graph_input, config, run_id)
         await on_success(run_id, debug_summary)
 
         total_tokens, cost_usd, trace_url = _get_langsmith_stats(ls_run_id)
@@ -333,6 +367,11 @@ async def _run_graph_and_finalize(
             run2 = result2.scalar_one_or_none()
             if run2:
                 run2.status = "completed"
+                # A resumed run may carry a stale error_msg from the attempt
+                # that got interrupted/timed out before this one — a reader
+                # of agent_runs shouldn't see status=completed next to a
+                # leftover failure message from a previous try.
+                run2.error_msg = None
                 run2.completed_at = datetime.now(UTC)
                 run2.cost_tokens = total_tokens
                 run2.cost_usd = cost_usd
@@ -354,15 +393,31 @@ async def _run_graph_and_finalize(
     except (Exception, asyncio.CancelledError) as exc:
         duration_seconds = round(time.perf_counter() - run_started_at, 2)
         latency_ms = round(duration_seconds * 1000, 1)
-        error_msg = str(exc) or (
-            f"job cancelled (job_timeout={WorkerSettings.job_timeout}s exceeded)"
-            if isinstance(exc, asyncio.CancelledError) else repr(exc)
-        )
+
+        # asyncio.CancelledError is ambiguous: arq raises it both when
+        # job_timeout is exceeded AND when the worker process receives
+        # SIGINT/SIGTERM (graceful shutdown/restart) — these used to be
+        # indistinguishable in agent_runs.status (both "failed"), which made
+        # "did this actually time out or did the worker just get restarted"
+        # unanswerable from the DB alone (docs/memory-architecture.md §六 P1).
+        # Elapsed time close to job_timeout implies the former; a much
+        # shorter elapsed time implies external cancellation.
+        if isinstance(exc, asyncio.CancelledError):
+            if duration_seconds >= WorkerSettings.job_timeout - 1:
+                new_status = "timeout"
+                error_msg = f"job cancelled (job_timeout={WorkerSettings.job_timeout}s exceeded)"
+            else:
+                new_status = "interrupted"
+                error_msg = "job cancelled before job_timeout — worker likely shutting down/restarting"
+        else:
+            new_status = "failed"
+            error_msg = str(exc) or repr(exc)
+
         async with async_session_maker() as db3:
             result3 = await db3.execute(select(AgentRun).where(AgentRun.id == run_id))
             run3 = result3.scalar_one_or_none()
             if run3:
-                run3.status = "failed"
+                run3.status = new_status
                 run3.error_msg = error_msg
                 run3.completed_at = datetime.now(UTC)
                 run3.duration_seconds = duration_seconds
@@ -372,18 +427,29 @@ async def _run_graph_and_finalize(
             run_id=run_id,
             node="run",
             stage="run_failed",
+            status=new_status,
             latency_ms=latency_ms,
             error=error_msg,
         )
         raise
 
 
-async def run_agent(ctx: dict, run_id: str) -> None:
+async def run_agent(ctx: dict, run_id: str, force_restart: bool = False) -> None:
     """
-    Core ARQ task: load AgentRun from DB, build initial state, invoke the full LangGraph.
+    Core ARQ task: load AgentRun from DB, then pick one of three behaviors:
+
+    - Resume (default, checkpoint exists): a previous attempt got this far
+      and was killed/cancelled before finishing — continue from the last
+      completed node instead of re-running the whole graph.
+    - Fresh run (default, no checkpoint yet): first-ever invocation for this
+      run_id — build the initial state and run from the top.
+    - Retry (`force_restart=True`, set by POST .../retry): explicitly discard
+      any existing checkpoint and start over from a fresh initial state, even
+      if one exists — for when the operator wants a clean re-run rather than
+      continuing from whatever state a failed attempt left behind.
 
     On success: marks run as 'completed', sets completed_at, writes LangSmith stats.
-    On failure: marks run as 'failed', stores error_msg.
+    On failure: marks run as 'failed'/'timeout'/'interrupted', stores error_msg.
     """
     async with async_session_maker() as db:
         result = await db.execute(select(AgentRun).where(AgentRun.id == run_id))
@@ -391,15 +457,33 @@ async def run_agent(ctx: dict, run_id: str) -> None:
         if not run:
             return
 
+        if run.status == "completed" and not force_restart:
+            # Idempotency guard: a duplicate enqueue (accidental double-submit,
+            # or an operator retrying an already-finished run) must not
+            # re-execute the graph — report_agent would otherwise mint a
+            # second Report row for the same run_id.
+            logger.info("agent_run_already_completed_skip", run_id=run_id)
+            return
+
         run.status = "running"
+        run.error_msg = None
         await db.commit()
 
-    state = _build_initial_state(run)
+    checkpointer = ctx["checkpointer"]
+    thread_config = {"configurable": {"thread_id": run.thread_id}}
+    if force_restart:
+        await checkpointer.adelete_thread(run.thread_id)
+        graph_input = _build_initial_state(run)
+    else:
+        existing_checkpoint = await checkpointer.aget_tuple(thread_config)
+        graph_input = None if existing_checkpoint else _build_initial_state(run)
 
     async def on_success(rid: str, _debug_summary: dict) -> None:
         await _emit_completed_if_report_exists(rid)
 
-    await _run_graph_and_finalize(graph=agent_graph, state=state, run=run, on_success=on_success)
+    await _run_graph_and_finalize(
+        graph=ctx["agent_graph"], graph_input=graph_input, run=run, on_success=on_success
+    )
 
 
 async def run_refine(
@@ -420,6 +504,11 @@ async def run_refine(
         run = result.scalar_one_or_none()
         if not run:
             return
+
+        if run.status == "completed":
+            logger.info("agent_run_already_completed_skip", run_id=run_id)
+            return
+
         run.status = "running"
         await db.commit()
 
@@ -434,7 +523,13 @@ async def run_refine(
             await db.commit()
             return
 
-    state = _build_refine_state(run, parent_report, profile_dict, hard_blocked_items)
+    checkpointer = ctx["checkpointer"]
+    thread_config = {"configurable": {"thread_id": run.thread_id}}
+    existing_checkpoint = await checkpointer.aget_tuple(thread_config)
+    graph_input = (
+        None if existing_checkpoint
+        else _build_refine_state(run, parent_report, profile_dict, hard_blocked_items)
+    )
 
     async def on_success(rid: str, _debug_summary: dict) -> None:
         async with async_session_maker() as db2:
@@ -454,13 +549,17 @@ async def run_refine(
             },
         })
 
-    await _run_graph_and_finalize(graph=refine_graph, state=state, run=run, on_success=on_success)
+    await _run_graph_and_finalize(
+        graph=ctx["refine_graph"], graph_input=graph_input, run=run, on_success=on_success
+    )
 
 
 class WorkerSettings:
     """ARQ worker configuration. Run: arq app.worker.WorkerSettings"""
 
     functions = [run_agent, run_refine]
+    on_startup = on_startup
+    on_shutdown = on_shutdown
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     max_jobs = 10
     job_timeout = 180

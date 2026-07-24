@@ -403,20 +403,22 @@ Agent 类型 + 用户身份 + Conversation/Thread + 当前问题 + State + Token
   - Redis 层——POST/GET/DELETE 三个端点统一改用 `get_identity` 解析身份（`user.id` 或 `anon:{anonymous_id}`），不再各写各的（发消息用 IP、读/删用固定字符串 `"anon"`），修复了发消息后读不到、删除后旧消息又复活的问题；
   - Postgres 层——`report_conversations` 新增 `anonymous_id` 字段，回源查询按 `user_id`（登录）或 `anonymous_id`（匿名）精确匹配，不再用 `user_id IS NULL` 一刀切，修复了不同匿名用户在同一份报告下互相读到对方历史的串读问题；
   - 已用真实匿名会话端到端验证：发消息→读历史、清空→再发不复活、两个独立匿名身份互不可见。
-- 统一用户、匿名用户和 Thread 的身份作用域；
-- 明确 PostgreSQL 是消息权威源，Redis 是热缓存；
-- 抽出统一 Memory Facade 和 Key Builder；
-- 增加会话并发写入控制；
-- 修正文档中“Checkpoint 已实现”的错误描述。
+- ✅ **统一用户、匿名用户和 Thread 的身份作用域**：ConversationAgent 改为和 IntakeAgent 共用同一套 `owner_key(identity)` 解析（`app/services/conversation_store.py`），三处身份计算方式收敛为一处；`thread_id` 明确只用于 LangGraph 执行维度，不参与任何记忆归属判断。
+- ✅ **明确 PostgreSQL 是消息权威源，Redis 是热缓存**：策略本身此前就是"先写 Redis、DB best-effort"且读写一致，本次把它显式固化成 `conversation_store` 里的注释约定，并把原来裸 `except: pass` 换成 `structlog` 结构化日志（`conversation_db_persist_failed`），用真实触发的 DB 写入失败验证过——日志能看到失败原因和 `report_id`/`conversation_id` 上下文，不再是完全黑盒。
+- ✅ **抽出统一 Memory Facade 和 Key Builder**：新增 `backend/app/services/conversation_store.py`，把身份解析、限流 key、Redis 读写、Postgres upsert 这几块公共逻辑收进去，`chat.py`/`intake_chat.py` 都改为调用它，各自只保留业务特有部分（IntakeAgent 的多会话/软删除/标题升级，ConversationAgent 的单行 upsert）。重构后跑了两边的完整业务流程（发消息/读历史/清空/重命名/删除）确认行为未变。
+- ✅ **增加会话并发写入控制**：Redis 侧改用服务端 Lua 脚本原子 append+trim（第一版用 WATCH/MULTI 客户端重试，在 20 并发下仍然丢消息，验证后换成真正原子的方案）；Postgres 侧给 `report_conversations`/`intake_conversations` 加 `version` 字段接入 SQLAlchemy `version_id_col` 乐观锁，冲突时自动重试。已用并发脚本验证：20 个并发请求写 Redis 无丢失，5 个并发请求写 DB 无丢失（`total messages` 均等于预期条数）。
+- ⏸️ **修正文档中"Checkpoint 已实现"的错误描述**——**暂缓**：处理这条时发现 P1 阶段的 PostgreSQL Checkpointer 正在被并行实现（`graph.py`/`worker.py` 已引入 `AsyncPostgresSaver`），过程中一度因为 `langgraph-checkpoint-postgres` 未安装导致 worker 崩溃重启，已顺手修复（`docker compose build worker backend` 重新装上依赖）。文档描述"是否已实现"这件事本身正随 P1 进度变化，等 P1 验证通过后再统一修正，避免文档改动和另一个进行中的任务冲突。
 
-业务价值：先解决串数据、丢历史和文档失真的高风险问题。
+业务价值：先解决串数据、丢历史和文档失真的高风险问题——前四项已验证生效；最后一项文档修正待 P1 完工后收尾。
 
 ### P1：PostgreSQL Checkpoint
 
-- 接入与当前 LangGraph 版本兼容的 PostgreSQL Checkpointer；
-- 明确 Resume、Retry 和 Refine 的不同语义；
-- 为 Report、SSE 和外部写工具增加幂等；
-- 增加 Worker 故障注入和恢复观测。
+- ✅ **已修复**（`backend/app/agent/graph.py` + `backend/app/worker.py` + `backend/app/api/v1/agent.py` + 迁移 `013_report_run_id_unique`）：
+  - Checkpointer——`langgraph-checkpoint-postgres`（`AsyncPostgresSaver`）在 worker 进程 `on_startup` 建一次长连接池并 `.setup()`，`create_graph`/`create_refine_graph` 编译时带上它，每个 superstep 后自动落盘到 `checkpoints`/`checkpoint_blobs`/`checkpoint_writes` 三张表；
+  - Resume/Retry/Refine 三态——`run_agent`/`run_refine` 默认按 `thread_id` 查是否已有 checkpoint：有则 `graph_input=None`（从断点续跑，跳过已完成节点），没有则从头构建初始 state；新增 `POST /api/v1/agent/runs/{id}/retry`，只对 `failed`/`timeout`/`interrupted` 生效，显式 `adelete_thread` 清空 checkpoint 后强制从头重跑，与"默认续跑"的 Resume 明确区分；`/refine` 语义不变（复用父报告证据的局部子图，产出新版本）；
+  - 幂等——`report_agent.py` 改成按 `run_id` upsert（查到就更新同一行，查不到才插入），不再每次 `uuid4()` 新插一行；`reports.run_id` 加唯一约束兜底；去掉 report 节点内提前的 `completed`/`failed` SSE 推送，只保留 worker 收尾时的单次终态推送；
+  - Worker 故障可观测性——区分 `asyncio.CancelledError` 是 `job_timeout` 触发（记 `timeout`）还是外部提前取消（记 `interrupted`），不再统一归并成 `failed`；成功收尾时清掉上一次失败尝试遗留的 `error_msg`。
+  - 已用真实场景验证：一次真实报告生成中途撞上 `job_timeout` 被 ARQ 自动重试，日志证实续跑正确跳过了 `data_resolver/retrieval_agent/policy_rule_agent/recommendation/risk` 五个已完成节点，只重新执行了 `report`→`reflection`；期间 `report` 节点因 reflection 循环被多次调用，但最终该 run 在 `reports` 表里只有 1 行（无孤儿重复行）；`agent_runs.status` 正确落到 `timeout` 而非笼统的 `failed`；另外手动模拟 `failed` 状态调用 `/retry`，验证到确实清空 checkpoint 后从 `data_resolver` 整体重跑，且报告行按 `run_id` 复用同一个 `id` 被覆盖更新。
 
 业务价值：减少失败后的重复等待、LLM 成本和外部调用。
 

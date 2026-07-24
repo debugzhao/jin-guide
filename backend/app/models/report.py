@@ -23,8 +23,10 @@ class Report(Base):
     )
     # 匿名建档阶段生成的报告归属；登录/注册后绑定到 user_id（见 auth.py 的绑定逻辑）
     anonymous_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    # unique：一个 run_id 只对应一份权威 Report 行（reflection 重试循环内的多次
+    # report 节点执行按 run_id upsert 同一行，不再每次 uuid4() 插入新行）
     run_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("agent_runs.id"), nullable=True
+        String(36), ForeignKey("agent_runs.id"), nullable=True, unique=True
     )
     # generating / completed / failed
     status: Mapped[str] = mapped_column(String(20), default="generating")

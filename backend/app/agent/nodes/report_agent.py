@@ -283,43 +283,59 @@ async def report_agent(state: VolunteerPlanState) -> dict:
     risk_penalty = {"high": 70, "medium": 45, "low": 20}
     risk_score = float(risk_penalty.get(overall_risk, 45))
 
-    # ── 5. Persist to DB ──────────────────────────────────────────────────────
+    # ── 5. Persist to DB (idempotent upsert keyed by run_id) ──────────────────
+    # Reflection can route back to this node up to _MAX_REFLECTION_ITERATIONS
+    # times within a single run; a plain uuid4()+INSERT every time used to
+    # leave earlier iterations' rows orphaned in `reports` and fire a
+    # premature "completed" SSE event before the run was actually done (see
+    # docs/memory-architecture.md §六 P1). One run_id now maps to exactly one
+    # Report row — later iterations overwrite it instead of inserting a new
+    # one, and the terminal SSE event is left to the worker's finalize step,
+    # which only fires once the whole graph (including retries) has settled.
     report_id = str(uuid4())
     db_saved = False
     try:
+        from sqlalchemy import select
+
         from app.database import async_session_maker
         from app.models.report import Report
 
         async with async_session_maker() as db:
-            report = Report(
-                id=report_id,
-                profile_id=state.get("profile_id") or None,
-                user_id=state.get("user_id") or None,
-                anonymous_id=state.get("anonymous_id") or None,
-                run_id=run_id,
-                status="completed",
-                risk_level=overall_risk,
-                risk_score=risk_score,
-                plan_json=plan_json,
-                evidence_json=state.get("evidence_list") or [],
-                dataset_version=state.get("dataset_version"),
-                version=state.get("version") or 1,
-                parent_report_id=state.get("parent_report_id") or None,
+            existing = await db.execute(
+                select(Report).where(Report.run_id == run_id, Report.deleted_at.is_(None))
             )
-            db.add(report)
+            report = existing.scalar_one_or_none()
+            if report:
+                report_id = report.id
+                report.risk_level = overall_risk
+                report.risk_score = risk_score
+                report.plan_json = plan_json
+                report.evidence_json = state.get("evidence_list") or []
+                report.dataset_version = state.get("dataset_version")
+            else:
+                report = Report(
+                    id=report_id,
+                    profile_id=state.get("profile_id") or None,
+                    user_id=state.get("user_id") or None,
+                    anonymous_id=state.get("anonymous_id") or None,
+                    run_id=run_id,
+                    status="completed",
+                    risk_level=overall_risk,
+                    risk_score=risk_score,
+                    plan_json=plan_json,
+                    evidence_json=state.get("evidence_list") or [],
+                    dataset_version=state.get("dataset_version"),
+                    version=state.get("version") or 1,
+                    parent_report_id=state.get("parent_report_id") or None,
+                )
+                db.add(report)
             await db.commit()
             db_saved = True
     except Exception as exc:
         logger.exception("Failed to persist report to DB")
         compliance_issues.append(f"报告保存失败：{exc!s}")
 
-    if db_saved:
-        await _push_sse(run_id, "completed", {
-            "report_id": report_id,
-            "risk_level": overall_risk,
-            "compliance_passed": compliance_passed,
-        })
-    else:
+    if not db_saved:
         await _push_sse(run_id, "failed", {
             "message": "报告保存失败，请稍后重试",
         })

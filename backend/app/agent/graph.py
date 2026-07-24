@@ -202,8 +202,15 @@ def _route_after_reflection(state: VolunteerPlanState) -> str:
     return "report"
 
 
-def create_graph():
-    """Build and compile the LangGraph state machine."""
+def create_graph(checkpointer=None):
+    """
+    Build and compile the LangGraph state machine.
+
+    `checkpointer` persists state after every superstep so a crashed/killed
+    worker can resume a thread_id from its last completed node instead of
+    re-running the whole graph (see docs/memory-architecture.md §六 P1).
+    Defaults to None for structural tests that only inspect topology.
+    """
     graph = StateGraph(VolunteerPlanState)
 
     # ── Nodes (all wrapped with debug event emission) ──────────────────────
@@ -249,10 +256,10 @@ def create_graph():
         },
     )
 
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)
 
 
-def create_refine_graph():
+def create_refine_graph(checkpointer=None):
     """
     局部重新生成子图 (docs/backend-prd-v2.md §5.9)：只重跑
     recommendation → risk → report → reflection，复用调用方在初始 state 里
@@ -281,9 +288,13 @@ def create_refine_graph():
         },
     )
 
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)
 
 
-# Module-level compiled graph instances — workers import these directly
+# Module-level compiled graphs WITHOUT a checkpointer — kept only for
+# structural tests (test_graph_structure.py) that inspect topology without
+# executing nodes. The worker builds its own checkpointed instances at
+# startup (see worker.py on_startup) since AsyncPostgresSaver requires an
+# async connection pool that can't be set up at import time.
 agent_graph = create_graph()
 refine_graph = create_refine_graph()

@@ -17,17 +17,17 @@
 | LangChain ReAct Agent | 单 Agent 循环 | 无 | 无 | 简单工具调用 |
 | CrewAI | Agent-to-Agent 调用 | 无 | 有限 | 角色扮演协作 |
 | AutoGen | 多 Agent 对话 | 无 | 有限 | 开放式对话 |
-| **LangGraph** | **有向图 + Checkpoint** | **Redis 7 天 TTL** | **条件边扇出** | **高可靠工作流** |
+| **LangGraph** | **有向图 + Checkpoint** | **PostgreSQL（`AsyncPostgresSaver`），无 TTL** | **条件边扇出** | **高可靠工作流** |
 
 **核心诉求决定选型**：
 
-1. **暂停/恢复** — Profile Agent 追问缺失字段时（最多 3 轮），图在当前 run 结束但 checkpoint 保留；用户补充信息后走 `POST /profile`，下一次 `POST /reports/generate` 重新驱动图，从已收集的字段继续判断。这依赖 Checkpoint 持久化，不依赖 LangGraph 的 `interrupt()`（该机制曾用于已移除的人工复核流程，当前代码库不再使用）。
+1. **崩溃续跑** — worker 进程被杀或单个 job 触发 `job_timeout`（ARQ 自动重试）后，`run_agent`/`run_refine` 按 `thread_id` 查到已有 checkpoint 就从最后一个已完成节点继续，不重新跑一遍前面的节点；`POST /agent/runs/{id}/retry` 则显式清空 checkpoint 强制从头重来（见 `docs/backend-prd-v2.md` §10.5）。这依赖 Checkpoint 持久化，不依赖 LangGraph 的 `interrupt()`（该机制曾用于已移除的人工复核流程，当前代码库不再使用）。注意这不是"Profile Agent 追问的暂停/恢复"——档案不完整时图在 `profile_agent` 节点后直接 `END`，用户补充信息后是重新调用 `POST /reports/generate` 发起新的 `thread_id`，而不是续跑同一个 checkpoint。
 
 2. **确定性 + LLM 混合** — 大部分节点是确定性的（Rule Engine、Recommendation Engine、Risk Engine），只有 Profile/Retrieval/Report/Reflection 四个节点调用 LLM。LangGraph 的节点可以是任意 Python 函数，不强制 LLM。
 
 3. **并行执行** — Retrieval Agent 和 Policy Rule Agent 互不依赖，通过条件边一次返回两个目标节点名实现真正并发，缩短报告生成延迟。
 
-4. **可追溯** — 每个节点执行后 State 快照持久化到 Redis checkpoint，`/refine` 复用被重新生成报告的 `evidence_json` 而不重新检索，就是靠这份可追溯的 State 落地实现的。
+4. **可追溯** — 每个节点执行后 State 快照持久化到 PostgreSQL checkpoint，供崩溃续跑和调试回放使用；`/refine` 复用的是父报告 `reports.evidence_json` 列而不是这份 checkpoint（`/refine` 走的是全新 `thread_id`），不重新检索。
 
 ---
 
@@ -330,7 +330,7 @@ graph.add_edge("policy_rule_agent", "recommendation")
 
 | 类型 | 场景 | 本项目实现 | 通用实现模式 |
 |---|---|---|---|
-| 会话内工作记忆 | 单次 Agent 执行 / 单轮对话内，多节点间共享上下文 | `VolunteerPlanState`（§4）+ LangGraph Checkpoint（Redis 热层，7 天 TTL，见 §1）；`intake_agent.py` 单次请求只取最近 16 条消息传给 LLM，滑动窗口截断 | 消息列表直接塞进上下文，配合窗口截断防止超长 |
+| 会话内工作记忆 | 单次 Agent 执行 / 单轮对话内，多节点间共享上下文 | `VolunteerPlanState`（§4）+ LangGraph Checkpoint（PostgreSQL，无 TTL，见 §1）；`intake_agent.py` 单次请求只取最近 16 条消息传给 LLM，滑动窗口截断 | 消息列表直接塞进上下文，配合窗口截断防止超长 |
 | 跨会话长期记忆（对话历史） | 用户下次回来想接上之前的聊天 | `report_conversations`（按 `report_id` 隔离）、`intake_conversations`（按 `owner_key`）：Redis 热层（`chat:history:*`/`intake:history:*`，7 天 TTL）+ Postgres 冷层 best-effort 异步写入兜底 | Redis 热层（低延迟、有 TTL）+ DB 冷层（持久化），按会话/线程 ID 隔离读写；ID 一般对应 URL 里的资源 id（本项目是 `report_id`），或独立的 `conversation_id`/`thread_id` |
 | 结构化用户画像 | "预算 8 万""选了物理化学生物"这类必须参与规则判断的信息 | `profiles` 表 + Profile Agent 追问机制（只写 `profile`/`profile_complete`/`profile_pending_questions`，§2） | LLM/规则从对话中抽取字段写入普通业务表，不留在语义记忆里——高风险判断必须能被规则引擎直接读取和审计 |
 | 检索增强记忆（外部知识） | 记忆量大、按需召回、大部分内容跟当前请求无关 | pgvector 向量库存招生政策/院校信息（Retrieval Agent，§2/§3），检索 top-8 相关证据注入 Report Agent，而非全量塞入 | 内容 embedding 化存向量库，检索时取 top-k 相关片段注入 prompt |
