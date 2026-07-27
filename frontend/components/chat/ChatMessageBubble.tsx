@@ -66,24 +66,40 @@ function buildMarkdownComponents(citations: ChatCitation[]): Components {
 }
 
 /**
- * 默认收起的"查看AI推理过程"面板——展示 kimi-k2.6 的 reasoning_content（已经过
- * _ThinkingBuffer 按句子片段做过合规过滤，不是完全原始的模型输出）。只有真的想看
- * AI 是怎么"想"的用户才会点开，绝大多数用户永远不会看到这段技术性文字。
+ * 可展开的"AI 推理过程"面板——展示 kimi-k2.6 的 reasoning_content（已经过
+ * _ThinkingBuffer 按句子片段做过合规过滤，不是完全原始的模型输出）。
+ *
+ * `defaultExpanded` 由调用方按阶段传入，不是写死的：正在思考、还没出现正式回复
+ * 内容时默认展开（此时这是屏幕上唯一有信息量的东西，应该主动露出而不是让用户
+ * 去点）；正式内容一开始生成、或者这条消息已经生成完毕，就默认收起，避免这段
+ * 技术性文字常驻挤占版面。用户如果手动点过一次，之后就按用户的选择来，不再被
+ * `defaultExpanded` 的变化覆盖。
  */
-function ThinkingDisclosure({ thinking }: { thinking: string }) {
-  const [expanded, setExpanded] = useState(false)
+export function ThinkingDisclosure({
+  thinking,
+  label = '查看AI推理过程',
+  defaultExpanded = false,
+  pulsing = false,
+}: {
+  thinking: string
+  label?: string
+  defaultExpanded?: boolean
+  pulsing?: boolean
+}) {
+  const [manualExpanded, setManualExpanded] = useState<boolean | null>(null)
+  const expanded = manualExpanded ?? defaultExpanded
   return (
     <div className="mt-1.5">
       <button
-        onClick={() => setExpanded((v) => !v)}
+        onClick={() => setManualExpanded(!expanded)}
         className="flex items-center gap-1 text-caption text-[#94A3B8] hover:text-[#64748B] transition-colors"
       >
         {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-        查看AI推理过程
+        <span className={pulsing ? 'animate-pulse' : undefined}>{label}</span>
       </button>
       {expanded && (
         <div className="mt-1 px-3 py-2 rounded-btn bg-[#F8FAFC] border border-[#E2E8F0]
-          text-caption text-[#64748B] whitespace-pre-wrap leading-relaxed">
+          text-caption text-[#64748B] whitespace-pre-wrap leading-relaxed max-h-60 overflow-y-auto">
           {thinking}
         </div>
       )}
@@ -142,11 +158,13 @@ export function ChatTypingIndicator() {
 
 /**
  * Streaming bubble shows partial content while tokens arrive. `thinking` is
- * kimi-k2.6's hidden reasoning_content — while it's the only thing we have
- * (content hasn't started yet), show it as a transient "AI 正在思考..." label
- * instead of bare bouncing dots, so users aren't staring at total silence
- * for the 10-50s the model spends reasoning before real content streams
- * (see docs/疑问杂项.md「/api/v1/intake/chat 响应慢的原因与优化方向」)。
+ * kimi-k2.6's hidden reasoning_content, buffered+compliance-filtered on the
+ * backend (see intake_agent.py::_ThinkingBuffer) — while real content hasn't
+ * started yet, this is the only signal that anything is happening at all, so
+ * it's shown expanded by default (growing live) instead of a bare "AI 正在
+ * 思考..." placeholder; once content starts, it auto-collapses to make room
+ * for the real answer without losing the ability to expand it again (see
+ * docs/疑问杂项.md「/api/v1/intake/chat 响应慢的原因与优化方向」)。
  */
 export function ChatStreamingBubble({ content, thinking }: { content: string; thinking?: string }) {
   return (
@@ -156,26 +174,25 @@ export function ChatStreamingBubble({ content, thinking }: { content: string; th
         <Bot className="w-4 h-4 text-white" />
       </div>
       <div className="max-w-[85%] pt-1 text-sm leading-relaxed text-[#0F172A] break-words">
+        {thinking && (
+          <ThinkingDisclosure
+            thinking={thinking}
+            label={content ? '查看AI推理过程' : 'AI 正在思考…'}
+            defaultExpanded={!content}
+            pulsing={!content}
+          />
+        )}
         {content ? (
           <ReactMarkdown remarkPlugins={[remarkGfm]} components={buildMarkdownComponents([])}>
             {preprocessCitations(content)}
           </ReactMarkdown>
-        ) : thinking ? (
-          <div className="flex items-center gap-2 text-[#94A3B8]">
-            <span className="animate-pulse">AI 正在思考…</span>
-            <div className="flex gap-1 items-center h-4">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#94A3B8] animate-bounce [animation-delay:0ms]" />
-              <span className="w-1.5 h-1.5 rounded-full bg-[#94A3B8] animate-bounce [animation-delay:150ms]" />
-              <span className="w-1.5 h-1.5 rounded-full bg-[#94A3B8] animate-bounce [animation-delay:300ms]" />
-            </div>
-          </div>
-        ) : (
+        ) : !thinking ? (
           <div className="flex gap-1 items-center h-4">
             <span className="w-1.5 h-1.5 rounded-full bg-[#94A3B8] animate-bounce [animation-delay:0ms]" />
             <span className="w-1.5 h-1.5 rounded-full bg-[#94A3B8] animate-bounce [animation-delay:150ms]" />
             <span className="w-1.5 h-1.5 rounded-full bg-[#94A3B8] animate-bounce [animation-delay:300ms]" />
           </div>
-        )}
+        ) : null}
         <span className="inline-block w-0.5 h-4 bg-[#1E40AF] animate-pulse ml-0.5 align-text-bottom" />
       </div>
     </div>

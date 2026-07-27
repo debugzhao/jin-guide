@@ -221,7 +221,11 @@ async def _stream_chat(
     payload = {
         "model": _INTAKE_MODEL,
         "messages": messages,
-        "max_tokens": 1200,
+        # 1200 在复杂续写场景（"继续执行"这类要求补完长回答）下偶尔不够用——
+        # kimi-k2.6 有时会把答案草稿写在 reasoning_content 里，还没切到正式
+        # content 就把预算耗完，导致用户什么都收不到。2000 留更多余量，
+        # 兜底 fallback 见下方 `if not full_response` 分支。
+        "max_tokens": 2000,
         "temperature": 1,
         "stream": True,
     }
@@ -445,6 +449,16 @@ async def stream_intake_response(
                     separator = "\n\n" if full_response else ""
                     full_response += separator + text
                     yield {"type": "token", "content": separator + text}
+
+            if not full_response:
+                # kimi-k2.6 有时会把整段答案的草稿写在 reasoning_content 里，
+                # 还没来得及切到真正的 content 就已经耗尽 max_tokens——尤其是
+                # "把之前被截断的内容补完"这类复杂续写场景。这种情况下用户
+                # 什么都收不到（thinking 事件里其实已经有草稿，但那只是过渡态
+                # 展示，不能当正式回复），必须给一个明确的兜底提示，而不是让
+                # 前端收到一个空的 done 事件、什么反应都没有。
+                full_response = "这个问题有点复杂，我还没组织完答案就到达长度上限了，可以换个更具体的问法，或者拆成几个小问题分别问我～"
+                yield {"type": "token", "content": full_response}
 
             issues = check_compliance(full_response)
             if issues:
