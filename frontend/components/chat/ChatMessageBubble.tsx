@@ -89,7 +89,7 @@ export function ThinkingDisclosure({
   const [manualExpanded, setManualExpanded] = useState<boolean | null>(null)
   const expanded = manualExpanded ?? defaultExpanded
   return (
-    <div className="mt-1.5">
+    <div className="mt-1.5 mb-1.5">
       <button
         onClick={() => setManualExpanded(!expanded)}
         className="flex items-center gap-1 text-caption text-[#94A3B8] hover:text-[#64748B] transition-colors"
@@ -128,10 +128,10 @@ export default function ChatMessageBubble({ message }: Props) {
         <Bot className="w-4 h-4 text-white" />
       </div>
       <div className="max-w-[85%] pt-1 text-sm leading-relaxed text-[#0F172A] break-words">
+        {message.thinking && <ThinkingDisclosure thinking={message.thinking} />}
         <ReactMarkdown remarkPlugins={[remarkGfm]} components={buildMarkdownComponents(message.citations)}>
           {preprocessCitations(message.content)}
         </ReactMarkdown>
-        {message.thinking && <ThinkingDisclosure thinking={message.thinking} />}
       </div>
     </div>
   )
