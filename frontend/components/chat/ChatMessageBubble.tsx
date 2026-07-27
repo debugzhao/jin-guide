@@ -98,12 +98,8 @@ export function ThinkingDisclosure({
         <span className={pulsing ? 'animate-pulse' : undefined}>{label}</span>
       </button>
       {expanded && (
-        <div
-          key={thinking.length}
-          className="mt-1 px-3 py-2 rounded-btn bg-[#F8FAFC] border border-[#E2E8F0]
-          text-caption text-[#64748B] whitespace-pre-wrap leading-relaxed max-h-60 overflow-y-auto
-          wj-stream-fade-in"
-        >
+        <div className="mt-1 px-3 py-2 rounded-btn bg-[#F8FAFC] border border-[#E2E8F0]
+          text-caption text-[#64748B] whitespace-pre-wrap leading-relaxed max-h-60 overflow-y-auto">
           {thinking}
         </div>
       )}
@@ -169,10 +165,16 @@ export function ChatTypingIndicator() {
  * 思考..." placeholder; once content starts, it auto-collapses to make room
  * for the real answer without losing the ability to expand it again (see
  * docs/疑问杂项.md「/api/v1/intake/chat 响应慢的原因与优化方向」)。
+ *
+ * `wj-stream-fade-in` is applied to the outer bubble once, on mount (this
+ * component only exists for the lifetime of one streaming turn) — smoothness
+ * of the growing text itself comes from IntakeChat.tsx's requestAnimationFrame
+ * typewriter queue, not from re-triggering a CSS animation on every update
+ * (doing that at per-character granularity looks like flicker, not smoothness).
  */
 export function ChatStreamingBubble({ content, thinking }: { content: string; thinking?: string }) {
   return (
-    <div className="flex gap-2 items-start">
+    <div className="flex gap-2 items-start wj-stream-fade-in">
       <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gradient-to-br from-[#1E40AF] to-[#2563EB]
         flex items-center justify-center mt-0.5">
         <Bot className="w-4 h-4 text-white" />
@@ -187,13 +189,9 @@ export function ChatStreamingBubble({ content, thinking }: { content: string; th
           />
         )}
         {content ? (
-          // key 按内容长度变化——配合 IntakeChat.tsx 里的 rAF 批量刷新，每批新增
-          // 文本到达时重新触发一次淡入动画，而不是让整段文字生硬地"跳"出来。
-          <div key={content.length} className="wj-stream-fade-in">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} components={buildMarkdownComponents([])}>
-              {preprocessCitations(content)}
-            </ReactMarkdown>
-          </div>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={buildMarkdownComponents([])}>
+            {preprocessCitations(content)}
+          </ReactMarkdown>
         ) : !thinking ? (
           <div className="flex gap-1 items-center h-4">
             <span className="w-1.5 h-1.5 rounded-full bg-[#94A3B8] animate-bounce [animation-delay:0ms]" />

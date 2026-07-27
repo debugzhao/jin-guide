@@ -107,45 +107,70 @@ export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) 
     store.intakeSetLastFailedMessage(key, null)
     store.intakeAppendUserMessage(key, text)
 
-    // SSE token 到达的速率跟屏幕刷新率无关——网络一旦攒了几个包一起到，会在
-    // 同一毫秒内连续触发好几次 store 更新，每次都会让 ChatStreamingBubble 里的
-    // ReactMarkdown 整段重新解析一次，这才是"卡顿/掉帧"的真正原因（不是缺动画）。
-    // 用 requestAnimationFrame 把同一帧内到达的多个 token 合并成一次 store 更新，
-    // 把渲染频率压到不超过屏幕刷新率，帧率自然就跟得上了。
-    let tokenBuffer = ''
-    let thinkingBuffer = ''
-    let flushScheduled = false
+    // 打字机效果：SSE 到达的文本不是逐字符的（工具查询类回复现在整段一次性到达，
+    // 见 backend/app/agent/intake_agent.py::_format_tool_result_text），如果直接
+    // 原样吐给 store，长的一段话会一次性"跳"出来，看起来一顿一顿的。这里把所有
+    // 到达的文本先塞进一个队列，用 requestAnimationFrame 循环按小份匀速吐出去，
+    // 显示进度和网络到达进度解耦——网络快就让队列攒着，显示始终是平滑的逐字符
+    // 效果；网络已经把整段答案发完时，用"队列越长吐得越快"的自适应速率追上，
+    // 避免长回答被硬吐字拖出好几秒延迟（这正好会抵消刚做完的性能优化）。
+    const BASE_CHARS_PER_FRAME = 2
+    const CATCHUP_DIVISOR = 12
 
-    const flushNow = () => {
-      if (tokenBuffer) {
-        useAppStore.getState().intakeAppendStreamToken(key, tokenBuffer)
-        tokenBuffer = ''
+    let contentQueue = ''
+    let thinkingQueue = ''
+    let revealHandle: number | null = null
+    let pendingDone: { conversationId?: string } | null = null
+
+    const finalizeDone = () => {
+      useAppStore.getState().intakeCommitStreamingMessage(key)
+      setIntakeAbort(key, null)
+      const conversationId = pendingDone?.conversationId
+      if (conversationId && conversationId !== key) {
+        useAppStore.getState().intakeRenameConversationKey(key, conversationId)
+        const stillHere = useAppStore.getState().currentIntakeConversationId === (key === INTAKE_DRAFT_KEY ? null : key)
+        if (stillHere) setCurrentIntakeConversationId(conversationId)
       }
-      if (thinkingBuffer) {
-        useAppStore.getState().intakeAppendThinkingToken(key, thinkingBuffer)
-        thinkingBuffer = ''
+      bumpConversationListVersion()
+    }
+
+    const revealTick = () => {
+      revealHandle = null
+
+      if (thinkingQueue) {
+        const n = Math.max(BASE_CHARS_PER_FRAME, Math.ceil(thinkingQueue.length / CATCHUP_DIVISOR))
+        useAppStore.getState().intakeAppendThinkingToken(key, thinkingQueue.slice(0, n))
+        thinkingQueue = thinkingQueue.slice(n)
+      }
+      if (contentQueue) {
+        const n = Math.max(BASE_CHARS_PER_FRAME, Math.ceil(contentQueue.length / CATCHUP_DIVISOR))
+        useAppStore.getState().intakeAppendStreamToken(key, contentQueue.slice(0, n))
+        contentQueue = contentQueue.slice(n)
+      }
+
+      if (contentQueue || thinkingQueue) {
+        revealHandle = requestAnimationFrame(revealTick)
+      } else if (pendingDone) {
+        finalizeDone()
       }
     }
 
-    const scheduleFlush = () => {
-      if (flushScheduled) return
-      flushScheduled = true
-      requestAnimationFrame(() => {
-        flushScheduled = false
-        flushNow()
-      })
+    const scheduleReveal = () => {
+      if (revealHandle === null) {
+        revealHandle = requestAnimationFrame(revealTick)
+      }
     }
 
     // key 在这里被闭包捕获——即使用户后来切到别的会话，这些回调也一直只写回
     // 当初发消息时所在的那个会话，不会被"当前正在看哪个会话"影响。
     const abort = intakeChatApi.streamMessage(text, key === INTAKE_DRAFT_KEY ? null : key, {
       onThinking: (token) => {
-        thinkingBuffer += token
-        scheduleFlush()
+        thinkingQueue += token
+        scheduleReveal()
       },
       onToken: (token) => {
-        tokenBuffer += token
-        scheduleFlush()
+        contentQueue += token
+        scheduleReveal()
       },
       onTriggerProfileCapture: () => {
         // 只有用户仍然停留在这个会话上时才跳转建档表单——避免另一个在后台
@@ -154,21 +179,18 @@ export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) 
         if (stillHere) onStartProfile()
       },
       onDone: (conversationId) => {
-        // 收尾前必须先把 rAF 里还没来得及落到 store 的最后一小段 flush 掉，
-        // 否则 commit 读到的 streamingContent 会少最后几个 token（rAF 最多要等
-        // 到下一帧才执行，而 done 事件是同步立刻到达的）。
-        flushNow()
-        useAppStore.getState().intakeCommitStreamingMessage(key)
-        setIntakeAbort(key, null)
-        if (conversationId && conversationId !== key) {
-          useAppStore.getState().intakeRenameConversationKey(key, conversationId)
-          const stillHere = useAppStore.getState().currentIntakeConversationId === (key === INTAKE_DRAFT_KEY ? null : key)
-          if (stillHere) setCurrentIntakeConversationId(conversationId)
-        }
-        bumpConversationListVersion()
+        // 不立刻收尾——队列里可能还有没吐完的字，等 revealTick 把队列吐空了
+        // 再真正 commit，否则最终消息会缺最后一截还没显示出来的文本。
+        pendingDone = { conversationId }
+        if (!contentQueue && !thinkingQueue) finalizeDone()
+        else scheduleReveal()
       },
       onComplianceWarning: () => {},
       onError: (msg) => {
+        if (revealHandle !== null) cancelAnimationFrame(revealHandle)
+        revealHandle = null
+        contentQueue = ''
+        thinkingQueue = ''
         useAppStore.getState().intakeSetStreaming(key, false)
         useAppStore.getState().intakeSetLastFailedMessage(key, text)
         console.error('Intake chat error:', msg)
