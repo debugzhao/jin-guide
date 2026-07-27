@@ -107,14 +107,45 @@ export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) 
     store.intakeSetLastFailedMessage(key, null)
     store.intakeAppendUserMessage(key, text)
 
+    // SSE token 到达的速率跟屏幕刷新率无关——网络一旦攒了几个包一起到，会在
+    // 同一毫秒内连续触发好几次 store 更新，每次都会让 ChatStreamingBubble 里的
+    // ReactMarkdown 整段重新解析一次，这才是"卡顿/掉帧"的真正原因（不是缺动画）。
+    // 用 requestAnimationFrame 把同一帧内到达的多个 token 合并成一次 store 更新，
+    // 把渲染频率压到不超过屏幕刷新率，帧率自然就跟得上了。
+    let tokenBuffer = ''
+    let thinkingBuffer = ''
+    let flushScheduled = false
+
+    const flushNow = () => {
+      if (tokenBuffer) {
+        useAppStore.getState().intakeAppendStreamToken(key, tokenBuffer)
+        tokenBuffer = ''
+      }
+      if (thinkingBuffer) {
+        useAppStore.getState().intakeAppendThinkingToken(key, thinkingBuffer)
+        thinkingBuffer = ''
+      }
+    }
+
+    const scheduleFlush = () => {
+      if (flushScheduled) return
+      flushScheduled = true
+      requestAnimationFrame(() => {
+        flushScheduled = false
+        flushNow()
+      })
+    }
+
     // key 在这里被闭包捕获——即使用户后来切到别的会话，这些回调也一直只写回
     // 当初发消息时所在的那个会话，不会被"当前正在看哪个会话"影响。
     const abort = intakeChatApi.streamMessage(text, key === INTAKE_DRAFT_KEY ? null : key, {
       onThinking: (token) => {
-        useAppStore.getState().intakeAppendThinkingToken(key, token)
+        thinkingBuffer += token
+        scheduleFlush()
       },
       onToken: (token) => {
-        useAppStore.getState().intakeAppendStreamToken(key, token)
+        tokenBuffer += token
+        scheduleFlush()
       },
       onTriggerProfileCapture: () => {
         // 只有用户仍然停留在这个会话上时才跳转建档表单——避免另一个在后台
@@ -123,6 +154,10 @@ export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) 
         if (stillHere) onStartProfile()
       },
       onDone: (conversationId) => {
+        // 收尾前必须先把 rAF 里还没来得及落到 store 的最后一小段 flush 掉，
+        // 否则 commit 读到的 streamingContent 会少最后几个 token（rAF 最多要等
+        // 到下一帧才执行，而 done 事件是同步立刻到达的）。
+        flushNow()
         useAppStore.getState().intakeCommitStreamingMessage(key)
         setIntakeAbort(key, null)
         if (conversationId && conversationId !== key) {

@@ -98,8 +98,12 @@ export function ThinkingDisclosure({
         <span className={pulsing ? 'animate-pulse' : undefined}>{label}</span>
       </button>
       {expanded && (
-        <div className="mt-1 px-3 py-2 rounded-btn bg-[#F8FAFC] border border-[#E2E8F0]
-          text-caption text-[#64748B] whitespace-pre-wrap leading-relaxed max-h-60 overflow-y-auto">
+        <div
+          key={thinking.length}
+          className="mt-1 px-3 py-2 rounded-btn bg-[#F8FAFC] border border-[#E2E8F0]
+          text-caption text-[#64748B] whitespace-pre-wrap leading-relaxed max-h-60 overflow-y-auto
+          wj-stream-fade-in"
+        >
           {thinking}
         </div>
       )}
@@ -183,9 +187,13 @@ export function ChatStreamingBubble({ content, thinking }: { content: string; th
           />
         )}
         {content ? (
-          <ReactMarkdown remarkPlugins={[remarkGfm]} components={buildMarkdownComponents([])}>
-            {preprocessCitations(content)}
-          </ReactMarkdown>
+          // key 按内容长度变化——配合 IntakeChat.tsx 里的 rAF 批量刷新，每批新增
+          // 文本到达时重新触发一次淡入动画，而不是让整段文字生硬地"跳"出来。
+          <div key={content.length} className="wj-stream-fade-in">
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={buildMarkdownComponents([])}>
+              {preprocessCitations(content)}
+            </ReactMarkdown>
+          </div>
         ) : !thinking ? (
           <div className="flex gap-1 items-center h-4">
             <span className="w-1.5 h-1.5 rounded-full bg-[#94A3B8] animate-bounce [animation-delay:0ms]" />

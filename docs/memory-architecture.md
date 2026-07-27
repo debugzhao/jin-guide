@@ -531,7 +531,7 @@ Redis 读写、Key 生成和 Postgres upsert 的公共逻辑收在 `backend/app/
 
 第七节给出的量化指标：早期关键事实召回率 ≥ 95%，这是判断 P2 是否真正解决问题的标准，而不是主观感觉"好像不怎么忘了"。
 
-#### **已实现**（`backend/app/models/conversation.py` + `backend/app/services/conversation_store.py` + `backend/app/services/conversation_summary.py` + 迁移 `014`/`015`/`016`）
+#### 已实现
 
 - ✅ **拆表**：新增 `conversation_messages`（一行一条消息，`seq` 同会话内递增，`report_conversation_id`/`intake_conversation_id` 二选一由 CHECK 约束保证）和 `conversation_summaries`（每会话至多一条，`summary_json` + `covered_through_seq` + 来源模型/Prompt 版本/生成状态）；`report_conversations`/`intake_conversations` 收缩成只管会话身份和 `updated_at`。
 - ✅ **四阶段迁移按顺序走完**：迁移 `014` 建表（schema only）→ 应用层双写（`append_conversation_messages` 与旧 `messages_json` 更新同时进行）→ 迁移 `015` 用 `jsonb_array_elements_with_ordinality` 把历史 `messages_json` 数组按下标展开回填（用 `NOT EXISTS` 跳过双写上线后已有新表记录的会话，避免重复插入）→ GET history 端点和冷启动读取切到 `conversation_messages` → 停止旧写 → 迁移 `016` 删除两个 `messages_json` 列。全程实测验证：回填后新旧两边消息总数完全一致（report 28 条、intake 12 条），切读前后返回内容逐字节相同。

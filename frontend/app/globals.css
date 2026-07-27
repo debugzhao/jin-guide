@@ -54,3 +54,23 @@ body {
 .wj-edge-flash {
   animation: wj-edge-flash-anim 0.5s ease-in-out 2;
 }
+
+/* ── Streaming chat bubble: smooth appearance for each rAF-batched text chunk ──
+   配合 IntakeChat.tsx 里的 requestAnimationFrame 批量刷新——不做批量合并的话，
+   SSE 每个 token 都会触发一次 markdown 全量重新解析，帧率跟不上就是"卡顿/掉帧"
+   的直接原因，动画本身治不了这个根因，必须先把重渲染频率压到每帧最多一次；
+   这个动画只是让"压帧之后、内容还是一块一块往外蹦"这件事看起来更顺滑。 */
+@keyframes wj-stream-fade-in {
+  from {
+    opacity: 0.45;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.wj-stream-fade-in {
+  animation: wj-stream-fade-in 180ms ease-out;
+}
