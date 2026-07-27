@@ -22,6 +22,7 @@ with ConversationAgent's chat.py — see docs/memory-architecture.md §六 P0.
 from __future__ import annotations
 
 import json
+import time
 from datetime import UTC, datetime
 from typing import Optional
 from uuid import uuid4
@@ -324,17 +325,75 @@ async def intake_chat(
         except Exception:  # noqa: BLE001 - a summary-read failure must not block chat
             summary_json = None
 
+    # ── 生成开始前先落一条用户消息 + 空内容的助手占位消息 ─────────────────────
+    # "生成开始建空记录，逐步填充"（docs/疑问杂项.md「生成过程中刷新页面丢失聊天
+    # 记录」）：不再等 done 事件才一次性写两条消息——这样哪怕浏览器在生成过程中
+    # 刷新，GET history 至少能读到已经发出的用户消息和目前为止生成到的部分内容，
+    # 不是完全空白。conversation_row_id/assistant_message_id 为 None 时（DB 持久化
+    # 失败）下面的增量/最终同步全部自动退化成 no-op，不影响聊天本身。
+    seed_title = _derive_title(message) if is_new_conversation else None
+    now_iso = datetime.now(UTC).isoformat()
+    user_msg_dict = {"role": "user", "content": message, "created_at": now_iso}
+    placeholder_msg_dict = {"role": "assistant", "content": "", "created_at": now_iso}
+
+    conversation_row_id: str | None = None
+    assistant_message_id: str | None = None
+    async with async_session_maker() as persist_db:
+        conversation_row_id = await store.get_or_create_conversation_row(
+            persist_db,
+            model_cls=IntakeConversation,
+            match=(
+                IntakeConversation.id == conversation_id,
+                IntakeConversation.owner_key == owner_key,
+                IntakeConversation.deleted_at.is_(None),
+            ),
+            make_new_row=lambda: IntakeConversation(
+                id=conversation_id,
+                owner_key=owner_key,
+                title=seed_title,
+            ),
+            log_context={"conversation_id": conversation_id, "owner_key": owner_key},
+        )
+        if conversation_row_id:
+            inserted_ids = await store.append_conversation_messages(
+                persist_db,
+                parent_kind="intake",
+                parent_id=conversation_row_id,
+                new_messages=[user_msg_dict, placeholder_msg_dict],
+                log_context={"conversation_id": conversation_id, "owner_key": owner_key},
+            )
+            if inserted_ids:
+                assistant_message_id = inserted_ids[-1]
+
+    await store.append_history_to_redis(redis_key, [user_msg_dict, placeholder_msg_dict])
+
     async def event_generator():
         full_response = ""
+        last_flush = time.monotonic()
 
         async for event in stream_intake_response(
             history=history, user_message=message, summary=summary_json
         ):
             event_type = event.get("type")
 
-            if event_type == "token":
+            if event_type == "thinking":
+                payload = json.dumps({"content": event["content"]}, ensure_ascii=False)
+                yield f"event: thinking\ndata: {payload}\n\n"
+
+            elif event_type == "token":
                 payload = json.dumps({"content": event["content"]}, ensure_ascii=False)
                 yield f"event: token\ndata: {payload}\n\n"
+
+                full_response += event["content"]
+                now = time.monotonic()
+                if now - last_flush >= store.INCREMENTAL_FLUSH_INTERVAL_SECONDS:
+                    last_flush = now
+                    if assistant_message_id:
+                        async with async_session_maker() as flush_db:
+                            await store.update_message_content(
+                                flush_db, message_id=assistant_message_id, content=full_response
+                            )
+                    await store.update_last_message_content_in_redis(redis_key, full_response)
 
             elif event_type == "trigger_profile_capture":
                 yield "event: trigger_profile_capture\ndata: {}\n\n"
@@ -346,58 +405,26 @@ async def intake_chat(
             elif event_type == "done":
                 full_response = event.get("full_response", "")
 
-                new_messages = [
-                    {"role": "user", "content": message, "created_at": datetime.now(UTC).isoformat()},
-                    {
-                        "role": "assistant",
-                        "content": full_response,
-                        "created_at": datetime.now(UTC).isoformat(),
-                    },
-                ]
+                # 最后一次同步，不受节流窗口影响——保证拿到完整的最终文本
+                # （包括合规检测可能做过的同义替换）。
+                if assistant_message_id:
+                    async with async_session_maker() as final_db:
+                        await store.update_message_content(
+                            final_db, message_id=assistant_message_id, content=full_response
+                        )
+                await store.update_last_message_content_in_redis(redis_key, full_response)
 
-                await store.append_history_to_redis(redis_key, new_messages)
-
-                seed_title = _derive_title(message) if is_new_conversation else None
-
-                # 持久化在 yield done 之前完成：客户端收到 done 后会立即用 conversation_id
-                # 刷新侧栏会话列表，必须保证这时数据库已经能查到这条会话，否则会有竞态
-                # （侧栏刷新跑在 DB 写入提交之前，读到的还是旧列表）。
-                async with async_session_maker() as persist_db:
-                    conversation_row_id = await store.get_or_create_conversation_row(
-                        persist_db,
-                        model_cls=IntakeConversation,
-                        match=(
-                            IntakeConversation.id == conversation_id,
-                            IntakeConversation.owner_key == owner_key,
-                            IntakeConversation.deleted_at.is_(None),
-                        ),
-                        make_new_row=lambda: IntakeConversation(
-                            id=conversation_id,
-                            owner_key=owner_key,
-                            title=seed_title,
-                        ),
-                        log_context={"conversation_id": conversation_id, "owner_key": owner_key},
+                if conversation_row_id:
+                    # Best-effort structured summary refresh — only
+                    # actually regenerates once a full window's worth of
+                    # messages has aged out (see P2); a no-op most of
+                    # the time.
+                    background_tasks.add_task(
+                        maybe_generate_summary,
+                        "intake",
+                        conversation_row_id,
+                        window_size=MAX_HISTORY_MESSAGES,
                     )
-                    # Append into the authoritative ConversationMessage table
-                    # (see docs/memory-architecture.md §六 P2).
-                    if conversation_row_id:
-                        await store.append_conversation_messages(
-                            persist_db,
-                            parent_kind="intake",
-                            parent_id=conversation_row_id,
-                            new_messages=new_messages,
-                            log_context={"conversation_id": conversation_id, "owner_key": owner_key},
-                        )
-                        # Best-effort structured summary refresh — only
-                        # actually regenerates once a full window's worth of
-                        # messages has aged out (see P2); a no-op most of
-                        # the time.
-                        background_tasks.add_task(
-                            maybe_generate_summary,
-                            "intake",
-                            conversation_row_id,
-                            window_size=MAX_HISTORY_MESSAGES,
-                        )
 
                 if seed_title:
                     # 标题升级是纯锦上添花，不阻塞 done 事件；进程重启丢失也无所谓

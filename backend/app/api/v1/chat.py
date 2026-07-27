@@ -13,6 +13,7 @@ with IntakeAgent's intake_chat.py — see docs/memory-architecture.md §六 P0.
 from __future__ import annotations
 
 import json
+import time
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -151,10 +152,55 @@ async def chat_with_report(
         except Exception:  # noqa: BLE001 - a summary-read failure must not block chat
             summary_json = None
 
+    # ── 生成开始前先落一条用户消息 + 空内容的助手占位消息 ──────────────────────
+    # "生成开始建空记录，逐步填充"（docs/疑问杂项.md「生成过程中刷新页面丢失聊天
+    # 记录」）：不再等 done 事件才一次性写两条消息——这样哪怕浏览器在生成过程中
+    # 刷新，GET history 至少能读到已经发出的用户消息和目前为止生成到的部分内容。
+    # demo-report 维持原有行为，只写 Redis 不落库（conversation_row_id/
+    # assistant_message_id 保持 None，下面的 DB 同步全部自动退化成 no-op）。
+    now_iso = datetime.now(UTC).isoformat()
+    user_msg_dict = {"role": "user", "content": message, "created_at": now_iso}
+    placeholder_msg_dict = {"role": "assistant", "content": "", "citations": [], "created_at": now_iso}
+
+    conversation_row_id: str | None = None
+    assistant_message_id: str | None = None
+    if report_id != "demo-report":
+        db_user_id = identity.user.id if identity.user else None
+        db_anonymous_id = identity.anonymous_id if not identity.user else None
+        async with async_session_maker() as persist_db:
+            conversation_row_id = await store.get_or_create_conversation_row(
+                persist_db,
+                model_cls=ReportConversation,
+                match=(
+                    ReportConversation.report_id == report_id,
+                    *_db_owner_filter(db_user_id, db_anonymous_id),
+                ),
+                make_new_row=lambda: ReportConversation(
+                    id=str(uuid4()),
+                    report_id=report_id,
+                    user_id=db_user_id,
+                    anonymous_id=db_anonymous_id,
+                ),
+                log_context={"report_id": report_id, "owner_key": owner_key},
+            )
+            if conversation_row_id:
+                inserted_ids = await store.append_conversation_messages(
+                    persist_db,
+                    parent_kind="report",
+                    parent_id=conversation_row_id,
+                    new_messages=[user_msg_dict, placeholder_msg_dict],
+                    log_context={"report_id": report_id, "owner_key": owner_key},
+                )
+                if inserted_ids:
+                    assistant_message_id = inserted_ids[-1]
+
+    await store.append_history_to_redis(redis_key, [user_msg_dict, placeholder_msg_dict])
+
     # ── Stream response ────────────────────────────────────────────────────
     async def event_generator():
         full_response = ""
         citations = []
+        last_flush = time.monotonic()
 
         async for event in stream_conversation_response(
             plan_json=report_plan_json,
@@ -168,6 +214,17 @@ async def chat_with_report(
             if event_type == "token":
                 payload = json.dumps({"content": event["content"]}, ensure_ascii=False)
                 yield f"event: token\ndata: {payload}\n\n"
+
+                full_response += event["content"]
+                now = time.monotonic()
+                if now - last_flush >= store.INCREMENTAL_FLUSH_INTERVAL_SECONDS:
+                    last_flush = now
+                    if assistant_message_id:
+                        async with async_session_maker() as flush_db:
+                            await store.update_message_content(
+                                flush_db, message_id=assistant_message_id, content=full_response
+                            )
+                    await store.update_last_message_content_in_redis(redis_key, full_response)
 
             elif event_type == "citation":
                 citations.append({"source_id": event["source_id"], "text": event["text"]})
@@ -189,57 +246,29 @@ async def chat_with_report(
                 )
                 yield f"event: done\ndata: {payload}\n\n"
 
-                new_messages = [
-                    {"role": "user", "content": message, "created_at": datetime.now(UTC).isoformat()},
-                    {
-                        "role": "assistant",
-                        "content": full_response,
-                        "citations": citations,
-                        "created_at": datetime.now(UTC).isoformat(),
-                    },
-                ]
-
-                await store.append_history_to_redis(redis_key, new_messages)
-                # Best-effort DB persist (fire and forget — use separate session)
-                if report_id != "demo-report":
-                    db_user_id = identity.user.id if identity.user else None
-                    db_anonymous_id = identity.anonymous_id if not identity.user else None
-                    async with async_session_maker() as persist_db:
-                        conversation_row_id = await store.get_or_create_conversation_row(
-                            persist_db,
-                            model_cls=ReportConversation,
-                            match=(
-                                ReportConversation.report_id == report_id,
-                                *_db_owner_filter(db_user_id, db_anonymous_id),
-                            ),
-                            make_new_row=lambda: ReportConversation(
-                                id=str(uuid4()),
-                                report_id=report_id,
-                                user_id=db_user_id,
-                                anonymous_id=db_anonymous_id,
-                            ),
-                            log_context={"report_id": report_id, "owner_key": owner_key},
+                # 最后一次同步，不受节流窗口影响——保证拿到完整的最终文本和
+                # 最终 citations 列表（citations 只在流式结束后才完整可知）。
+                if assistant_message_id:
+                    async with async_session_maker() as final_db:
+                        await store.update_message_content(
+                            final_db,
+                            message_id=assistant_message_id,
+                            content=full_response,
+                            citations=citations,
                         )
-                        # Append into the authoritative ConversationMessage
-                        # table (see docs/memory-architecture.md §六 P2).
-                        if conversation_row_id:
-                            await store.append_conversation_messages(
-                                persist_db,
-                                parent_kind="report",
-                                parent_id=conversation_row_id,
-                                new_messages=new_messages,
-                                log_context={"report_id": report_id, "owner_key": owner_key},
-                            )
-                            # Best-effort structured summary refresh — only
-                            # actually regenerates once a full window's worth
-                            # of messages has aged out (see P2); a no-op most
-                            # of the time.
-                            background_tasks.add_task(
-                                maybe_generate_summary,
-                                "report",
-                                conversation_row_id,
-                                window_size=MAX_HISTORY_MESSAGES,
-                            )
+                await store.update_last_message_content_in_redis(redis_key, full_response, citations=citations)
+
+                if conversation_row_id:
+                    # Best-effort structured summary refresh — only
+                    # actually regenerates once a full window's worth
+                    # of messages has aged out (see P2); a no-op most
+                    # of the time.
+                    background_tasks.add_task(
+                        maybe_generate_summary,
+                        "report",
+                        conversation_row_id,
+                        window_size=MAX_HISTORY_MESSAGES,
+                    )
 
             elif event_type == "error":
                 payload = json.dumps({"message": event.get("message", "未知错误")}, ensure_ascii=False)

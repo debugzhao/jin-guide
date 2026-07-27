@@ -6,12 +6,21 @@ IntakeAgent — 建档前 Chat-first 聊天 Agent。
 确定性数据，并在识别到建档意图时调用 `start_profile_capture` 信号工具——由前端
 监听这个信号内联渲染建档表单，一次对话回合内同时完成"聊天"和"是否该建档"两件事。
 
-Flow（每轮，均为流式请求，不做"先非流式分类再流式回答"的两段式）：
+Flow（每轮，只发一次流式请求，不做"先非流式分类再流式回答"的两段式，也不再为
+工具调用发第二次请求——见下方"性能"说明）：
     第一次流式请求（带 tools，tool_choice=auto）
       → 无 tool_calls：content 增量即最终回复，边收边 yield token
       → 命中 start_profile_capture：不需要模型再生成正文，直接用固定文案 + 触发事件
-      → 命中数据查询类工具：执行 SQL，把结果塞回 messages，再发起一次流式请求
-        （这次不带 tools，强制模型基于查询结果产出自然语言）
+      → 命中数据查询类工具：执行 SQL，把结构化结果直接模板化成自然语言（见
+        `_format_tool_result_text`），不再发起第二次流式请求让模型复述
+
+性能：kimi-k2.6 是推理模型，吐出真正 content 前会先流式输出一大段隐藏的
+reasoning_content（思维链），这段耗时对用户不可见，体感就是"发了消息卡住不动"
+（docs/疑问杂项.md「/api/v1/intake/chat 响应慢的原因与优化方向」）。本模块把
+reasoning_content 也转发成 "thinking" 事件供前端展示过渡态/可展开的"AI 推理
+过程"，经 `_ThinkingBuffer` 按自然语句片段做合规过滤后才吐出，不会把未经审查
+的原始模型输出直接展示给用户。原来"工具调用后再发一次完整流式请求"的做法已经
+去掉，改为上面提到的模板化，避免同一轮对话里付两次推理开销的钱、等两次的时间。
 """
 from __future__ import annotations
 
@@ -121,6 +130,43 @@ _TOOLS = [
 
 _TOOL_NAMES = {t["function"]["name"] for t in _TOOLS}
 
+_THINKING_FLUSH_LEN = 30
+_SENTENCE_ENDINGS = ("。", "！", "？", "\n", ".", "!", "?")
+
+
+class _ThinkingBuffer:
+    """
+    reasoning_content 是逐字/逐词流式到达的，禁词有可能被拆在两个 chunk 之间
+    （比如"保证"和"录取"分属两个 chunk），不能对每个到达的小 chunk 单独跑
+    check_compliance——必须先攒够一个自然语句片段再整体检测+替换后才吐给前端，
+    否则会漏检刚好被切在片段边界上的禁词。
+
+    按句末标点或攒够 _THINKING_FLUSH_LEN 字符（先到者为准）切成小段落，只在这个
+    粒度上做合规过滤——足以完整框住绝大多数禁词短语，又不用等整段思考结束才展示
+    （那样就失去了"实时"的意义）。极小概率下禁词恰好被切在两个片段的边界上会漏检，
+    这里接受这个残余风险：这只是一个默认收起的"AI 推理过程"展示面板，不是最终对
+    用户负责的正式回复——正式回复 full_response 依然会完整走一遍 check_compliance，
+    不受这里的分段方式影响。
+    """
+
+    def __init__(self) -> None:
+        self._buf = ""
+
+    def feed(self, chunk: str) -> str | None:
+        self._buf += chunk
+        if len(self._buf) >= _THINKING_FLUSH_LEN or any(p in chunk for p in _SENTENCE_ENDINGS):
+            flushed = sanitize_text(self._buf)
+            self._buf = ""
+            return flushed
+        return None
+
+    def flush_remaining(self) -> str | None:
+        if not self._buf:
+            return None
+        flushed = sanitize_text(self._buf)
+        self._buf = ""
+        return flushed
+
 
 def _trim_history(messages: list[dict]) -> list[dict]:
     return messages[-MAX_HISTORY_MESSAGES:]
@@ -205,6 +251,71 @@ async def _stream_chat(
                 continue
 
 
+def _format_tool_result_text(name: str, args: dict, tool_result: dict) -> str:
+    """
+    把工具查询的结构化 data 直接模板化成自然语言，取代原来"执行完工具后再发一次
+    完整流式请求让模型复述"的做法——第二次调用同样要完整走一遍 kimi-k2.6 的隐藏
+    思维链开销，是 tool_score/tool_subject/tool_compare 场景耗时接近翻倍的主因
+    （见 docs/疑问杂项.md「/api/v1/intake/chat 响应慢的原因与优化方向」）。
+
+    非 SUCCESS 状态（ERROR/PARTIAL）直接用工具自带的 text，已经是人类可读的
+    提示（比如"未找到院校「XXX」"），不需要模板化。
+    """
+    status = tool_result.get("status")
+    data = tool_result.get("data") or {}
+
+    if status != "SUCCESS":
+        return tool_result.get("text", "查询暂时不可用")
+
+    if name == "lookup_university_score":
+        tags = "、".join(t for t, on in (("985", data.get("is_985")), ("211", data.get("is_211"))) if on)
+        header = f"{data.get('university_name', '')}"
+        if data.get("city") or tags:
+            header += f"（{data.get('city', '')}{'，' + tags if tags else ''}）"
+        province = args.get("province", "")
+        batch = args.get("batch") or "本科批"
+        lines = [f"{header}在 {province}{batch} 的录取情况："]
+        for r in data.get("records", []):
+            lines.append(
+                f"- {r.get('year')}年：最低分 {r.get('min_score')} 分（位次 {r.get('min_rank')}），"
+                f"平均分 {r.get('avg_score')} 分（位次 {r.get('avg_rank')}）"
+            )
+        return "\n".join(lines)
+
+    if name == "lookup_subject_requirement":
+        lines = [f"{data.get('university_name', '')} 选科要求："]
+        for r in data.get("requirements", []):
+            required = "、".join(r.get("required_subjects") or []) or "无必选"
+            optional = r.get("optional_subjects") or []
+            optional_desc = (
+                f"{'、'.join(optional)}中选{r.get('optional_required_count')}门" if optional else ""
+            )
+            restricted = "、".join(r.get("restricted_subjects") or []) or "无"
+            lines.append(
+                f"- {r.get('major_name')}：必选 {required}"
+                + (f"；{optional_desc}" if optional_desc else "")
+                + f"；限制科目：{restricted}"
+            )
+        return "\n".join(lines)
+
+    if name == "compare_universities":
+        province = args.get("province", "")
+        batch = args.get("batch") or "本科批"
+        lines = [f"对比结果（{province}{batch}）："]
+        for u in data.get("universities", []):
+            tags = "、".join(t for t, on in (("985", u.get("is_985")), ("211", u.get("is_211"))) if on)
+            required = "、".join(u.get("required_subjects") or []) or "无必选科目"
+            lines.append(
+                f"- {u.get('university_name')}（{u.get('city', '')}{'，' + tags if tags else ''}）："
+                f"{u.get('year')}年最低分 {u.get('min_score')} 分/位次 {u.get('min_rank')}，选科要求：{required}"
+            )
+        if data.get("not_found"):
+            lines.append(f"未找到：{'、'.join(data['not_found'])}")
+        return "\n".join(lines)
+
+    return tool_result.get("text", "")
+
+
 def _run_lookup_tool(name: str, args: dict) -> dict:
     """同步执行确定性 SQL 查询工具（在 asyncio.to_thread 里跑），返回可 JSON 序列化的结果。"""
     from app.database import SyncSessionLocal
@@ -261,6 +372,7 @@ async def stream_intake_response(
     MAX_HISTORY_MESSAGES turns.
 
     Yields dicts:
+        {"type": "thinking", "content": "..."}  (kimi-k2.6 隐藏思维链，供前端展示过渡态)
         {"type": "token", "content": "..."}
         {"type": "trigger_profile_capture"}
         {"type": "compliance_warning", "issues": [...]}
@@ -274,11 +386,18 @@ async def stream_intake_response(
         async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as client:
             tool_calls_acc: dict[int, dict] = {}
             finish_reason: str | None = None
+            thinking_buffer = _ThinkingBuffer()
 
             async for chunk in _stream_chat(client, messages, use_tools=True):
                 choice = (chunk.get("choices") or [{}])[0]
                 delta = choice.get("delta", {})
                 finish_reason = choice.get("finish_reason") or finish_reason
+
+                thinking = delta.get("reasoning_content")
+                if thinking:
+                    flushed = thinking_buffer.feed(thinking)
+                    if flushed:
+                        yield {"type": "thinking", "content": flushed}
 
                 token = delta.get("content")
                 if token:
@@ -296,6 +415,10 @@ async def stream_intake_response(
                     if fn.get("arguments"):
                         acc["arguments"] += fn["arguments"]
 
+            remaining_thinking = thinking_buffer.flush_remaining()
+            if remaining_thinking:
+                yield {"type": "thinking", "content": remaining_thinking}
+
             if finish_reason == "tool_calls" and tool_calls_acc:
                 calls = list(tool_calls_acc.values())
 
@@ -309,36 +432,19 @@ async def stream_intake_response(
                     yield {"type": "done", "full_response": full_response}
                     return
 
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [
-                            {
-                                "id": c["id"],
-                                "type": "function",
-                                "function": {"name": c["name"], "arguments": c["arguments"]},
-                            }
-                            for c in calls
-                        ],
-                    }
-                )
+                # 查询类工具的结果直接模板化成自然语言，不再发起第二次完整流式请求
+                # 让模型复述——第二次调用会重新付出一遍 kimi-k2.6 的隐藏思维链开销，
+                # 是工具调用场景耗时接近翻倍的主因，见 _format_tool_result_text 的注释。
                 for c in calls:
+                    try:
+                        args = json.loads(c["arguments"]) if c["arguments"] else {}
+                    except json.JSONDecodeError:
+                        args = {}
                     tool_result = await _execute_tool_call(c["name"], c["arguments"])
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": c["id"],
-                            "content": json.dumps(tool_result, ensure_ascii=False),
-                        }
-                    )
-
-                async for chunk in _stream_chat(client, messages, use_tools=False):
-                    choice = (chunk.get("choices") or [{}])[0]
-                    token = choice.get("delta", {}).get("content")
-                    if token:
-                        full_response += token
-                        yield {"type": "token", "content": token}
+                    text = _format_tool_result_text(c["name"], args, tool_result)
+                    separator = "\n\n" if full_response else ""
+                    full_response += separator + text
+                    yield {"type": "token", "content": separator + text}
 
             issues = check_compliance(full_response)
             if issues:

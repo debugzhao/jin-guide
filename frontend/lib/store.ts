@@ -74,6 +74,9 @@ export const INTAKE_DRAFT_KEY = '__draft__'
 export interface IntakeConversationState {
   messages: ChatMessage[]
   streamingContent: string
+  /** kimi-k2.6 隐藏思维链片段的累积文本，仅用于"AI 正在思考..."过渡态展示，
+   *  真正的 streamingContent 一到达就应该让位——不是正式回复的一部分 */
+  thinkingContent: string
   isStreaming: boolean
   dailyLimitReached: boolean
   dailyLimitMessage: string | null
@@ -85,6 +88,7 @@ export interface IntakeConversationState {
 export const EMPTY_INTAKE_CONVERSATION_STATE: IntakeConversationState = Object.freeze({
   messages: [],
   streamingContent: '',
+  thinkingContent: '',
   isStreaming: false,
   dailyLimitReached: false,
   dailyLimitMessage: null,
@@ -108,6 +112,7 @@ interface IntakeSlice {
   intakeConversations: Record<string, IntakeConversationState>
   setIntakeHistoryLoaded: (key: string, messages: ChatMessage[]) => void
   intakeAppendUserMessage: (key: string, content: string) => void
+  intakeAppendThinkingToken: (key: string, token: string) => void
   intakeAppendStreamToken: (key: string, token: string) => void
   intakeCommitStreamingMessage: (key: string) => void
   intakeSetStreaming: (key: string, streaming: boolean) => void
@@ -224,6 +229,7 @@ export const useAppStore = create<AppStore>()(
                 messages: [...prev.messages, msg],
                 isStreaming: true,
                 streamingContent: '',
+                thinkingContent: '',
                 historyLoaded: true,
               },
             },
@@ -231,12 +237,26 @@ export const useAppStore = create<AppStore>()(
         })
       },
 
+      intakeAppendThinkingToken: (key, token) =>
+        set((s) => {
+          const prev = s.intakeConversations[key] ?? EMPTY_INTAKE_CONVERSATION_STATE
+          return {
+            intakeConversations: {
+              ...s.intakeConversations,
+              [key]: { ...prev, thinkingContent: prev.thinkingContent + token },
+            },
+          }
+        }),
+
       intakeAppendStreamToken: (key, token) =>
         set((s) => {
           const prev = s.intakeConversations[key] ?? EMPTY_INTAKE_CONVERSATION_STATE
           return {
             intakeConversations: {
               ...s.intakeConversations,
+              // thinkingContent 不在这里清空——ChatStreamingBubble 优先展示 content，
+              // thinkingContent 留到 commit 时整段搬进消息的 thinking 字段，供"查看AI
+              // 推理过程"面板使用，而不是一到真正内容就丢弃。
               [key]: { ...prev, streamingContent: prev.streamingContent + token },
             },
           }
@@ -247,20 +267,30 @@ export const useAppStore = create<AppStore>()(
           const prev = s.intakeConversations[key] ?? EMPTY_INTAKE_CONVERSATION_STATE
           if (!prev.streamingContent) {
             return {
-              intakeConversations: { ...s.intakeConversations, [key]: { ...prev, isStreaming: false } },
+              intakeConversations: {
+                ...s.intakeConversations,
+                [key]: { ...prev, isStreaming: false, thinkingContent: '' },
+              },
             }
           }
           const msg: ChatMessage = {
             id: uuidv4(),
             role: 'assistant',
             content: prev.streamingContent,
+            thinking: prev.thinkingContent || undefined,
             citations: [],
             created_at: new Date().toISOString(),
           }
           return {
             intakeConversations: {
               ...s.intakeConversations,
-              [key]: { ...prev, messages: [...prev.messages, msg], streamingContent: '', isStreaming: false },
+              [key]: {
+                ...prev,
+                messages: [...prev.messages, msg],
+                streamingContent: '',
+                thinkingContent: '',
+                isStreaming: false,
+              },
             },
           }
         }),

@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Callable
+from uuid import uuid4
 
 import redis.asyncio as aioredis
 import structlog
@@ -51,6 +52,12 @@ HISTORY_TTL_SECONDS = 7 * 24 * 3600  # 7 days
 MAX_MESSAGES_STORED = 50
 _MAX_DB_LOCK_RETRIES = 5
 _MAX_SEQ_RETRIES = 5
+
+# 生成过程中把已产出的部分内容同步进 Postgres/Redis 的节流间隔——见
+# append_conversation_messages/update_message_content 的"生成开始建空记录"设计。
+# 每个 token 都落库成本太高，按时间节流成一个"哪怕刷新页面也最多丢几百毫秒
+# 内容"的折中。
+INCREMENTAL_FLUSH_INTERVAL_SECONDS = 1.0
 
 # Atomically append `to_append` (JSON array, ARGV[1]) to the list stored at
 # KEYS[1], trim to the last ARGV[2] entries, and re-set the TTL — all inside
@@ -84,6 +91,39 @@ end
 local result = cjson.encode(current)
 redis.call('SETEX', KEYS[1], ARGV[3], result)
 return result
+"""
+
+# Atomically patch the LAST element of the list stored at KEYS[1] in place —
+# only its `content` (and `citations`, if ARGV[2] is non-empty) — leaving
+# every other element and field untouched. Used to keep the Redis hot cache
+# in sync with the empty-then-filled-in assistant placeholder row written by
+# append_conversation_messages/update_message_content (see "生成开始建空记录"
+# — docs/疑问杂项.md「生成过程中刷新页面丢失聊天记录」): as tokens stream in,
+# each throttled flush patches just this one field atomically, so a
+# concurrent reader (e.g. GET history right as the user refreshes) can never
+# observe a half-written array — Redis executes the whole script as one
+# operation, same guarantee as _APPEND_AND_TRIM_LUA above.
+_UPDATE_LAST_MESSAGE_LUA = """
+local raw = redis.call('GET', KEYS[1])
+if not raw then
+  return 0
+end
+local ok, current = pcall(cjson.decode, raw)
+if not ok or #current == 0 then
+  return 0
+end
+local last = current[#current]
+last['content'] = ARGV[1]
+if ARGV[2] ~= '' then
+  local ok2, decoded = pcall(cjson.decode, ARGV[2])
+  if ok2 then
+    last['citations'] = decoded
+  end
+end
+current[#current] = last
+local result = cjson.encode(current)
+redis.call('SETEX', KEYS[1], ARGV[3], result)
+return 1
 """
 
 
@@ -139,11 +179,27 @@ def history_key(namespace: str, *parts: str) -> str:
     return f"{namespace}:history:" + ":".join(parts)
 
 
+def _normalize_citations(messages: list[dict]) -> list[dict]:
+    """
+    Lua's cjson can't tell an empty array from an empty object — any message
+    dict that passed through _APPEND_AND_TRIM_LUA/_UPDATE_LAST_MESSAGE_LUA with
+    `citations: []` comes back out as `citations: {}` after the
+    decode-then-re-encode round trip inside the script. The frontend always
+    treats `citations` as an array (`.find()`/`.map()`), so `{}` would throw
+    at render time — normalize it back to `[]` here, at the single point every
+    Redis read passes through, rather than in every caller.
+    """
+    for msg in messages:
+        if isinstance(msg.get("citations"), dict) and not msg["citations"]:
+            msg["citations"] = []
+    return messages
+
+
 async def load_history_from_redis(key: str) -> list[dict]:
     redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
     try:
         raw = await redis_client.get(key)
-        return json.loads(raw) if raw else []
+        return _normalize_citations(json.loads(raw)) if raw else []
     except Exception:
         return []
     finally:
@@ -172,6 +228,34 @@ async def append_history_to_redis(key: str, new_messages: list[dict]) -> list[di
     except Exception:
         logger.warning("conversation_redis_append_failed", key=key)
         return new_messages
+    finally:
+        await redis_client.aclose()
+
+
+async def update_last_message_content_in_redis(
+    key: str, content: str, citations: list | None = None
+) -> None:
+    """
+    Redis-side counterpart to update_message_content: atomically patch the
+    LAST element of the cached history array (via _UPDATE_LAST_MESSAGE_LUA)
+    so the hot cache reflects the same partial content Postgres just got,
+    without ever exposing a half-written array to a concurrent reader. Same
+    `citations=None` "leave it alone" convention as update_message_content.
+    Best-effort — a failure here just means the next GET history falls back
+    to Postgres's (already-updated) copy, exactly like any other Redis miss.
+    """
+    redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
+    try:
+        await redis_client.eval(
+            _UPDATE_LAST_MESSAGE_LUA,
+            1,
+            key,
+            content,
+            json.dumps(citations, ensure_ascii=False) if citations is not None else "",
+            HISTORY_TTL_SECONDS,
+        )
+    except Exception:
+        logger.warning("conversation_redis_update_last_failed", key=key)
     finally:
         await redis_client.aclose()
 
@@ -282,7 +366,7 @@ async def append_conversation_messages(
     parent_id: str,
     new_messages: list[dict],
     log_context: dict,
-) -> int | None:
+) -> list[str] | None:
     """
     Append `new_messages` as individual rows. Because each message is its own
     INSERT, two concurrent writers can only collide on the `seq` unique
@@ -290,8 +374,12 @@ async def append_conversation_messages(
     recomputing the next seq and retrying, unlike the old array-overwrite
     path where the loser's messages were silently dropped.
 
-    Returns the highest seq written (i.e. the conversation's new message
-    count) on success, or None if persistence failed after retries.
+    Returns the inserted rows' ids, in the same order as `new_messages`, on
+    success, or None if persistence failed after retries. Callers that insert
+    an empty assistant placeholder alongside the user message (see "生成开始
+    建空记录" — docs/疑问杂项.md「生成过程中刷新页面丢失聊天记录」) use
+    `ids[-1]` with update_message_content below to fill it in incrementally
+    as the response streams in, instead of only writing once at the end.
     """
     if not new_messages:
         return None
@@ -303,10 +391,13 @@ async def append_conversation_messages(
                 select(func.max(ConversationMessage.seq)).where(parent_column == parent_id)
             )
             next_seq = (result.scalar() or 0) + 1
+            inserted_ids: list[str] = []
             for offset, msg in enumerate(new_messages):
                 created_at = msg.get("created_at")
+                row_id = str(uuid4())
                 db.add(
                     ConversationMessage(
+                        id=row_id,
                         **{parent_kwarg: parent_id},
                         seq=next_seq + offset,
                         role=msg["role"],
@@ -319,8 +410,9 @@ async def append_conversation_messages(
                         ),
                     )
                 )
+                inserted_ids.append(row_id)
             await db.commit()
-            return next_seq + len(new_messages) - 1
+            return inserted_ids
         except IntegrityError:
             # Lost the seq race against a concurrent writer — roll back and
             # recompute next_seq against the now-current max before retrying.
@@ -337,6 +429,48 @@ async def append_conversation_messages(
             return None
     logger.warning("conversation_message_seq_retries_exhausted", **log_context)
     return None
+
+
+async def update_message_content(
+    db: AsyncSession,
+    *,
+    message_id: str,
+    content: str,
+    citations: list | None = None,
+) -> bool:
+    """
+    Update one ConversationMessage row's content (and optionally citations)
+    in place by id — the incremental-fill half of "生成开始建空记录，逐步填充"
+    (docs/疑问杂项.md「生成过程中刷新页面丢失聊天记录」): the row itself was
+    already inserted (empty content) via append_conversation_messages before
+    streaming started, this just repaints it as tokens arrive. No
+    optimistic-lock retry needed — unlike report_conversations/
+    intake_conversations, ConversationMessage carries no version_id_col and
+    only the request that created a given row ever updates it.
+
+    `citations` is `None` to mean "leave whatever is already there" (the
+    incremental per-token flush never knows citations yet) vs an explicit
+    list — even `[]` — to mean "set it" (the final flush at `done`, once
+    citations have been extracted from the complete response).
+
+    Best-effort: a failure is logged but never raised, matching every other
+    persistence primitive in this module — a content-sync hiccup mid-stream
+    must not surface as a chat error.
+    """
+    try:
+        result = await db.execute(select(ConversationMessage).where(ConversationMessage.id == message_id))
+        row = result.scalar_one_or_none()
+        if not row:
+            return False
+        row.content = content
+        if citations is not None:
+            row.citations = citations
+        await db.commit()
+        return True
+    except Exception as exc:  # noqa: BLE001 - best-effort persistence must not crash the reply
+        await db.rollback()
+        logger.warning("conversation_message_update_failed", message_id=message_id, error=str(exc))
+        return False
 
 
 async def load_recent_messages_from_db(

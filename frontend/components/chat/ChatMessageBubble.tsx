@@ -1,6 +1,7 @@
 'use client'
 
-import { Bot } from 'lucide-react'
+import { useState } from 'react'
+import { Bot, ChevronDown, ChevronRight } from 'lucide-react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { ChatMessage, ChatCitation } from '@/types'
@@ -64,6 +65,32 @@ function buildMarkdownComponents(citations: ChatCitation[]): Components {
   }
 }
 
+/**
+ * 默认收起的"查看AI推理过程"面板——展示 kimi-k2.6 的 reasoning_content（已经过
+ * _ThinkingBuffer 按句子片段做过合规过滤，不是完全原始的模型输出）。只有真的想看
+ * AI 是怎么"想"的用户才会点开，绝大多数用户永远不会看到这段技术性文字。
+ */
+function ThinkingDisclosure({ thinking }: { thinking: string }) {
+  const [expanded, setExpanded] = useState(false)
+  return (
+    <div className="mt-1.5">
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="flex items-center gap-1 text-caption text-[#94A3B8] hover:text-[#64748B] transition-colors"
+      >
+        {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+        查看AI推理过程
+      </button>
+      {expanded && (
+        <div className="mt-1 px-3 py-2 rounded-btn bg-[#F8FAFC] border border-[#E2E8F0]
+          text-caption text-[#64748B] whitespace-pre-wrap leading-relaxed">
+          {thinking}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function ChatMessageBubble({ message }: Props) {
   const isUser = message.role === 'user'
 
@@ -88,6 +115,7 @@ export default function ChatMessageBubble({ message }: Props) {
         <ReactMarkdown remarkPlugins={[remarkGfm]} components={buildMarkdownComponents(message.citations)}>
           {preprocessCitations(message.content)}
         </ReactMarkdown>
+        {message.thinking && <ThinkingDisclosure thinking={message.thinking} />}
       </div>
     </div>
   )
@@ -112,8 +140,15 @@ export function ChatTypingIndicator() {
   )
 }
 
-/** Streaming bubble shows partial content while tokens arrive */
-export function ChatStreamingBubble({ content }: { content: string }) {
+/**
+ * Streaming bubble shows partial content while tokens arrive. `thinking` is
+ * kimi-k2.6's hidden reasoning_content — while it's the only thing we have
+ * (content hasn't started yet), show it as a transient "AI 正在思考..." label
+ * instead of bare bouncing dots, so users aren't staring at total silence
+ * for the 10-50s the model spends reasoning before real content streams
+ * (see docs/疑问杂项.md「/api/v1/intake/chat 响应慢的原因与优化方向」)。
+ */
+export function ChatStreamingBubble({ content, thinking }: { content: string; thinking?: string }) {
   return (
     <div className="flex gap-2 items-start">
       <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gradient-to-br from-[#1E40AF] to-[#2563EB]
@@ -125,6 +160,15 @@ export function ChatStreamingBubble({ content }: { content: string }) {
           <ReactMarkdown remarkPlugins={[remarkGfm]} components={buildMarkdownComponents([])}>
             {preprocessCitations(content)}
           </ReactMarkdown>
+        ) : thinking ? (
+          <div className="flex items-center gap-2 text-[#94A3B8]">
+            <span className="animate-pulse">AI 正在思考…</span>
+            <div className="flex gap-1 items-center h-4">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#94A3B8] animate-bounce [animation-delay:0ms]" />
+              <span className="w-1.5 h-1.5 rounded-full bg-[#94A3B8] animate-bounce [animation-delay:150ms]" />
+              <span className="w-1.5 h-1.5 rounded-full bg-[#94A3B8] animate-bounce [animation-delay:300ms]" />
+            </div>
+          </div>
         ) : (
           <div className="flex gap-1 items-center h-4">
             <span className="w-1.5 h-1.5 rounded-full bg-[#94A3B8] animate-bounce [animation-delay:0ms]" />

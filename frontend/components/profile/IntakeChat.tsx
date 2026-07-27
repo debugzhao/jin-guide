@@ -52,7 +52,15 @@ export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) 
   const key = currentIntakeConversationId ?? INTAKE_DRAFT_KEY
 
   const conv = useAppStore((s) => s.intakeConversations[key] ?? EMPTY_INTAKE_CONVERSATION_STATE)
-  const { messages, streamingContent, isStreaming, dailyLimitReached, dailyLimitMessage, lastFailedMessage } = conv
+  const {
+    messages,
+    streamingContent,
+    thinkingContent,
+    isStreaming,
+    dailyLimitReached,
+    dailyLimitMessage,
+    lastFailedMessage,
+  } = conv
 
   useEffect(() => {
     let cancelled = false
@@ -102,6 +110,9 @@ export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) 
     // key 在这里被闭包捕获——即使用户后来切到别的会话，这些回调也一直只写回
     // 当初发消息时所在的那个会话，不会被"当前正在看哪个会话"影响。
     const abort = intakeChatApi.streamMessage(text, key === INTAKE_DRAFT_KEY ? null : key, {
+      onThinking: (token) => {
+        useAppStore.getState().intakeAppendThinkingToken(key, token)
+      },
       onToken: (token) => {
         useAppStore.getState().intakeAppendStreamToken(key, token)
       },
@@ -155,7 +166,7 @@ export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) 
       {messages.map((msg) => (
         <ChatMessageBubble key={msg.id} message={msg} />
       ))}
-      {isStreaming && <ChatStreamingBubble content={streamingContent} />}
+      {isStreaming && <ChatStreamingBubble content={streamingContent} thinking={thinkingContent} />}
 
       {lastFailedMessage && !isStreaming && (
         <div className="flex items-center justify-between gap-2 px-3 py-2.5 rounded-btn bg-[#FEF2F2] border border-[#FECACA]">
