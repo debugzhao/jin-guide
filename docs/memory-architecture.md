@@ -531,6 +531,20 @@ Redis 读写、Key 生成和 Postgres upsert 的公共逻辑收在 `backend/app/
 
 第七节给出的量化指标：早期关键事实召回率 ≥ 95%，这是判断 P2 是否真正解决问题的标准，而不是主观感觉"好像不怎么忘了"。
 
+#### **已实现**（`backend/app/models/conversation.py` + `backend/app/services/conversation_store.py` + `backend/app/services/conversation_summary.py` + 迁移 `014`/`015`/`016`）
+
+- ✅ **拆表**：新增 `conversation_messages`（一行一条消息，`seq` 同会话内递增，`report_conversation_id`/`intake_conversation_id` 二选一由 CHECK 约束保证）和 `conversation_summaries`（每会话至多一条，`summary_json` + `covered_through_seq` + 来源模型/Prompt 版本/生成状态）；`report_conversations`/`intake_conversations` 收缩成只管会话身份和 `updated_at`。
+- ✅ **四阶段迁移按顺序走完**：迁移 `014` 建表（schema only）→ 应用层双写（`append_conversation_messages` 与旧 `messages_json` 更新同时进行）→ 迁移 `015` 用 `jsonb_array_elements_with_ordinality` 把历史 `messages_json` 数组按下标展开回填（用 `NOT EXISTS` 跳过双写上线后已有新表记录的会话，避免重复插入）→ GET history 端点和冷启动读取切到 `conversation_messages` → 停止旧写 → 迁移 `016` 删除两个 `messages_json` 列。全程实测验证：回填后新旧两边消息总数完全一致（report 28 条、intake 12 条），切读前后返回内容逐字节相同。
+- ✅ **并发正确性验证**：对同一会话发起 12 个并发请求（覆盖 append_conversation_messages 的 `seq` 唯一约束冲突重试路径），消息总数与预期完全一致（初始 2 条 + 12×2 = 26 条），`seq` 无重复无缺口——相比旧版整体覆盖写在并发下会丢消息，新设计下并发写入只可能在 `seq` 分配上短暂冲突重试，消息内容本身不会丢失。
+- ✅ **结构化增量摘要生成**：`conversation_summary.py` 的 `maybe_generate_summary` 由 `POST /intake/chat`、`POST /reports/{id}/chat` 的 `done` 分支通过 FastAPI `BackgroundTasks` 触发（与 `intake_chat.py` 标题升级同一可靠性等级——允许进程重启丢失这次更新，下次消息滑出窗口会重新触发），只在"最新消息 seq - 已覆盖 seq ≥ Agent 历史窗口长度"时才真正调用 LLM 重新生成，覆盖范围严格衔接窗口边界（不重不漏）。摘要 Prompt 要求模型基于"旧摘要 + 本轮滑出窗口的消息片段"输出更新后的完整摘要 JSON。
+- ✅ **Agent 侧接入**：`conversation_agent.py`/`intake_agent.py` 在 `_trim_history` 截取的最近原文窗口之外，新增 `summary` 参数，把摘要渲染成"已确认信息/已表达偏好/已排除选项/此前已做出的结论/待跟进问题"五段文字拼进系统 Prompt，与最近原文窗口一起构成完整上下文。真实场景验证：连续发送预算相关消息超出 16 条窗口后，`confirmed_facts` 正确捕获"预算 12 万元/年"这一事实并持续出现在后续请求的 Prompt 里。
+- ✅ **过程中定位并修复的问题**（均通过真实调用发现，非代码走查）：
+  1. `conversation_store.py` 里 `load_summary`/`upsert_summary` 最初接受调用方传入的裸列对象（如 `ConversationMessage.report_conversation_id`），被误用于过滤 `ConversationSummary` 表——SQLAlchemy 不报错，而是把 `ConversationMessage` 隐式加入 `FROM` 子句形成非预期笛卡尔积，导致 `scalar_one_or_none()` 抛出"Multiple rows were found"。修复为所有相关函数只接受 `parent_kind: "report" | "intake"` 字符串，各自在函数内部按自己的模型解析出正确的列，结构上杜绝跨模型列混用。
+  2. 摘要生成最初用非流式 `client.post()` 等待完整响应，`max_tokens` 从 1500 调到 3000、超时从 30s 加到 240s 均仍稳定触发 `httpx.ReadTimeout`——kimi-k2.6 在这类复杂 JSON 任务上 `reasoning_content` 太长；改成和两个聊天 Agent 一致的流式请求（逐 chunk 读取再拼接）后问题消失。
+  3. 模型偶尔把 `confirmed_facts` 等字段输出成 `{"annual_budget": "12万元/年"}` 这样的对象而非 Prompt 要求的字符串数组，即使 Prompt 已明确要求格式也会发生；解析层增加 `_normalize_summary_field` 兜底，对象自动展开成 `"key：value"` 字符串装入数组，不依赖模型每次都严格遵守格式指令。
+
+业务价值：长对话不再遗忘早期关键事实（验证到"预算 12 万元/年"这类事实在窗口滑出后仍能通过摘要被 Agent 看到），并发写消息不再丢失（相比 P0 时期只能靠乐观锁重试缓解，现在结构上消除了内容覆盖丢失的可能）。
+
 ### P3：统一 Context Builder
 
 - 统一 Intake、Conversation、Report 和 Reflection 的 Context 构建；

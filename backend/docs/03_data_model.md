@@ -253,7 +253,7 @@ CREATE TABLE intake_conversations (
     id              VARCHAR(36) PRIMARY KEY,       -- 即会话/thread id
     owner_key       VARCHAR(48) NOT NULL,           -- user_id 或 "anon:{anonymous_id}"，非唯一
     title           VARCHAR(100),                   -- 首条用户消息截断生成，之后可能被 LLM 摘要升级或用户重命名
-    messages_json   JSONB NOT NULL DEFAULT '[]',
+    version         INTEGER NOT NULL DEFAULT 0,      -- 乐观锁（version_id_col），见 §2.7
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at      TIMESTAMPTZ                      -- 软删除，见 §4
@@ -261,6 +261,8 @@ CREATE TABLE intake_conversations (
 CREATE INDEX ix_intake_conversations_owner_key ON intake_conversations (owner_key);
 CREATE INDEX ix_intake_conversations_owner_key_updated_at ON intake_conversations (owner_key, updated_at, id);
 ```
+
+> 消息内容不再存在这张表里——曾经有过一个 `messages_json JSONB` 列（整段对话历史存成一个数组，见下方 §2.7 "已移除"部分），P2 迁移把它拆成了独立的 `conversation_messages` 表。`report_conversations`（一报告一会话，报告问答 ConversationAgent 用）的结构演进与此完全同构。
 
 最初版本 `owner_key` 有唯一约束——一个用户/匿名会话只存一条建档前聊天历史，没有会话维度，导致侧栏无法展示"新建对话 + 历史列表 + 点击恢复"（首页每次都是同一条历史）。迁移 009 去掉唯一约束，`id` 变成真正的会话/thread id，一个 owner_key 下可以有多条会话，按 `updated_at` 倒序做游标分页（参考 `reports` 表的分页范式）。迁移 010 补了 `deleted_at`，支持会话软删除（对齐 §4 reports/documents 的既有约定）。
 
@@ -273,6 +275,53 @@ CREATE INDEX ix_intake_conversations_owner_key_updated_at ON intake_conversation
 **owner_key 长度踩过的坑**：最初 `owner_key VARCHAR(36)` 是照抄 uuid 长度设的，但匿名会话的 owner_key 实际是 `"anon:" + 36 位 uuid`（41 字符），插入时被 `StringDataRightTruncationError` 打断——而这个错误被写库函数的 best-effort `try/except Exception: pass` 悄悄吞掉，长期没有暴露：匿名用户的建档聊天历史事实上从未真正落过 Postgres 冷层，只靠 Redis 7 天 TTL 硬撑。教训：`owner_key` 这类"多种 ID 拼前缀"的复合字段，列宽要按最长的那种取值算，不能照抄单一 ID 类型的长度；best-effort 的 `except: pass` 至少要考虑加一条监控/日志，否则这类静默截断可以完全不被发现。
 
 **LLM 标题摘要踩过的坑**：Moonshot Kimi（`kimi-k2.6`）是推理模型，即使"拟一个 14 字标题"这么简单的任务也会先输出几百字 `reasoning_content` 才产出最终 `content`——实测 `max_tokens=30~150` 时预算全部耗在推理过程上，`content` 字段永远是空字符串，直到给到 `max_tokens=500` 才能看到真正的标题输出；且该模型只接受 `temperature=1`，传其他值会被 LiteLLM 直接拒绝 400。这类"reasoning 模型"调小任务的 token 预算，不能照搬非推理模型的经验值估算。
+
+### 2.7 conversation_messages / conversation_summaries（追加式消息 + 结构化摘要，P2）
+
+```sql
+CREATE TABLE conversation_messages (
+    id                       VARCHAR(36) PRIMARY KEY,
+    report_conversation_id   VARCHAR(36) REFERENCES report_conversations(id) ON DELETE CASCADE,
+    intake_conversation_id   VARCHAR(36) REFERENCES intake_conversations(id) ON DELETE CASCADE,
+    seq                      INTEGER NOT NULL,        -- 同一会话内递增序号
+    role                     VARCHAR(20) NOT NULL,
+    content                  TEXT NOT NULL,
+    citations                JSONB,                    -- 仅 report_conversation 侧消息使用
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK ((report_conversation_id IS NULL) != (intake_conversation_id IS NULL)),
+    UNIQUE (report_conversation_id, seq),
+    UNIQUE (intake_conversation_id, seq)
+);
+
+CREATE TABLE conversation_summaries (
+    id                       VARCHAR(36) PRIMARY KEY,
+    report_conversation_id   VARCHAR(36) REFERENCES report_conversations(id) ON DELETE CASCADE,
+    intake_conversation_id   VARCHAR(36) REFERENCES intake_conversations(id) ON DELETE CASCADE,
+    summary_json             JSONB NOT NULL,           -- {confirmed_facts, preferences, rejected_options, previous_decisions, open_questions}
+    covered_through_seq      INTEGER NOT NULL DEFAULT 0,
+    summary_version          INTEGER NOT NULL DEFAULT 1,
+    source_model             VARCHAR(50) NOT NULL,
+    prompt_version           VARCHAR(20) NOT NULL,
+    tokens_before            INTEGER,
+    tokens_after             INTEGER,
+    status                   VARCHAR(20) NOT NULL DEFAULT 'ready',
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK ((report_conversation_id IS NULL) != (intake_conversation_id IS NULL)),
+    UNIQUE (report_conversation_id),   -- 每个会话至多一条摘要行
+    UNIQUE (intake_conversation_id)
+);
+```
+
+**已移除**：`report_conversations.messages_json` / `intake_conversations.messages_json`（曾经的整段 JSONB 数组）在迁移 `016` 中被删除，历史数据已由迁移 `015` 用 `jsonb_array_elements_with_ordinality` 展开回填进 `conversation_messages`（`seq` = 原数组下标）。
+
+**为什么拆表**：旧设计每次追加消息都要"读整个数组 → 追加 → 整体写回"，两个并发请求可能读到同一份旧数组、后写请求覆盖丢失先写请求的内容（P0 曾经用 Postgres `version_id_col` 乐观锁 + Redis 侧 Lua 脚本缓解，但底层仍是整体覆盖写）。拆成一行一条消息后，追加只是一次 INSERT，两个并发写入最多在 `seq` 唯一约束上冲突，冲突方重新计算 `seq`（取当前 `MAX(seq)+1`）重试即可——消息内容本身不会再丢失，实测 20 个并发请求写同一会话，消息总数与预期完全一致、`seq` 无重复无缺口。
+
+**`report_conversation_id`/`intake_conversation_id` 二选一**：两张表都用 CHECK 约束保证恰好一个非空，而不是做成两张平行的表（`report_conversation_messages`/`intake_conversation_messages`）——这样 `ConversationSummary`/摘要生成逻辑可以共用同一套读写函数，只在最外层用 `parent_kind: "report" | "intake"` 区分。**踩过的坑**：`conversation_store.py` 里所有涉及这两张表的函数都不接受"裸列对象"参数，只接受 `parent_kind` 字符串——早期实现让调用方传 `ConversationMessage.report_conversation_id` 这样的列对象，结果在 `load_summary`/`upsert_summary` 里被误用去过滤 `ConversationSummary` 表，SQLAlchemy 没有报错，而是把 `ConversationMessage` 隐式加入 `FROM` 子句形成了非预期的笛卡尔积，导致 `scalar_one_or_none()` 抛出"Multiple rows were found"——两个模型即使列名相同也不能共享列对象，必须在各自函数内部按 `parent_kind` 重新解析出"自己模型的列"。
+
+**结构化增量摘要**：`summary_json` 不是自然语言摘要，是 `confirmed_facts`/`preferences`/`rejected_options`/`previous_decisions`/`open_questions` 五个字符串数组字段。`covered_through_seq` 记录摘要覆盖到哪条消息为止，Agent 侧把"摘要 + `seq > covered_through_seq` 的最近原文"拼在一起作为完整上下文，即结构化摘要负责早期事实、原文窗口负责最新语境。摘要由 `POST /intake/chat` / `POST /reports/{id}/chat` 的 `done` 分支触发一个 FastAPI `BackgroundTasks`（不阻塞响应，进程重启允许丢失这次更新——下次消息滑出窗口会重新触发），只有当"最新消息 `seq` - 已覆盖 `seq` ≥ Agent 的历史窗口长度"（`MAX_HISTORY_MESSAGES`，报告问答 10 条/建档聊天 16 条）时才重新生成，避免每条消息都触发一次 LLM 调用。
+
+**LLM 调用踩过的坑**：摘要生成用的 Prompt 比标题摘要复杂得多，Moonshot Kimi（`kimi-k2.6`）的 `reasoning_content` 经常很长，最初用非流式 `client.post()` 等完整响应，`max_tokens=3000`、超时给到 240s 仍然稳定触发 `httpx.ReadTimeout`——最终改成和 `conversation_agent.py`/`intake_agent.py` 一样的流式请求（逐 chunk 读取再攒成完整字符串），才彻底解决超时问题；另外模型偶尔会把 `confirmed_facts` 这类字段输出成 `{"annual_budget": "12万元/年"}` 这样的对象而不是 Prompt 要求的字符串数组，解析层做了归一化（对象展开成 `"key：value"` 字符串装进数组）兜底，不依赖模型每次都严格遵守格式指令。
 
 ---
 

@@ -33,13 +33,14 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.intake_agent import stream_intake_response
+from app.agent.intake_agent import MAX_HISTORY_MESSAGES, stream_intake_response
 from app.api.cursor import decode_cursor, encode_cursor
 from app.api.dependencies import Identity, get_identity
 from app.config import settings
 from app.database import get_db
 from app.models.conversation import IntakeConversation
 from app.services import conversation_store as store
+from app.services.conversation_summary import maybe_generate_summary
 
 router = APIRouter()
 
@@ -307,10 +308,28 @@ async def intake_chat(
     redis_key = store.history_key(_NAMESPACE, owner_key, conversation_id)
     history = await store.load_history_from_redis(redis_key)
 
+    # 已有摘要（best-effort；覆盖已经滑出原文窗口的早期消息，见 P2）。
+    # 新会话/尚未攒够摘要窗口时天然是 None，不特殊处理。
+    summary_json: dict | None = None
+    if body.conversation_id:
+        try:
+            async with async_session_maker() as summary_db:
+                summary_row = await store.load_summary(
+                    summary_db,
+                    parent_kind="intake",
+                    parent_id=conversation_id,
+                )
+                if summary_row:
+                    summary_json = summary_row.summary_json
+        except Exception:  # noqa: BLE001 - a summary-read failure must not block chat
+            summary_json = None
+
     async def event_generator():
         full_response = ""
 
-        async for event in stream_intake_response(history=history, user_message=message):
+        async for event in stream_intake_response(
+            history=history, user_message=message, summary=summary_json
+        ):
             event_type = event.get("type")
 
             if event_type == "token":
@@ -336,9 +355,6 @@ async def intake_chat(
                     },
                 ]
 
-                def build_new_messages(current: list[dict]) -> list[dict]:
-                    return current + new_messages
-
                 await store.append_history_to_redis(redis_key, new_messages)
 
                 seed_title = _derive_title(message) if is_new_conversation else None
@@ -347,7 +363,7 @@ async def intake_chat(
                 # 刷新侧栏会话列表，必须保证这时数据库已经能查到这条会话，否则会有竞态
                 # （侧栏刷新跑在 DB 写入提交之前，读到的还是旧列表）。
                 async with async_session_maker() as persist_db:
-                    await store.upsert_conversation_row(
+                    conversation_row_id = await store.get_or_create_conversation_row(
                         persist_db,
                         model_cls=IntakeConversation,
                         match=(
@@ -355,15 +371,33 @@ async def intake_chat(
                             IntakeConversation.owner_key == owner_key,
                             IntakeConversation.deleted_at.is_(None),
                         ),
-                        build_new_messages=build_new_messages,
-                        make_new_row=lambda msgs: IntakeConversation(
+                        make_new_row=lambda: IntakeConversation(
                             id=conversation_id,
                             owner_key=owner_key,
                             title=seed_title,
-                            messages_json=msgs,
                         ),
                         log_context={"conversation_id": conversation_id, "owner_key": owner_key},
                     )
+                    # Append into the authoritative ConversationMessage table
+                    # (see docs/memory-architecture.md §六 P2).
+                    if conversation_row_id:
+                        await store.append_conversation_messages(
+                            persist_db,
+                            parent_kind="intake",
+                            parent_id=conversation_row_id,
+                            new_messages=new_messages,
+                            log_context={"conversation_id": conversation_id, "owner_key": owner_key},
+                        )
+                        # Best-effort structured summary refresh — only
+                        # actually regenerates once a full window's worth of
+                        # messages has aged out (see P2); a no-op most of
+                        # the time.
+                        background_tasks.add_task(
+                            maybe_generate_summary,
+                            "intake",
+                            conversation_row_id,
+                            window_size=MAX_HISTORY_MESSAGES,
+                        )
 
                 if seed_title:
                     # 标题升级是纯锦上添花，不阻塞 done 事件；进程重启丢失也无所谓
@@ -409,6 +443,11 @@ async def get_intake_chat_history(
 
     messages = await store.load_history_from_redis(store.history_key(_NAMESPACE, owner_key, conversation_id))
     if not messages:
-        messages = conv.messages_json or []
+        # Fall back to DB — reads from the append-only conversation_messages
+        # table rather than the legacy messages_json column (see P2 cutover,
+        # docs/memory-architecture.md §六 P2).
+        messages = await store.load_recent_messages_from_db(
+            db, parent_kind="intake", parent_id=conv.id
+        )
 
     return IntakeChatHistoryOut(messages=messages, total=len(messages))

@@ -657,8 +657,10 @@ data: {"conversation_id": "conv_abc", "message_id": "msg_007", "total_tokens": 1
 | agent_runs | id、thread_id、user_id、profile_id、task_type、status、cost_tokens、cost_usd、trace_url、error_msg、**debug_summary_json**（Admin Debug 用，含 node_timings/tool_call_summary/state_summary/cost_breakdown）、created_at、completed_at |
 | province_thresholds | id、province、year、high_rush_rank_gap、rush_rank_gap_min/max、target_rank_gap、safe_rank_gap |
 | notifications | id、user_id、type、payload_json、read_at、created_at |
-| report_conversations | id、report_id、user_id、**anonymous_id**（匿名会话标识，与 user_id 二选一为空；避免所有匿名用户共享 `user_id IS NULL` 导致同一报告下不同匿名人读到彼此历史）、messages_json（JSONB，最多 50 条）、created_at、updated_at |
-| intake_conversations | id（会话/thread id）、owner_key（user_id 或 `anon:{anonymous_id}` 二选一，**非唯一**——一个 owner_key 可有多条会话）、title（首条用户消息截断生成，nullable）、messages_json（JSONB，最多 50 条）、created_at、updated_at |
+| report_conversations | id、report_id、user_id、**anonymous_id**（匿名会话标识，与 user_id 二选一为空；避免所有匿名用户共享 `user_id IS NULL` 导致同一报告下不同匿名人读到彼此历史）、version（乐观锁）、created_at、updated_at ——消息内容不再存这里，见下方 conversation_messages |
+| intake_conversations | id（会话/thread id）、owner_key（user_id 或 `anon:{anonymous_id}` 二选一，**非唯一**——一个 owner_key 可有多条会话）、title（首条用户消息截断生成，nullable）、version（乐观锁）、created_at、updated_at |
+| conversation_messages | id、report_conversation_id / intake_conversation_id（二选一）、seq（会话内递增序号）、role、content、citations（仅 report 侧使用）、created_at ——追加式存储，一条消息一行，取代旧版 `messages_json` 整块 JSONB 数组（P2，见 `backend/docs/03_data_model.md` §2.7） |
+| conversation_summaries | id、report_conversation_id / intake_conversation_id（二选一，唯一）、summary_json（confirmed_facts/preferences/rejected_options/previous_decisions/open_questions）、covered_through_seq、summary_version、source_model、prompt_version、status | 
 
 **关于 checkpoint 存储**：LangGraph 使用独立内部表（`checkpoints`/`checkpoint_blobs`/`checkpoint_writes`）自动管理，不属于业务表。`agent_runs` 只存业务元数据，通过 `thread_id` 关联。
 
@@ -1126,7 +1128,8 @@ UI 操作类是纯前端状态变更，不经过后端计算，AI 判断到位�
 | `reports.plan_json` | 三套方案完整数据 | 系统 Prompt 前缀（压缩后 ≤ 3K tokens） |
 | `reports.evidence_json` | 证据链 | 按需检索 |
 | `student_profiles` | 省份、位次、选科、偏好、预算 | 系统 Prompt 前缀 |
-| `report_conversations.messages_json` | 对话历史（最近 10 条） | messages 参数 |
+| `conversation_messages`（`report_conversation_id` 侧） | 对话历史（最近 10 条原文，即 `MAX_HISTORY_MESSAGES`） | messages 参数 |
+| `conversation_summaries`（`report_conversation_id` 侧） | 早于原文窗口的结构化摘要（confirmed_facts/preferences/…），对话超过 10 条后才会出现 | 系统 Prompt 追加段落，见 P2 |
 
 单次调用 Token 预算 20K（报告摘要 3K + 补充证据 4K + 对话历史 3K + 回复上限 10K），远低于主链路 150K 预算。
 
@@ -1157,7 +1160,7 @@ UI 操作类是纯前端状态变更，不经过后端计算，AI 判断到位�
 
 **合规检查机制**：不走完整 Reflection 循环（避免延迟），改用生成后修正——完整生成回复（内部非流式，约 2-4s）→ `check_compliance` 正则检测（< 10ms）→ 通过则流式推送，命中则自动修正后推送并发 `compliance_warning` 事件。不做 LLM Judge 语义检测（成本考量，仅正则层）。
 
-**对话历史存储**：Redis 热层（`conv:{report_id}:{user_id}`，TTL 7 天，FIFO 保留最近 50 条）+ PostgreSQL 冷层（`report_conversations` 表，异步写入）。
+**对话历史存储**：Redis 热层（`chat:history:{report_id}:{owner_key}`，TTL 7 天，FIFO 保留最近 50 条）+ PostgreSQL 冷层——消息本体存 `conversation_messages`（一行一条，追加式写入），早于 Agent 原文窗口的历史由 `conversation_summaries` 结构化摘要覆盖（P2，见 `backend/docs/03_data_model.md` §2.7；`report_conversations` 本身只保留会话身份/`updated_at`，不再存消息内容）。
 
 **技术风险**：需要验证 LiteLLM → Moonshot Kimi（`kimi-k2.6`）在**流式回复与 tool calling 同时开启**场景下的稳定性和延迟表现。主链路 Agent 节点的工具调用都是非流式同步调用，ConversationAgent 是系统里第一个"流式 + 工具调用"并存的场景，两者交互方式（何时中断 token 流、如何在流式响应里插入工具调用结果）需要单独技术验证（spike），不能假设 OpenAI 兼容协议的工具调用行为完全一致。建议实现前先用真实 Kimi API 做小范围验证。
 

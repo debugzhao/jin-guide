@@ -5,6 +5,12 @@ from app.models.profile import StudentProfile, Preference
 from app.models.agent_run import AgentRun
 from app.models.report import Report, VolunteerCheck
 from app.models.document import Document, Chunk
+from app.models.conversation import (
+    ReportConversation,
+    IntakeConversation,
+    ConversationMessage,
+    ConversationSummary,
+)
 from app.models.admission import (
     University,
     AdmissionScore,
@@ -27,6 +33,10 @@ __all__ = [
     "VolunteerCheck",
     "Document",
     "Chunk",
+    "ReportConversation",
+    "IntakeConversation",
+    "ConversationMessage",
+    "ConversationSummary",
     "University",
     "AdmissionScore",
     "RankSegment",

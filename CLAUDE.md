@@ -190,7 +190,7 @@ GET /api/v1/reports?cursor=<opaque>&limit=20
 - **`province_thresholds`**：省份级冲稳保位次阈值配置表，替代代码内硬编码
 - **LangGraph checkpoint 表**（`checkpoints`/`checkpoint_blobs`/`checkpoint_writes`）：由 LangGraph 自动管理，不是业务表，不在 `alembic` 迁移中维护
 - **`agent_runs`** 通过 `thread_id` 与 LangGraph checkpoint 关联，只存业务元数据；同时承载 Admin Debug Console 所需的 `debug_summary_json`（node_timings、tool_call_summary、cost_breakdown 等，无 PII）
-- **`report_conversations`**（ORM 类 `ReportConversation`）：报告问答历史冷层，`report_id` + `user_id` 唯一，`messages_json` 只保留最近 50 条；Redis 才是真正的热层，DB 写入是 best-effort（失败不影响主流程）
+- **`report_conversations`/`intake_conversations`**：只保留会话身份与 `updated_at`，不存消息内容——消息本体是追加式的 `conversation_messages` 表（一行一条，按 `seq` 递增，`report_conversation_id`/`intake_conversation_id` 二选一），早于 Agent 原文窗口（`MAX_HISTORY_MESSAGES`）的历史由 `conversation_summaries` 结构化摘要（`confirmed_facts`/`preferences`/`rejected_options`/`previous_decisions`/`open_questions`）覆盖，由 `POST /intake/chat`、`POST /reports/{id}/chat` 的 `done` 分支触发 `BackgroundTasks` 增量生成；Redis 仍是热层，DB 写入 best-effort。曾经的 `messages_json` JSONB 列已在这次拆表中删除，详见 `backend/docs/03_data_model.md` §2.7
 - **`users`**：`email`（unique）、`password_hash`、`email_verified`、`openid`（预留）、`role`
 - **`sessions`**：ORM 模型类名为 `AuthSession`，表名 `sessions`
 

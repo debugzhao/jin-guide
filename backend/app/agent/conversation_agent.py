@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 _CONV_MODEL = "report-agent"  # reuse same virtual model as report_agent
 _LLM_TIMEOUT = 60.0
-_MAX_HISTORY_MESSAGES = 10  # trim to last N messages for context
+MAX_HISTORY_MESSAGES = 10  # trim to last N messages for context
 _MAX_PLAN_JSON_CHARS = 8000
 _MAX_EVIDENCE_CHARS = 3000
 
@@ -77,7 +77,34 @@ def _build_context_block(
 
 def _trim_history(messages: list[dict]) -> list[dict]:
     """Keep only the last N turns to avoid huge prompts."""
-    return messages[-_MAX_HISTORY_MESSAGES:]
+    return messages[-MAX_HISTORY_MESSAGES:]
+
+
+_SUMMARY_LABELS = {
+    "confirmed_facts": "已确认信息",
+    "preferences": "已表达偏好",
+    "rejected_options": "已排除选项",
+    "previous_decisions": "此前已做出的结论",
+    "open_questions": "待跟进问题",
+}
+
+
+def _build_summary_block(summary: dict | None) -> str:
+    """
+    Render the structured incremental summary (see docs/memory-architecture.md
+    §六 P2) as a compact context block. This is what keeps facts stated
+    earlier in a long conversation from being forgotten once they age out of
+    _trim_history's raw MAX_HISTORY_MESSAGES window — the summary is
+    generated to cover exactly the messages that window no longer includes.
+    """
+    if not summary:
+        return ""
+    parts = []
+    for key, label in _SUMMARY_LABELS.items():
+        values = summary.get(key) or []
+        if values:
+            parts.append(f"{label}：" + "；".join(str(v) for v in values))
+    return "\n".join(parts)
 
 
 def _compliance_check(text: str) -> tuple[bool, list[str]]:
@@ -98,9 +125,15 @@ async def stream_conversation_response(
     history: list[dict],
     user_message: str,
     extra_context: str = "",
+    summary: dict | None = None,
 ) -> AsyncGenerator[dict, None]:
     """
     Core streaming generator for ConversationAgent.
+
+    `summary` is the structured incremental summary covering messages that
+    have already aged out of the raw history window (see P2) — pass None to
+    fall back to the pre-P2 behavior of only ever seeing the last
+    MAX_HISTORY_MESSAGES turns.
 
     Yields dicts:
         {"type": "token", "content": "..."}
@@ -110,12 +143,15 @@ async def stream_conversation_response(
         {"type": "error", "message": "..."}
     """
     context_block = _build_context_block(plan_json, evidence_json)
+    summary_block = _build_summary_block(summary)
     trimmed_history = _trim_history(history)
 
     # Build messages array
     system_content = _SYSTEM_PROMPT
     if context_block:
         system_content += f"\n\n【当前报告上下文】\n{context_block}"
+    if summary_block:
+        system_content += f"\n\n【早于当前对话窗口的历史摘要】\n{summary_block}"
     if extra_context:
         system_content += f"\n\n【补充检索结果】\n{extra_context}"
 

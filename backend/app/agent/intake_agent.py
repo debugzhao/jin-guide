@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 _INTAKE_MODEL = "intake-agent"
 _LLM_TIMEOUT = 60.0
-_MAX_HISTORY_MESSAGES = 16
+MAX_HISTORY_MESSAGES = 16
 _START_PROFILE_ACK = "好的，我们先把生成报告必须依赖的基础信息填一下～"
 
 _SYSTEM_PROMPT = f"""\
@@ -123,11 +123,43 @@ _TOOL_NAMES = {t["function"]["name"] for t in _TOOLS}
 
 
 def _trim_history(messages: list[dict]) -> list[dict]:
-    return messages[-_MAX_HISTORY_MESSAGES:]
+    return messages[-MAX_HISTORY_MESSAGES:]
 
 
-def _build_messages(history: list[dict], user_message: str) -> list[dict]:
-    messages = [{"role": "system", "content": _SYSTEM_PROMPT}]
+_SUMMARY_LABELS = {
+    "confirmed_facts": "已确认信息",
+    "preferences": "已表达偏好",
+    "rejected_options": "已排除选项",
+    "previous_decisions": "此前已做出的结论",
+    "open_questions": "待跟进问题",
+}
+
+
+def _build_summary_block(summary: dict | None) -> str:
+    """
+    Render the structured incremental summary (see docs/memory-architecture.md
+    §六 P2) covering messages that have already aged out of _trim_history's
+    raw MAX_HISTORY_MESSAGES window, so facts stated early in a long intake
+    conversation (budget, preferences, etc.) aren't silently forgotten once
+    the turn that stated them scrolls out of view.
+    """
+    if not summary:
+        return ""
+    parts = []
+    for key, label in _SUMMARY_LABELS.items():
+        values = summary.get(key) or []
+        if values:
+            parts.append(f"{label}：" + "；".join(str(v) for v in values))
+    return "\n".join(parts)
+
+
+def _build_messages(history: list[dict], user_message: str, summary: dict | None = None) -> list[dict]:
+    system_content = _SYSTEM_PROMPT
+    summary_block = _build_summary_block(summary)
+    if summary_block:
+        system_content += f"\n\n【早于当前对话窗口的历史摘要】\n{summary_block}"
+
+    messages = [{"role": "system", "content": system_content}]
     for msg in _trim_history(history):
         role = msg.get("role", "user")
         content = msg.get("content", "")
@@ -218,9 +250,15 @@ async def stream_intake_response(
     *,
     history: list[dict],
     user_message: str,
+    summary: dict | None = None,
 ) -> AsyncGenerator[dict, None]:
     """
     Core streaming generator for IntakeAgent.
+
+    `summary` is the structured incremental summary covering messages that
+    have already aged out of the raw history window (see P2) — pass None to
+    fall back to the pre-P2 behavior of only ever seeing the last
+    MAX_HISTORY_MESSAGES turns.
 
     Yields dicts:
         {"type": "token", "content": "..."}
@@ -229,7 +267,7 @@ async def stream_intake_response(
         {"type": "done", "full_response": "..."}
         {"type": "error", "message": "..."}
     """
-    messages = _build_messages(history, user_message)
+    messages = _build_messages(history, user_message, summary)
     full_response = ""
 
     try:

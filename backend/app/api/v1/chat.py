@@ -16,18 +16,19 @@ import json
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.conversation_agent import stream_conversation_response
+from app.agent.conversation_agent import MAX_HISTORY_MESSAGES, stream_conversation_response
 from app.api.dependencies import Identity, get_identity
-from app.database import get_db
-from app.models.conversation import ReportConversation
+from app.database import async_session_maker, get_db
+from app.models.conversation import ConversationMessage, ReportConversation
 from app.models.report import Report
 from app.services import conversation_store as store
+from app.services.conversation_summary import maybe_generate_summary
 
 router = APIRouter()
 
@@ -69,6 +70,7 @@ class ChatHistoryOut(BaseModel):
 async def chat_with_report(
     report_id: str,
     body: ChatIn,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     identity: Identity = Depends(get_identity),
 ):
@@ -123,6 +125,32 @@ async def chat_with_report(
     redis_key = store.history_key(_NAMESPACE, report_id, owner_key)
     history = await store.load_history_from_redis(redis_key)
 
+    # ── Load structured summary (best-effort; covers messages that have
+    # already aged out of the raw history window — see P2) ─────────────────
+    summary_json: dict | None = None
+    if report_id != "demo-report":
+        db_user_id = identity.user.id if identity.user else None
+        db_anonymous_id = identity.anonymous_id if not identity.user else None
+        try:
+            async with async_session_maker() as summary_db:
+                conv_result = await summary_db.execute(
+                    select(ReportConversation).where(
+                        ReportConversation.report_id == report_id,
+                        *_db_owner_filter(db_user_id, db_anonymous_id),
+                    )
+                )
+                conv_row = conv_result.scalar_one_or_none()
+                if conv_row:
+                    summary_row = await store.load_summary(
+                        summary_db,
+                        parent_kind="report",
+                        parent_id=conv_row.id,
+                    )
+                    if summary_row:
+                        summary_json = summary_row.summary_json
+        except Exception:  # noqa: BLE001 - a summary-read failure must not block chat
+            summary_json = None
+
     # ── Stream response ────────────────────────────────────────────────────
     async def event_generator():
         full_response = ""
@@ -133,6 +161,7 @@ async def chat_with_report(
             evidence_json=report_evidence_json,
             history=history,
             user_message=message,
+            summary=summary_json,
         ):
             event_type = event.get("type")
 
@@ -170,33 +199,47 @@ async def chat_with_report(
                     },
                 ]
 
-                def build_new_messages(current: list[dict]) -> list[dict]:
-                    return current + new_messages
-
                 await store.append_history_to_redis(redis_key, new_messages)
                 # Best-effort DB persist (fire and forget — use separate session)
                 if report_id != "demo-report":
-                    from app.database import async_session_maker
                     db_user_id = identity.user.id if identity.user else None
                     db_anonymous_id = identity.anonymous_id if not identity.user else None
                     async with async_session_maker() as persist_db:
-                        await store.upsert_conversation_row(
+                        conversation_row_id = await store.get_or_create_conversation_row(
                             persist_db,
                             model_cls=ReportConversation,
                             match=(
                                 ReportConversation.report_id == report_id,
                                 *_db_owner_filter(db_user_id, db_anonymous_id),
                             ),
-                            build_new_messages=build_new_messages,
-                            make_new_row=lambda msgs: ReportConversation(
+                            make_new_row=lambda: ReportConversation(
                                 id=str(uuid4()),
                                 report_id=report_id,
                                 user_id=db_user_id,
                                 anonymous_id=db_anonymous_id,
-                                messages_json=msgs,
                             ),
                             log_context={"report_id": report_id, "owner_key": owner_key},
                         )
+                        # Append into the authoritative ConversationMessage
+                        # table (see docs/memory-architecture.md §六 P2).
+                        if conversation_row_id:
+                            await store.append_conversation_messages(
+                                persist_db,
+                                parent_kind="report",
+                                parent_id=conversation_row_id,
+                                new_messages=new_messages,
+                                log_context={"report_id": report_id, "owner_key": owner_key},
+                            )
+                            # Best-effort structured summary refresh — only
+                            # actually regenerates once a full window's worth
+                            # of messages has aged out (see P2); a no-op most
+                            # of the time.
+                            background_tasks.add_task(
+                                maybe_generate_summary,
+                                "report",
+                                conversation_row_id,
+                                window_size=MAX_HISTORY_MESSAGES,
+                            )
 
             elif event_type == "error":
                 payload = json.dumps({"message": event.get("message", "未知错误")}, ensure_ascii=False)
@@ -206,6 +249,11 @@ async def chat_with_report(
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
+        # StreamingResponse is constructed by hand here, so FastAPI won't
+        # auto-mount the injected background_tasks the way it does for a
+        # plain return value — it must be passed explicitly or add_task
+        # registrations (e.g. the summary refresh above) never actually run.
+        background=background_tasks,
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
@@ -242,7 +290,9 @@ async def get_chat_history(
         messages = await store.load_history_from_redis(redis_key)
 
         if not messages:
-            # Fall back to DB
+            # Fall back to DB — reads from the append-only conversation_messages
+            # table rather than the legacy messages_json column (see P2 cutover,
+            # docs/memory-architecture.md §六 P2).
             conv_result = await db.execute(
                 select(ReportConversation).where(
                     ReportConversation.report_id == report_id,
@@ -251,7 +301,9 @@ async def get_chat_history(
             )
             conv = conv_result.scalar_one_or_none()
             if conv:
-                messages = conv.messages_json or []
+                messages = await store.load_recent_messages_from_db(
+                    db, parent_kind="report", parent_id=conv.id
+                )
 
     return ChatHistoryOut(
         report_id=report_id,
@@ -289,6 +341,12 @@ async def clear_chat_history(
         )
         conv = conv_result.scalar_one_or_none()
         if conv:
-            conv.messages_json = []
             conv.updated_at = datetime.now(UTC)
+            # Message content lives in ConversationMessage — clear it there
+            # (see docs/memory-architecture.md §六 P2).
+            await db.execute(
+                delete(ConversationMessage).where(
+                    ConversationMessage.report_conversation_id == conv.id
+                )
+            )
             await db.commit()
