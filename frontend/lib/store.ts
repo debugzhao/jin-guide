@@ -51,6 +51,72 @@ interface ChatSlice {
   clearChat: () => void
 }
 
+// ── Intake chat slice ────────────────────────────────────────────────────────
+//
+// 每个建档前聊天（IntakeAgent）会话的消息/流式状态按 conversation_id 存成一个
+// map，而不是像报告问答那样只有"当前一个"——侧栏支持多个会话，且用户可能在
+// 一轮回复还没结束时切换到另一个会话。这个 map 存在 store 里而不是
+// IntakeChat 组件的本地 state，是为了修复两个真实 bug（2026-07-27）：
+// 1. 侧栏 A→B→A 切换时，`app/page.tsx` 会用 `conversationKey` 强制重新挂载
+//    IntakeChat——本地 state 之前会随组件销毁而丢失，现在状态活在 store 里，
+//    重新挂载后新实例读到的还是同一份数据。
+// 2. 请求本身的中断时机也要跟着解绑：正在流式生成时如果组件卸载就 abort()
+//    请求，这一轮永远等不到 done、后端也就没有机会落库。abort 函数存在这个
+//    文件的模块级 `intakeAbortByKey`（不放进 Zustand state，因为它不需要
+//    触发任何渲染），不再挂在组件的 unmount cleanup 上——组件卸载后请求继续
+//    在后台跑到 done，正常走后端持久化，重新挂载的组件从 store 里看到最终结果。
+//
+// 还没被后端分配真实 conversation_id 的"全新会话"用 INTAKE_DRAFT_KEY 占位；
+// 拿到真实 id 后用 intakeRenameConversationKey 把这个 slot 平移过去。
+
+export const INTAKE_DRAFT_KEY = '__draft__'
+
+export interface IntakeConversationState {
+  messages: ChatMessage[]
+  streamingContent: string
+  isStreaming: boolean
+  dailyLimitReached: boolean
+  dailyLimitMessage: string | null
+  lastFailedMessage: string | null
+  /** 是否已经问过一次后端历史（哪怕结果是空历史）——避免每次重新挂载都重新拉取 */
+  historyLoaded: boolean
+}
+
+export const EMPTY_INTAKE_CONVERSATION_STATE: IntakeConversationState = Object.freeze({
+  messages: [],
+  streamingContent: '',
+  isStreaming: false,
+  dailyLimitReached: false,
+  dailyLimitMessage: null,
+  lastFailedMessage: null,
+  historyLoaded: false,
+})
+
+/** 正在进行的请求的 abort() 函数，按 conversation key 存——模块级、非 Zustand
+ *  state，只有组件真的需要主动打断请求时才用得到（目前没有这类场景），
+ *  不再绑定组件 unmount。*/
+const intakeAbortByKey = new Map<string, () => void>()
+export function setIntakeAbort(key: string, abort: (() => void) | null) {
+  if (abort) intakeAbortByKey.set(key, abort)
+  else intakeAbortByKey.delete(key)
+}
+export function getIntakeAbort(key: string): (() => void) | null {
+  return intakeAbortByKey.get(key) ?? null
+}
+
+interface IntakeSlice {
+  intakeConversations: Record<string, IntakeConversationState>
+  setIntakeHistoryLoaded: (key: string, messages: ChatMessage[]) => void
+  intakeAppendUserMessage: (key: string, content: string) => void
+  intakeAppendStreamToken: (key: string, token: string) => void
+  intakeCommitStreamingMessage: (key: string) => void
+  intakeSetStreaming: (key: string, streaming: boolean) => void
+  intakeSetDailyLimit: (key: string, reached: boolean, message?: string) => void
+  intakeSetLastFailedMessage: (key: string, message: string | null) => void
+  /** 草稿会话拿到后端真实 id 后，把它的 state 平移到新 key 下 */
+  intakeRenameConversationKey: (oldKey: string, newKey: string) => void
+}
+
 // ── Debug slice (Admin Debug Console — /admin/debug only) ──────────────────────
 
 /** The 7 real LangGraph nodes (HITL/profile_agent/deliver removed in v1.1 — see CLAUDE.md) */
@@ -93,14 +159,15 @@ interface DebugSlice {
 
 // ── App store ─────────────────────────────────────────────────────────────────
 
-interface AppStore extends ChatSlice, DebugSlice, AuthSlice {
+interface AppStore extends ChatSlice, DebugSlice, AuthSlice, IntakeSlice {
   profileId: string | null
   setProfileId: (id: string) => void
   currentTab: PlanType
   setCurrentTab: (tab: PlanType) => void
 
-  /** 当前建档前聊天（IntakeAgent）会话 id；null = 全新对话，不拉历史。不持久化——
-   *  每次全新打开 `/` 都应该是空白对话，历史通过侧栏会话列表点选恢复。 */
+  /** 当前建档前聊天（IntakeAgent）会话 id；null = 全新对话（未发过消息）。持久化——
+   *  刷新页面后应该回到刷新前正在看的会话，而不是变成看不出是哪条历史（见
+   *  上面 IntakeSlice 的说明）；"新建对话"会显式把它设回 null。 */
   currentIntakeConversationId: string | null
   setCurrentIntakeConversationId: (id: string | null) => void
   /** 侧栏会话列表的重新拉取信号：新建会话产生新 id、或一轮对话完成更新了
@@ -123,6 +190,110 @@ export const useAppStore = create<AppStore>()(
       conversationListVersion: 0,
       bumpConversationListVersion: () =>
         set((s) => ({ conversationListVersion: s.conversationListVersion + 1 })),
+
+      // ── intake chat slice ──
+      intakeConversations: {},
+
+      setIntakeHistoryLoaded: (key, messages) =>
+        set((s) => ({
+          intakeConversations: {
+            ...s.intakeConversations,
+            [key]: {
+              ...(s.intakeConversations[key] ?? EMPTY_INTAKE_CONVERSATION_STATE),
+              messages,
+              historyLoaded: true,
+            },
+          },
+        })),
+
+      intakeAppendUserMessage: (key, content) => {
+        const msg: ChatMessage = {
+          id: uuidv4(),
+          role: 'user',
+          content,
+          citations: [],
+          created_at: new Date().toISOString(),
+        }
+        set((s) => {
+          const prev = s.intakeConversations[key] ?? EMPTY_INTAKE_CONVERSATION_STATE
+          return {
+            intakeConversations: {
+              ...s.intakeConversations,
+              [key]: {
+                ...prev,
+                messages: [...prev.messages, msg],
+                isStreaming: true,
+                streamingContent: '',
+                historyLoaded: true,
+              },
+            },
+          }
+        })
+      },
+
+      intakeAppendStreamToken: (key, token) =>
+        set((s) => {
+          const prev = s.intakeConversations[key] ?? EMPTY_INTAKE_CONVERSATION_STATE
+          return {
+            intakeConversations: {
+              ...s.intakeConversations,
+              [key]: { ...prev, streamingContent: prev.streamingContent + token },
+            },
+          }
+        }),
+
+      intakeCommitStreamingMessage: (key) =>
+        set((s) => {
+          const prev = s.intakeConversations[key] ?? EMPTY_INTAKE_CONVERSATION_STATE
+          if (!prev.streamingContent) {
+            return {
+              intakeConversations: { ...s.intakeConversations, [key]: { ...prev, isStreaming: false } },
+            }
+          }
+          const msg: ChatMessage = {
+            id: uuidv4(),
+            role: 'assistant',
+            content: prev.streamingContent,
+            citations: [],
+            created_at: new Date().toISOString(),
+          }
+          return {
+            intakeConversations: {
+              ...s.intakeConversations,
+              [key]: { ...prev, messages: [...prev.messages, msg], streamingContent: '', isStreaming: false },
+            },
+          }
+        }),
+
+      intakeSetStreaming: (key, streaming) =>
+        set((s) => {
+          const prev = s.intakeConversations[key] ?? EMPTY_INTAKE_CONVERSATION_STATE
+          return { intakeConversations: { ...s.intakeConversations, [key]: { ...prev, isStreaming: streaming } } }
+        }),
+
+      intakeSetDailyLimit: (key, reached, message) =>
+        set((s) => {
+          const prev = s.intakeConversations[key] ?? EMPTY_INTAKE_CONVERSATION_STATE
+          return {
+            intakeConversations: {
+              ...s.intakeConversations,
+              [key]: { ...prev, dailyLimitReached: reached, dailyLimitMessage: reached ? message ?? null : null },
+            },
+          }
+        }),
+
+      intakeSetLastFailedMessage: (key, message) =>
+        set((s) => {
+          const prev = s.intakeConversations[key] ?? EMPTY_INTAKE_CONVERSATION_STATE
+          return { intakeConversations: { ...s.intakeConversations, [key]: { ...prev, lastFailedMessage: message } } }
+        }),
+
+      intakeRenameConversationKey: (oldKey, newKey) =>
+        set((s) => {
+          if (oldKey === newKey || !s.intakeConversations[oldKey]) return {}
+          const { [oldKey]: moved, ...rest } = s.intakeConversations
+          return { intakeConversations: { ...rest, [newKey]: moved } }
+        }),
 
       // ── chat slice ──
       activeReportId: null,
@@ -282,10 +453,15 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: 'wenjin-store',
-      // Don't persist streaming state or chat messages — load from API on mount
+      // Don't persist streaming state or chat messages — load from API on mount.
+      // currentIntakeConversationId IS persisted so a browser refresh reopens the
+      // same conversation instead of losing track of it (see bug报告 2026-07-27):
+      // the messages themselves are safely in Postgres/Redis already — the only
+      // thing a refresh used to lose was "which conversation was I even looking at".
       partialize: (state) => ({
         profileId: state.profileId,
         currentTab: state.currentTab,
+        currentIntakeConversationId: state.currentIntakeConversationId,
       }),
     }
   )

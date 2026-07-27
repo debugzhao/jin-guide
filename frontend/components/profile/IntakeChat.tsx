@@ -1,11 +1,16 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect } from 'react'
 import { AlertCircle, RefreshCw, Sparkles } from 'lucide-react'
 import ChatInput from '@/components/chat/ChatInput'
 import ChatMessageBubble, { ChatStreamingBubble } from '@/components/chat/ChatMessageBubble'
 import { api, intakeChatApi } from '@/lib/api'
-import { useAppStore } from '@/lib/store'
+import {
+  useAppStore,
+  EMPTY_INTAKE_CONVERSATION_STATE,
+  INTAKE_DRAFT_KEY,
+  setIntakeAbort,
+} from '@/lib/store'
 import type { ChatMessage } from '@/types'
 
 interface IntakeChatProps {
@@ -33,20 +38,21 @@ const toMessage = (role: ChatMessage['role'], content: string): ChatMessage => (
  * 多轮流式 chatbot，话题限定在高考志愿相关范围（查学校/查分数/查专业/对比学校/
  * 引导建档），由 IntakeAgent 通过 function calling 决定何时调用确定性查询工具、
  * 何时调用 start_profile_capture 触发建档表单——不再是旧版"先分类再二选一"。
+ *
+ * 消息/流式状态存在 Zustand `intakeConversations[key]`（见 lib/store.ts），不是组件
+ * 本地 state：侧栏切换会话时 app/page.tsx 会用 `conversationKey` 强制重新挂载本组件，
+ * 如果状态是本地的，正在流式生成的内容和已经等到的历史都会随组件销毁而丢失
+ * （2026-07-27 的两个真实 bug）。状态挪到 store 后，重新挂载的新实例读到的还是
+ * 同一份数据，且请求本身也不再随组件卸载被 abort。
  */
 export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) {
   const currentIntakeConversationId = useAppStore((s) => s.currentIntakeConversationId)
   const setCurrentIntakeConversationId = useAppStore((s) => s.setCurrentIntakeConversationId)
   const bumpConversationListVersion = useAppStore((s) => s.bumpConversationListVersion)
-  const [messages, setMessages] = useState<ChatMessage[]>([])
-  const [isStreaming, setIsStreaming] = useState(false)
-  const [streamingContent, setStreamingContent] = useState('')
-  const [dailyLimitReached, setDailyLimitReached] = useState(false)
-  const [dailyLimitMessage, setDailyLimitMessage] = useState<string | undefined>()
-  const [lastFailedMessage, setLastFailedMessage] = useState<string | null>(null)
+  const key = currentIntakeConversationId ?? INTAKE_DRAFT_KEY
 
-  const streamBufferRef = useRef('')
-  const abortRef = useRef<(() => void) | null>(null)
+  const conv = useAppStore((s) => s.intakeConversations[key] ?? EMPTY_INTAKE_CONVERSATION_STATE)
+  const { messages, streamingContent, isStreaming, dailyLimitReached, dailyLimitMessage, lastFailedMessage } = conv
 
   useEffect(() => {
     let cancelled = false
@@ -57,16 +63,27 @@ export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) 
       } catch {
         // best-effort：拿不到匿名会话时聊天仍可用，只是历史不会持久化
       }
-      // 没有 conversation_id = 全新对话，不拉历史，直接展示欢迎态
-      // （父组件在切换/新建会话时会用 key 强制重新挂载本组件，见 app/page.tsx）
-      if (!currentIntakeConversationId) return
+
+      // 已经有这个 key 的数据（正在流式生成、已经拉过历史、或者本地已经有消息），
+      // 不重复拉取——这正是修复"切回某个会话时不应该覆盖掉已经在跑的内容"的关键。
+      const existing = useAppStore.getState().intakeConversations[key]
+      if (existing?.historyLoaded || existing?.isStreaming || (existing?.messages.length ?? 0) > 0) {
+        return
+      }
+
+      if (key === INTAKE_DRAFT_KEY) {
+        // 全新对话，后端还没有这个会话，不用发请求
+        useAppStore.getState().setIntakeHistoryLoaded(key, [])
+        return
+      }
+
       try {
-        const res = await intakeChatApi.getHistory(currentIntakeConversationId)
-        if (!cancelled && res.messages.length > 0) {
-          setMessages(res.messages.map((m) => toMessage(m.role, m.content)))
+        const res = await intakeChatApi.getHistory(key)
+        if (!cancelled) {
+          useAppStore.getState().setIntakeHistoryLoaded(key, res.messages.map((m) => toMessage(m.role, m.content)))
         }
       } catch {
-        // ignore — 从空历史开始
+        if (!cancelled) useAppStore.getState().setIntakeHistoryLoaded(key, [])
       }
     }
 
@@ -74,61 +91,54 @@ export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) 
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  useEffect(() => {
-    return () => {
-      abortRef.current?.()
-    }
-  }, [])
+  }, [key])
 
   const handleSend = (text: string) => {
-    if (isStreaming) return
-    setLastFailedMessage(null)
-    setMessages((prev) => [...prev, toMessage('user', text)])
-    setIsStreaming(true)
-    setStreamingContent('')
-    streamBufferRef.current = ''
+    const store = useAppStore.getState()
+    if (store.intakeConversations[key]?.isStreaming) return
+    store.intakeSetLastFailedMessage(key, null)
+    store.intakeAppendUserMessage(key, text)
 
-    const abort = intakeChatApi.streamMessage(text, currentIntakeConversationId, {
+    // key 在这里被闭包捕获——即使用户后来切到别的会话，这些回调也一直只写回
+    // 当初发消息时所在的那个会话，不会被"当前正在看哪个会话"影响。
+    const abort = intakeChatApi.streamMessage(text, key === INTAKE_DRAFT_KEY ? null : key, {
       onToken: (token) => {
-        streamBufferRef.current += token
-        setStreamingContent(streamBufferRef.current)
+        useAppStore.getState().intakeAppendStreamToken(key, token)
       },
-      onTriggerProfileCapture: () => onStartProfile(),
+      onTriggerProfileCapture: () => {
+        // 只有用户仍然停留在这个会话上时才跳转建档表单——避免另一个在后台
+        // 完成生成的会话把用户从当前正在看的会话里"拽走"。
+        const stillHere = useAppStore.getState().currentIntakeConversationId === (key === INTAKE_DRAFT_KEY ? null : key)
+        if (stillHere) onStartProfile()
+      },
       onDone: (conversationId) => {
-        if (streamBufferRef.current) {
-          setMessages((prev) => [...prev, toMessage('assistant', streamBufferRef.current)])
-        }
-        setStreamingContent('')
-        setIsStreaming(false)
-        if (conversationId && conversationId !== currentIntakeConversationId) {
-          setCurrentIntakeConversationId(conversationId)
+        useAppStore.getState().intakeCommitStreamingMessage(key)
+        setIntakeAbort(key, null)
+        if (conversationId && conversationId !== key) {
+          useAppStore.getState().intakeRenameConversationKey(key, conversationId)
+          const stillHere = useAppStore.getState().currentIntakeConversationId === (key === INTAKE_DRAFT_KEY ? null : key)
+          if (stillHere) setCurrentIntakeConversationId(conversationId)
         }
         bumpConversationListVersion()
       },
       onComplianceWarning: () => {},
       onError: (msg) => {
-        setStreamingContent('')
-        setIsStreaming(false)
-        setLastFailedMessage(text)
+        useAppStore.getState().intakeSetStreaming(key, false)
+        useAppStore.getState().intakeSetLastFailedMessage(key, text)
         console.error('Intake chat error:', msg)
       },
       onRateLimit: (msg) => {
-        setDailyLimitReached(true)
-        setDailyLimitMessage(msg)
-        setStreamingContent('')
-        setIsStreaming(false)
+        useAppStore.getState().intakeSetDailyLimit(key, true, msg)
+        useAppStore.getState().intakeSetStreaming(key, false)
       },
     })
-    abortRef.current = abort
+    setIntakeAbort(key, abort)
   }
 
   const handleRetry = () => {
     if (!lastFailedMessage) return
     const msg = lastFailedMessage
-    setLastFailedMessage(null)
+    useAppStore.getState().intakeSetLastFailedMessage(key, null)
     handleSend(msg)
   }
 
