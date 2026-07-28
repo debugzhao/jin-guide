@@ -34,6 +34,13 @@ erDiagram
         int family_budget "年学费预算（元）"
         string risk_style "conservative / balanced / aggressive"
         float completeness_score "0-100 完整度"
+        string source_type "user_explicit / model_inferred，见2.8"
+        float confidence "仅 model_inferred 有意义"
+        string status "confirmed/proposed/rejected/superseded"
+        timestamp last_confirmed_at
+        uuid source_message_id FK "来源对话消息，可空"
+        uuid superseded_by FK "自引用，取代链"
+        timestamp superseded_at
         timestamp created_at
         timestamp updated_at
     }
@@ -45,6 +52,15 @@ erDiagram
         jsonb city_prefs "城市偏好列表"
         jsonb rejected_majors "禁忌专业"
         string career_priority "tech / business / medical / ..."
+        string source_type "user_explicit / model_inferred，见2.8"
+        float confidence "仅 model_inferred 有意义"
+        string status "confirmed/proposed/rejected/superseded"
+        timestamp last_confirmed_at
+        uuid source_message_id FK "来源对话消息，可空"
+        uuid superseded_by FK "自引用，取代链"
+        timestamp superseded_at
+        timestamp created_at
+        timestamp updated_at
     }
 
     agent_runs {
@@ -322,6 +338,23 @@ CREATE TABLE conversation_summaries (
 **结构化增量摘要**：`summary_json` 不是自然语言摘要，是 `confirmed_facts`/`preferences`/`rejected_options`/`previous_decisions`/`open_questions` 五个字符串数组字段。`covered_through_seq` 记录摘要覆盖到哪条消息为止，Agent 侧把"摘要 + `seq > covered_through_seq` 的最近原文"拼在一起作为完整上下文，即结构化摘要负责早期事实、原文窗口负责最新语境。摘要由 `POST /intake/chat` / `POST /reports/{id}/chat` 的 `done` 分支触发一个 FastAPI `BackgroundTasks`（不阻塞响应，进程重启允许丢失这次更新——下次消息滑出窗口会重新触发），只有当"最新消息 `seq` - 已覆盖 `seq` ≥ Agent 的历史窗口长度"（`MAX_HISTORY_MESSAGES`，报告问答 10 条/建档聊天 16 条）时才重新生成，避免每条消息都触发一次 LLM 调用。
 
 **LLM 调用踩过的坑**：摘要生成用的 Prompt 比标题摘要复杂得多，Moonshot Kimi（`kimi-k2.6`）的 `reasoning_content` 经常很长，最初用非流式 `client.post()` 等完整响应，`max_tokens=3000`、超时给到 240s 仍然稳定触发 `httpx.ReadTimeout`——最终改成和 `conversation_agent.py`/`intake_agent.py` 一样的流式请求（逐 chunk 读取再攒成完整字符串），才彻底解决超时问题；另外模型偶尔会把 `confirmed_facts` 这类字段输出成 `{"annual_budget": "12万元/年"}` 这样的对象而不是 Prompt 要求的字符串数组，解析层做了归一化（对象展开成 `"key：value"` 字符串装进数组）兜底，不依赖模型每次都严格遵守格式指令。
+
+### 2.8 student_profiles / preferences 的来源与状态字段（P4 第 1 步）
+
+迁移 `017` 给 `student_profiles`/`preferences` 各加了 7 列（详见 docs/memory-architecture.md 第六节 P4 的六段式分析，这里只记录字段本身）：
+
+| 列 | 含义 |
+| --- | --- |
+| `source_type` | `user_explicit`（用户表单/聊天明确填写或表达）/ `model_inferred`（AI 从对话推断，目前无写入路径） |
+| `confidence` | 置信度，仅 `model_inferred` 有意义，`user_explicit` 恒为 `NULL` |
+| `status` | `confirmed` / `proposed` / `rejected` / `superseded`，对齐 §5.4 状态机 |
+| `last_confirmed_at` | 最后一次被确认的时间 |
+| `source_message_id` | 来源于某条对话消息时指向 `conversation_messages.id`（`ON DELETE SET NULL`），表单提交场景恒为 `NULL` |
+| `superseded_by` / `superseded_at` | 自引用，标记这条记录被哪条新记录取代、何时取代，取代链而非直接覆盖 |
+
+**这一步只加字段，不接任何提取/确认逻辑**：`POST /profile`（唯一写入路径）在创建时把 `source_type='user_explicit'`、`status='confirmed'`、`last_confirmed_at=当前时间` 写死——一次性表单提交本身就等价于一次显式确认。历史数据由迁移 `017` 回填 `last_confirmed_at = created_at`（`preferences` 表原本连 `created_at`/`updated_at` 都没有，这次一并补上）。是否要接入"从聊天里提取候选偏好 + 用户确认"这条链路（P4 第 2 步，方案 B），留给下一次迭代评估。
+
+**顺手修的一个既有 bug**：验证这次迁移时发现 `create_profile` 在 `db.add(profile)` 之后没有 `flush` 就直接 `db.add(pref)`——`StudentProfile`/`Preference` 之间只有裸 FK 列、没有声明 `relationship()`，SQLAlchemy 的 flush 排序不会据此自动推断跨表插入顺序，实测在提交带 `preference` 的请求时稳定触发 `ForeignKeyViolationError`（对照 `git show HEAD` 版本复现确认是迁移前就存在的问题，与本次字段改动无关）。修法是在两次 `db.add` 之间插入一次 `await db.flush()`。
 
 ---
 

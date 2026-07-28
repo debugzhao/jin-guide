@@ -113,8 +113,17 @@ async def create_profile(
         risk_style=body.risk_style,
     )
     profile.completeness_score = _compute_completeness(profile)
+    # 表单一次性提交视为即时确认（见 docs/memory-architecture.md 第六节 P4），
+    # 与迁移 017 对历史数据的回填口径（last_confirmed_at = created_at）保持一致，
+    # 否则 last_confirmed_at IS NULL 将无法区分"从未确认"和"刚提交的表单"。
+    now = datetime.now(UTC)
+    profile.last_confirmed_at = now
 
     db.add(profile)
+    # StudentProfile/Preference 之间没有声明 relationship()，只有裸 FK 列，
+    # SQLAlchemy 的 flush 排序不会据此自动推断跨表插入顺序——不 flush 就直接
+    # add(pref) 会导致 profile 行还没落地，pref.profile_id 的外键约束报错。
+    await db.flush()
 
     pref_out = None
     if body.preference:
@@ -125,6 +134,7 @@ async def create_profile(
             city_prefs=body.preference.city_prefs,
             rejected_majors=body.preference.rejected_majors,
             career_priority=body.preference.career_priority,
+            last_confirmed_at=now,
         )
         db.add(pref)
         pref_out = {
