@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { memo, useDeferredValue, useState } from 'react'
 import { Bot, ChevronDown, ChevronRight } from 'lucide-react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -107,7 +107,16 @@ export function ThinkingDisclosure({
   )
 }
 
-export default function ChatMessageBubble({ message }: Props) {
+/**
+ * memo 是这里真正治"卡顿"的一环：IntakeChat.tsx 的打字机队列每帧都会更新
+ * Zustand store 里当前会话的 streamingContent/thinkingContent，而 Zustand 的
+ * selector 一旦返回新的会话对象引用，整个 IntakeChat 组件树都会重新渲染——
+ * 如果 ChatMessageBubble 不做记忆化，意味着对话里*已经生成完*的每一条历史消息，
+ * 也会跟着每帧重新执行一遍、重新跑一遍 ReactMarkdown 解析，纯属浪费，且随对话
+ * 变长而线性变差。message 对象在 store 里只追加不修改，引用稳定，默认浅比较
+ * 就能正确跳过没变化的历史消息。
+ */
+function ChatMessageBubble({ message }: Props) {
   const isUser = message.role === 'user'
 
   if (isUser) {
@@ -136,6 +145,8 @@ export default function ChatMessageBubble({ message }: Props) {
     </div>
   )
 }
+
+export default memo(ChatMessageBubble)
 
 /** Typing indicator shown while AI is streaming */
 export function ChatTypingIndicator() {
@@ -171,8 +182,18 @@ export function ChatTypingIndicator() {
  * of the growing text itself comes from IntakeChat.tsx's requestAnimationFrame
  * typewriter queue, not from re-triggering a CSS animation on every update
  * (doing that at per-character granularity looks like flicker, not smoothness).
+ *
+ * `useDeferredValue` on `content` matters once a reply gets long (tables,
+ * multi-paragraph answers): re-parsing the *entire* accumulated markdown
+ * string on every single-frame tick is real work that scales with length,
+ * and a synchronous render that takes longer than one frame is what actually
+ * causes visible dropped frames — no amount of CSS animation fixes that.
+ * Deferring lets React deprioritize/interrupt this specific re-parse under
+ * load instead of blocking the frame, while cheap parts (cursor, thinking
+ * label) still track the latest value immediately.
  */
 export function ChatStreamingBubble({ content, thinking }: { content: string; thinking?: string }) {
+  const deferredContent = useDeferredValue(content)
   return (
     <div className="flex gap-2 items-start wj-stream-fade-in">
       <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gradient-to-br from-[#1E40AF] to-[#2563EB]
@@ -190,7 +211,7 @@ export function ChatStreamingBubble({ content, thinking }: { content: string; th
         )}
         {content ? (
           <ReactMarkdown remarkPlugins={[remarkGfm]} components={buildMarkdownComponents([])}>
-            {preprocessCitations(content)}
+            {preprocessCitations(deferredContent)}
           </ReactMarkdown>
         ) : !thinking ? (
           <div className="flex gap-1 items-center h-4">
