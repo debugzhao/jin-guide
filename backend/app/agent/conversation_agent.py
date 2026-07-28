@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 
 import httpx
 
+from app.agent.context_budget import log_context_budget
 from app.agent.nodes.compliance import _FORBIDDEN, check_compliance, sanitize_text
 from app.config import settings
 
@@ -56,23 +57,35 @@ _SYSTEM_PROMPT = f"""\
 def _build_context_block(
     plan_json: dict | None,
     evidence_json: list | None,
-) -> str:
-    """Compress report context to fit within token budget."""
+) -> tuple[str, dict[str, str], dict[str, bool]]:
+    """
+    Compress report context to fit within token budget.
+
+    Returns (拼进 Prompt 的最终文本, {来源名: 原始文本} 明细, {来源名: 是否被
+    截断过}) —— 后两项只用于 context_budget 的 token 统计日志（P3 第一阶段，见
+    docs/memory-architecture.md 第六节），不影响实际发给模型的内容。
+    """
     parts: list[str] = []
+    breakdown: dict[str, str] = {}
+    truncated: dict[str, bool] = {}
 
     if plan_json:
         plan_text = json.dumps(plan_json, ensure_ascii=False)
         if len(plan_text) > _MAX_PLAN_JSON_CHARS:
+            truncated["plan_json"] = True
             plan_text = plan_text[:_MAX_PLAN_JSON_CHARS] + "...(已截断)"
         parts.append(f"【志愿方案 JSON】\n{plan_text}")
+        breakdown["plan_json"] = plan_text
 
     if evidence_json:
         ev_text = json.dumps(evidence_json[:10], ensure_ascii=False)  # top-10 evidence
         if len(ev_text) > _MAX_EVIDENCE_CHARS:
+            truncated["evidence"] = True
             ev_text = ev_text[:_MAX_EVIDENCE_CHARS] + "...(已截断)"
         parts.append(f"【证据链（前10条）】\n{ev_text}")
+        breakdown["evidence"] = ev_text
 
-    return "\n\n".join(parts)
+    return "\n\n".join(parts), breakdown, truncated
 
 
 def _trim_history(messages: list[dict]) -> list[dict]:
@@ -142,9 +155,27 @@ async def stream_conversation_response(
         {"type": "done", "full_response": "..."}
         {"type": "error", "message": "..."}
     """
-    context_block = _build_context_block(plan_json, evidence_json)
+    context_block, context_breakdown, context_truncated = _build_context_block(plan_json, evidence_json)
     summary_block = _build_summary_block(summary)
     trimmed_history = _trim_history(history)
+
+    # P3 第一阶段：只统计、不裁剪（见 docs/memory-architecture.md 第六节 P3、
+    # docs/疑问杂项.md 关于 LangSmith 分工的说明）。
+    log_context_budget(
+        agent="conversation_agent",
+        sources={
+            "system_prompt": _SYSTEM_PROMPT,
+            **context_breakdown,
+            "summary": summary_block,
+            "history": "\n".join(m.get("content", "") for m in trimmed_history),
+            "user_message": user_message,
+            "extra_context": extra_context,
+        },
+        truncated={
+            **context_truncated,
+            "history": len(history) > MAX_HISTORY_MESSAGES,
+        },
+    )
 
     # Build messages array
     system_content = _SYSTEM_PROMPT

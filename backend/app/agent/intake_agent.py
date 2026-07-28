@@ -31,6 +31,7 @@ from collections.abc import AsyncGenerator
 
 import httpx
 
+from app.agent.context_budget import log_context_budget
 from app.agent.nodes.compliance import _FORBIDDEN, check_compliance, sanitize_text
 from app.config import settings
 
@@ -205,8 +206,23 @@ def _build_messages(history: list[dict], user_message: str, summary: dict | None
     if summary_block:
         system_content += f"\n\n【早于当前对话窗口的历史摘要】\n{summary_block}"
 
+    trimmed_history = _trim_history(history)
+
+    # P3 第一阶段：只统计、不裁剪（见 docs/memory-architecture.md 第六节 P3、
+    # docs/疑问杂项.md 关于 LangSmith 分工的说明）。
+    log_context_budget(
+        agent="intake_agent",
+        sources={
+            "system_prompt": _SYSTEM_PROMPT,
+            "summary": summary_block,
+            "history": "\n".join(m.get("content", "") for m in trimmed_history),
+            "user_message": user_message,
+        },
+        truncated={"history": len(history) > MAX_HISTORY_MESSAGES},
+    )
+
     messages = [{"role": "system", "content": system_content}]
-    for msg in _trim_history(history):
+    for msg in trimmed_history:
         role = msg.get("role", "user")
         content = msg.get("content", "")
         if role in ("user", "assistant") and content:
