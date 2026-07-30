@@ -776,3 +776,115 @@ IntakeAgent（Chat-first 建档前聊天）和 ConversationAgent（报告问答�
 最终建议：
 
 > 保留现有 State、Redis/PostgreSQL 会话、Profile 和 RAG；新增 PostgreSQL Execution Checkpoint、追加式消息存储、结构化对话摘要、统一 Context Builder，以及带来源、置信度、冲突和遗忘治理的长期偏好层。
+
+---
+
+## 九、面试问答：五类记忆的实现、演进与权衡
+
+> 站在资深 Agent 工程师视角，围绕三个问题展开：本项目各类记忆怎么做的、可能出什么问题；大型 Agent 工程怎么设计；权衡趋势有哪些。
+
+### 9.1 本项目五类记忆分别怎么做、可能出什么问题
+
+主线结论：**本项目的记忆设计是"按风险和结构化程度分层"——高风险的事实走确定性存储（SQL/State），低风险的语境走可丢失的缓存（Redis）+ 可重建的摘要。** 这条主线贯穿五类记忆，但每一类都还有各自的坑。
+
+#### 工作记忆 Working Memory
+
+| 维度 | 实现 |
+|---|---|
+| 载体 | `VolunteerPlanState`（TypedDict），LangGraph 节点间唯一通信介质 |
+| 并发安全 | 并行字段（`evidence_list`/`rule_results`/`hard_blocked_items`）用 `Annotated[list, operator.add]` reducer，`messages` 用 `add_messages`，防止 retrieval / policy_rule 并行节点互相覆盖 |
+| 持久化 | Worker 进程用 `AsyncPostgresSaver` 做 checkpointer（`worker.py` on_startup），每个 superstep 后落盘，崩溃可从中间节点恢复（P1 已落地，§2.1 里"无 Checkpointer"的旧描述已过时） |
+
+可能的问题：
+
+- **Reducer 是"只增不减"的**——`operator.add` 只能 append，如果某个节点需要"修正"前一个节点写错的证据，靠 reducer 是做不到的，只能整字段重写（而重写又会丢并发写入）。这是 LangGraph reducer 的固有张力。
+- **State 越滚越大**：`messages` + `evidence_list` + `tool_call_log` 全在一个 State 里，checkpoint blob 会随执行膨胀，长报告生成时单次 checkpoint 写入成本不低。
+- **checkpoint 与业务表的一致性**：checkpoint 存在 LangGraph 自管的 `checkpoints` 表，业务元数据在 `agent_runs`，靠 `thread_id` 关联——两者不是一个事务，极端情况下可能 checkpoint 成功但 `agent_runs` 状态没更新。
+
+#### 会话记忆 Conversation Memory（P2）
+
+| 维度 | 实现 |
+|---|---|
+| 热层 | Redis：`intake:history:{owner_key}:{conversation_id}` / `chat:history:{report_id}:{user_id}`，7 天 TTL，Lua 脚本原子追加+裁剪 |
+| 冷层 | Postgres `conversation_messages`（一行一条，`seq` 递增，追加式，不再是整块 JSONB） |
+| 超窗口 | `conversation_summaries` 结构化增量摘要（confirmed_facts / preferences / rejected_options / previous_decisions / open_questions），覆盖滑出 `MAX_HISTORY_MESSAGES`（建档 16 / 报告问答 10）的历史 |
+| 触发 | `done` 事件后 `BackgroundTasks` 异步节流生成，best-effort |
+
+可能的问题：
+
+- **摘要 best-effort 意味着可能有"记忆断层"**：生成失败或进程重启丢了这次任务，早期事实就短暂丢失，直到下次消息滑出窗口重新触发。用户可能感觉到"AI 突然忘了我前面说的预算"。
+- **摘要本身是 LLM 产物，有幻觉风险**：结构化字段能约束格式（已做 `_normalize_summary_field` 兜底），但约束不了内容正确性——摘要说"用户偏好北京"，可能是模型误解。所以摘要**只能进 Prompt 上下文，绝不能进规则引擎**。
+- **Redis 与 Postgres 双写不一致**：DB 写是 best-effort，理论上存在 Redis 有、DB 没有的窗口。冷启动（Redis 过期后）读 DB 会缺这几条。
+
+#### 用户长期记忆 User Memory（P4）
+
+| 维度 | 实现 |
+|---|---|
+| 载体 | `StudentProfile` / `Preference`，结构化字段（省份/分数/位次/选科/预算/城市偏好/排斥专业…） |
+| 元数据（P4 第 1 步刚加） | `source_type`（user_explicit/model_inferred）、`confidence`、`status`（confirmed/proposed/rejected/superseded）、`last_confirmed_at`、`source_message_id`、`superseded_by` 取代链 |
+| 写入路径 | **目前只有 `POST /profile` 表单提交这一条**，恒为 `user_explicit + confirmed` |
+
+可能的问题（这也是本次只做第 1 步的原因）：
+
+- **字段加了，但提取/确认链路没接**——现在这些字段全是死值，`model_inferred` 没有任何写入方。它是"为将来预留的地基"，不是完整功能。
+- **跨会话记忆仍未实现**：聊天里说的偏好不会持久化到 `Preference`。这是 P4 第 2 步（方案 B）要解决的。
+- **最大的红线风险在第 2 步**：一旦接了"AI 从对话推断偏好"，如果不严格卡住 `proposed` 不进规则引擎，AI 误判"用户不想中外合作办学"会直接把合适院校排除掉——高考是不可逆的高风险决策，这个错误代价极高。所以设计是 `proposed` 只能展示、必须显式确认才转 `confirmed`。
+
+#### 情景记忆 Episodic Memory
+
+| 维度 | 实现 |
+|---|---|
+| 载体 | 报告版本链（`parent_report_id`）、`run_summary_json`、`debug_summary_json`（节点耗时/工具调用/Reflection 轮数） |
+| 现状 | **本质是"审计日志"，不是真正的情景记忆** |
+
+可能的问题：
+
+- **有记录，但没有"召回"闭环**。真正的 Episodic Memory 应该能在新任务里回忆"上次为什么拒绝了某校、为什么把预算从 5 万改到 8 万"并用于当前决策/解释。现在这些数据只用于 Admin 调试和报告回溯，Agent 自己用不到。
+- 这是本项目**最弱的一环**——从"审计记录"到"可召回的经验"，需要把这些事件向量化或结构化成可检索的形式，目前没做。
+
+#### 程序性记忆 Procedural Memory
+
+| 维度 | 实现 |
+|---|---|
+| 载体 | System Prompt、LangGraph 工作流拓扑、规则引擎代码、`tool_filter` 的 `_TOOL_REGISTRY`、合规禁词正则 |
+| 特点 | 描述 Agent"该怎么做"，与用户数据完全隔离 |
+
+可能的问题：
+
+- **Prompt 和规则散落在代码里，没有版本管理**：改了系统提示词，无法回答"上周的报告是用哪版 Prompt 生成的"。`conversation_summaries` 有 `prompt_version` 字段是好的开端，但主报告链路的 Prompt 没版本化。
+- **规则引擎硬编码 vs 配置化的张力**：`province_thresholds` 已经把冲稳保阈值从代码挪到配置表了，但还有部分逻辑在代码里，改规则要发版。
+
+### 9.2 大型 Agent 工程怎么设计
+
+结论：**大厂/成熟框架的共识是"记忆即基础设施"——把记忆从 Agent 逻辑里抽出来做成独立的读写服务层，Agent 只负责调用，不关心存储细节。**
+
+| 框架/产品 | 核心设计 | 对本项目的启发 |
+|---|---|---|
+| **LangGraph Store + Checkpointer** | Checkpointer 管会话内状态（=P1），Store 管跨线程长期记忆，官方明确分 semantic/episodic/procedural | State+checkpoint 已对齐，缺的是 Store 那层跨线程长期记忆 |
+| **Mem0** | 自动化 pipeline：提取→去重合并→存储（向量+图）→检索注入；带 memory decay | P4 提取逻辑可参考它的"提取+去重"，但不能照搬"自动写入"——高风险场景必须加确认环节 |
+| **Zep** | 时序知识图谱，事实随时间演变，旧事实标记过期而非删除 | 印证 P4 的 `superseded` 取代链方向是对的 |
+| **MemGPT/Letta** | 双层：核心记忆块（有限 token，常驻上下文）+ 归档记忆（无限容量，按需分页调入），类比 OS 虚拟内存 | 对应 P3 Context Builder 要做的"按 token 预算选择性注入" |
+
+大型工程的通用架构模式（无论用哪个框架）：
+
+1. **记忆读写独立成服务**：Agent 通过统一接口 `get_memory(user, scope)` / `write_memory(candidate)`，不直接碰 Redis/PG/向量库——`conversation_store.py` 已经是这个雏形。
+2. **写入走"提取→候选→确认→投影"四段**，异步节流，绝不同步阻塞主对话。
+3. **读取走 Context Builder**：按优先级 + token 预算做检索式注入，不是全量塞——这正是 P3 要做的（现在只做了 token 统计观测）。
+4. **强隔离**：user / tenant / thread 三级作用域，且要防"记忆投毒"（用户 A 的输入不能污染共享记忆）。
+5. **可观测 + 可回溯**：每条记忆带来源、置信度、生成时间、prompt 版本。
+
+### 9.3 权衡趋势有哪些
+
+结论：**记忆系统的所有设计本质上是在四组张力之间找平衡点，而当前行业趋势是"从无脑向量化，回摆到结构化优先 + 精准注入"。**
+
+| 张力 | 两端 | 当前趋势 | 本项目的选择 |
+|---|---|---|---|
+| **精确性 vs 语义灵活** | SQL 结构化 ↔ 向量相似度 | 🔺 回摆到"能结构化就别向量化"，向量只做补充 | 硬约束走 SQL/规则，向量只补解释，方向已对 |
+| **成本 vs 完整性** | 全量注入所有历史 ↔ 摘要+检索 | 🔺 都在做"分层+按需调入"（MemGPT 范式），因为长上下文虽然变便宜但仍不免费、且有"lost in the middle"问题 | P2 摘要 + P3 Context Builder |
+| **自动化 vs 可控** | AI 自动提取写入 ↔ 人工/显式确认 | ⚖️ 分场景：低风险（闲聊助手）倾向全自动，高风险（金融/医疗/志愿）必须加确认闸门 | P4 坚持 `proposed` 必须确认才 `confirmed` |
+| **遗忘 vs 留存** | 物理删除 ↔ 标记失效 | 🔺 倾向"软失效+可追溯"（Zep 时序图谱），因为合规要求"被遗忘权"的同时业务需要审计链 | P4 用 `superseded` 取代链，不物理删 |
+
+两个值得强调的宏观趋势：
+
+1. **长上下文没有杀死记忆系统，反而抬高了记忆的价值**。很多人以为 1M context 出来后就不用做记忆了——恰恰相反，上下文越大，"塞什么进去"的决策质量越重要，Context Builder（检索+排序+预算）反而成了核心竞争力。这也是 P3 先做 token 统计观测、拿真实数据再决定裁剪策略的原因。
+2. **记忆正在从"技术组件"变成"产品能力 + 合规义务"**。ChatGPT Memory、GDPR 被遗忘权，让"用户可查看/编辑/删除记忆"从锦上添花变成硬性要求。对于处理未成年人（高考生）敏感信息的产品，这一条尤其不能省——这也是为什么 P4 的验收标准里，"用户能管理自己的偏好"和"`proposed` 绝不绕过确认进规则引擎"被列为硬性红线。
