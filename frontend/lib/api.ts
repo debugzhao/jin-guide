@@ -16,7 +16,11 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
     } catch {
       // ignore parse errors
     }
-    throw new Error(message)
+    // 把 HTTP 状态码带在 error 上，调用方才能区分"会话孤儿"(404) 之类的可自愈错误，
+    // 而不是把所有失败一律当致命错误处理（见 IntakeChat 对持久化 conversation_id 的自愈）。
+    const err = new Error(message) as Error & { status?: number }
+    err.status = res.status
+    throw err
   }
   // 204/无内容响应没有 body，res.json() 会因为空字符串解析失败直接抛错
   if (res.status === 204 || res.headers.get('content-length') === '0') {
@@ -406,6 +410,10 @@ export const intakeChatApi = {
       onComplianceWarning: (issues: string[]) => void
       onError: (msg: string) => void
       onRateLimit: (message?: string) => void
+      /** 404：传入的 conversationId 在服务端不存在或不属于当前身份（持久化的 id 与
+       *  cookie 身份错配，如匿名会话轮换/登出后残留的孤儿 id）。调用方应清掉这个 id
+       *  并回落到新会话，而不是当致命错误处理——否则重试会一直发同一个坏 id 卡死。 */
+      onConversationGone?: () => void
     }
   ): (() => void) => {
     const BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -426,6 +434,12 @@ export const intakeChatApi = {
           const body = await resp.json().catch(() => ({}))
           const detail = body?.detail
           callbacks.onRateLimit(typeof detail === 'object' ? detail?.message : undefined)
+          return
+        }
+        if (resp.status === 404 && callbacks.onConversationGone) {
+          // 持久化的 conversation_id 与当前 cookie 身份对不上（孤儿 id）：交给调用方
+          // 清掉并回落到新会话，而不是走通用 onError（那会把用户永久卡在坏 id 上）。
+          callbacks.onConversationGone()
           return
         }
         if (!resp.ok) {

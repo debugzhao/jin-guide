@@ -90,8 +90,17 @@ export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) 
         if (!cancelled) {
           useAppStore.getState().setIntakeHistoryLoaded(key, res.messages.map((m) => toMessage(m.role, m.content)))
         }
-      } catch {
-        if (!cancelled) useAppStore.getState().setIntakeHistoryLoaded(key, [])
+      } catch (err) {
+        // 404 = 持久化到 localStorage 的 conversation_id 与当前 cookie 身份对不上
+        // （孤儿 id：匿名会话轮换/登出后残留）。清掉它回落到全新会话，否则用户会停在
+        // 一个空白且一发消息就 404 的死会话上。其它错误按老逻辑降级成空历史。
+        if (!cancelled && (err as { status?: number })?.status === 404) {
+          if (useAppStore.getState().currentIntakeConversationId === key) {
+            setCurrentIntakeConversationId(null)
+          }
+        } else if (!cancelled) {
+          useAppStore.getState().setIntakeHistoryLoaded(key, [])
+        }
       }
     }
 
@@ -186,6 +195,25 @@ export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) 
         else scheduleReveal()
       },
       onComplianceWarning: () => {},
+      onConversationGone: () => {
+        // 服务端说这个 conversation_id 不存在/不属于当前身份（孤儿 id）。把刚输入的
+        // 消息连同本地会话状态平移到草稿 key，清掉持久化的坏 id，让界面回落到一个
+        // 全新会话——用户的消息不丢、重试即以新会话身份重发，而不是死循环打同一个坏 id。
+        if (revealHandle !== null) cancelAnimationFrame(revealHandle)
+        revealHandle = null
+        contentQueue = ''
+        thinkingQueue = ''
+        const store = useAppStore.getState()
+        if (key !== INTAKE_DRAFT_KEY) {
+          store.intakeRenameConversationKey(key, INTAKE_DRAFT_KEY)
+        }
+        store.intakeSetStreaming(INTAKE_DRAFT_KEY, false)
+        store.intakeSetLastFailedMessage(INTAKE_DRAFT_KEY, text)
+        if (store.currentIntakeConversationId === key) {
+          setCurrentIntakeConversationId(null)
+        }
+        bumpConversationListVersion()
+      },
       onError: (msg) => {
         if (revealHandle !== null) cancelAnimationFrame(revealHandle)
         revealHandle = null
