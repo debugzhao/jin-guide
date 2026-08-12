@@ -87,6 +87,8 @@ async def _emit_completed_if_report_exists(run_id: str) -> None:
         )
         report = result.scalar_one_or_none()
         if report:
+            report.status = "completed"
+            await db.commit()
             await _push_run_sse(run_id, "completed", {
                 "report_id": report.id,
                 "risk_level": report.risk_level,
@@ -421,6 +423,13 @@ async def _run_graph_and_finalize(
                 run3.error_msg = error_msg
                 run3.completed_at = datetime.now(UTC)
                 run3.duration_seconds = duration_seconds
+                await db3.commit()
+            report_result = await db3.execute(
+                select(Report).where(Report.run_id == run_id, Report.deleted_at.is_(None))
+            )
+            failed_report = report_result.scalar_one_or_none()
+            if failed_report:
+                failed_report.status = "failed"
                 await db3.commit()
         logger.warning(
             "agent_run_failed",

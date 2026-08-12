@@ -376,11 +376,7 @@ async def intake_chat(
         ):
             event_type = event.get("type")
 
-            if event_type == "thinking":
-                payload = json.dumps({"content": event["content"]}, ensure_ascii=False)
-                yield f"event: thinking\ndata: {payload}\n\n"
-
-            elif event_type == "token":
+            if event_type == "token":
                 payload = json.dumps({"content": event["content"]}, ensure_ascii=False)
                 yield f"event: token\ndata: {payload}\n\n"
 

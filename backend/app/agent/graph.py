@@ -193,11 +193,14 @@ def _route_after_reflection(state: VolunteerPlanState) -> str:
 
     Returns one of: "end" | "report"
     """
-    compliance_passed = state.get("compliance_passed", True)
+    compliance_passed = state.get("compliance_passed", False)
     iterations = state.get("reflection_iterations", 0)
 
-    if compliance_passed or iterations >= _MAX_REFLECTION_ITERATIONS:
+    if compliance_passed:
         return "end"
+
+    if iterations >= _MAX_REFLECTION_ITERATIONS:
+        raise RuntimeError("报告在最大重试次数内未通过合规审查")
 
     return "report"
 

@@ -1,7 +1,7 @@
 'use client'
 
-import { memo, useDeferredValue, useState } from 'react'
-import { Bot, ChevronDown, ChevronRight } from 'lucide-react'
+import { memo, useDeferredValue } from 'react'
+import { Bot } from 'lucide-react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { ChatMessage, ChatCitation } from '@/types'
@@ -66,50 +66,8 @@ function buildMarkdownComponents(citations: ChatCitation[]): Components {
 }
 
 /**
- * 可展开的"AI 推理过程"面板——展示 kimi-k2.6 的 reasoning_content（已经过
- * _ThinkingBuffer 按句子片段做过合规过滤，不是完全原始的模型输出）。
- *
- * `defaultExpanded` 由调用方按阶段传入，不是写死的：正在思考、还没出现正式回复
- * 内容时默认展开（此时这是屏幕上唯一有信息量的东西，应该主动露出而不是让用户
- * 去点）；正式内容一开始生成、或者这条消息已经生成完毕，就默认收起，避免这段
- * 技术性文字常驻挤占版面。用户如果手动点过一次，之后就按用户的选择来，不再被
- * `defaultExpanded` 的变化覆盖。
- */
-export function ThinkingDisclosure({
-  thinking,
-  label = '查看AI推理过程',
-  defaultExpanded = false,
-  pulsing = false,
-}: {
-  thinking: string
-  label?: string
-  defaultExpanded?: boolean
-  pulsing?: boolean
-}) {
-  const [manualExpanded, setManualExpanded] = useState<boolean | null>(null)
-  const expanded = manualExpanded ?? defaultExpanded
-  return (
-    <div className="mt-1.5 mb-1.5">
-      <button
-        onClick={() => setManualExpanded(!expanded)}
-        className="flex items-center gap-1 text-caption text-[#94A3B8] hover:text-[#64748B] transition-colors"
-      >
-        {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-        <span className={pulsing ? 'animate-pulse' : undefined}>{label}</span>
-      </button>
-      {expanded && (
-        <div className="mt-1 px-3 py-2 rounded-btn bg-[#F8FAFC] border border-[#E2E8F0]
-          text-caption text-[#64748B] whitespace-pre-wrap leading-relaxed max-h-60 overflow-y-auto">
-          {thinking}
-        </div>
-      )}
-    </div>
-  )
-}
-
-/**
  * memo 是这里真正治"卡顿"的一环：IntakeChat.tsx 的打字机队列每帧都会更新
- * Zustand store 里当前会话的 streamingContent/thinkingContent，而 Zustand 的
+ * Zustand store 里当前会话的 streamingContent，而 Zustand 的
  * selector 一旦返回新的会话对象引用，整个 IntakeChat 组件树都会重新渲染——
  * 如果 ChatMessageBubble 不做记忆化，意味着对话里*已经生成完*的每一条历史消息，
  * 也会跟着每帧重新执行一遍、重新跑一遍 ReactMarkdown 解析，纯属浪费，且随对话
@@ -137,7 +95,6 @@ function ChatMessageBubble({ message }: Props) {
         <Bot className="w-4 h-4 text-white" />
       </div>
       <div className="max-w-[85%] pt-1 text-sm leading-relaxed text-[#0F172A] break-words">
-        {message.thinking && <ThinkingDisclosure thinking={message.thinking} />}
         <ReactMarkdown remarkPlugins={[remarkGfm]} components={buildMarkdownComponents(message.citations)}>
           {preprocessCitations(message.content)}
         </ReactMarkdown>
@@ -168,15 +125,6 @@ export function ChatTypingIndicator() {
 }
 
 /**
- * Streaming bubble shows partial content while tokens arrive. `thinking` is
- * kimi-k2.6's hidden reasoning_content, buffered+compliance-filtered on the
- * backend (see intake_agent.py::_ThinkingBuffer) — while real content hasn't
- * started yet, this is the only signal that anything is happening at all, so
- * it's shown expanded by default (growing live) instead of a bare "AI 正在
- * 思考..." placeholder; once content starts, it auto-collapses to make room
- * for the real answer without losing the ability to expand it again (see
- * docs/疑问杂项.md「/api/v1/intake/chat 响应慢的原因与优化方向」)。
- *
  * `wj-stream-fade-in` is applied to the outer bubble once, on mount (this
  * component only exists for the lifetime of one streaming turn) — smoothness
  * of the growing text itself comes from IntakeChat.tsx's requestAnimationFrame
@@ -189,10 +137,9 @@ export function ChatTypingIndicator() {
  * and a synchronous render that takes longer than one frame is what actually
  * causes visible dropped frames — no amount of CSS animation fixes that.
  * Deferring lets React deprioritize/interrupt this specific re-parse under
- * load instead of blocking the frame, while cheap parts (cursor, thinking
- * label) still track the latest value immediately.
+ * load instead of blocking the frame, while the cursor still tracks the latest value immediately.
  */
-export function ChatStreamingBubble({ content, thinking }: { content: string; thinking?: string }) {
+export function ChatStreamingBubble({ content }: { content: string }) {
   const deferredContent = useDeferredValue(content)
   return (
     <div className="flex gap-2 items-start wj-stream-fade-in">
@@ -201,25 +148,17 @@ export function ChatStreamingBubble({ content, thinking }: { content: string; th
         <Bot className="w-4 h-4 text-white" />
       </div>
       <div className="max-w-[85%] pt-1 text-sm leading-relaxed text-[#0F172A] break-words">
-        {thinking && (
-          <ThinkingDisclosure
-            thinking={thinking}
-            label={content ? '查看AI推理过程' : 'AI 正在思考…'}
-            defaultExpanded={!content}
-            pulsing={!content}
-          />
-        )}
         {content ? (
           <ReactMarkdown remarkPlugins={[remarkGfm]} components={buildMarkdownComponents([])}>
             {preprocessCitations(deferredContent)}
           </ReactMarkdown>
-        ) : !thinking ? (
+        ) : (
           <div className="flex gap-1 items-center h-4">
             <span className="w-1.5 h-1.5 rounded-full bg-[#94A3B8] animate-bounce [animation-delay:0ms]" />
             <span className="w-1.5 h-1.5 rounded-full bg-[#94A3B8] animate-bounce [animation-delay:150ms]" />
             <span className="w-1.5 h-1.5 rounded-full bg-[#94A3B8] animate-bounce [animation-delay:300ms]" />
           </div>
-        ) : null}
+        )}
         <span className="inline-block w-0.5 h-4 bg-[#1E40AF] animate-pulse ml-0.5 align-text-bottom" />
       </div>
     </div>

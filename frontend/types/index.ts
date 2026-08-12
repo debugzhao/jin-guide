@@ -93,9 +93,6 @@ export interface ChatMessage {
   created_at: string
   /** True while the assistant message is still streaming tokens */
   streaming?: boolean
-  /** kimi-k2.6 隐藏思维链（已过正则合规过滤），仅 IntakeAgent 消息可能带；
-   *  用于"查看AI推理过程"可展开区域，默认收起 */
-  thinking?: string
 }
 
 export interface ChatState {

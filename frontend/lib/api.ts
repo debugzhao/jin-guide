@@ -402,8 +402,6 @@ export const intakeChatApi = {
     message: string,
     conversationId: string | null,
     callbacks: {
-      /** kimi-k2.6 隐藏思维链的增量片段，仅用于展示"AI 正在思考..."过渡态，不是正式回复内容 */
-      onThinking?: (token: string) => void
       onToken: (token: string) => void
       onTriggerProfileCapture: () => void
       onDone: (conversationId?: string) => void
@@ -469,9 +467,7 @@ export const intakeChatApi = {
               const raw = line.slice(6).trim()
               try {
                 const data = JSON.parse(raw)
-                if (currentEvent === 'thinking') {
-                  callbacks.onThinking?.(data.content ?? '')
-                } else if (currentEvent === 'token') {
+                if (currentEvent === 'token') {
                   callbacks.onToken(data.content ?? '')
                 } else if (currentEvent === 'trigger_profile_capture') {
                   callbacks.onTriggerProfileCapture()

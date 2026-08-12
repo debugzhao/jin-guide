@@ -47,7 +47,7 @@ async def _llm_judge(plan_json: dict, compliance_issues: list[str]) -> dict:
     """
     Layer 2 LLM judge: semantic over-promise detection.
     Returns {"passed": bool, "feedback": str, "issues": list[str]}.
-    On any exception, returns {"passed": True, "feedback": "judge unavailable"}.
+    On any exception, returns a failed result so an unavailable reviewer cannot approve a report.
     """
     # Flatten plan text for LLM review
     plan_text = json.dumps(plan_json, ensure_ascii=False, indent=2)
@@ -103,15 +103,29 @@ async def _llm_judge(plan_json: dict, compliance_issues: list[str]) -> dict:
             content = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
 
         result = json.loads(content)
+        if not isinstance(result, dict):
+            raise ValueError("合规审查返回值不是 JSON 对象")
+        raw_issues = result.get("issues", [])
+        if not isinstance(raw_issues, list):
+            raise ValueError("合规审查 issues 不是数组")
+        issues = [str(i) for i in raw_issues if i]
+        passed = result.get("passed") is True
+        if passed and issues:
+            passed = False
         return {
-            "passed": bool(result.get("passed", False)),
+            "passed": passed,
             "feedback": str(result.get("feedback", "")),
-            "issues": [str(i) for i in result.get("issues", [])],
+            "issues": issues,
         }
     except Exception as exc:
         logger.warning("LLM judge unavailable in reflection_agent: %s", exc)
-        # Conservative fallback: treat as passed to avoid infinite retry loops
-        return {"passed": True, "feedback": "judge unavailable", "issues": []}
+        # 高考志愿属于高风险决策；审查不可用不能等价为内容安全，交给图的有限重试与
+        # 失败终态处理，避免未审查报告被标记为 completed。
+        return {
+            "passed": False,
+            "feedback": "合规审查暂时不可用",
+            "issues": ["合规审查服务不可用"],
+        }
 
 
 async def reflection_agent(state: VolunteerPlanState) -> dict:
@@ -144,8 +158,8 @@ async def reflection_agent(state: VolunteerPlanState) -> dict:
     feedback = llm_result.get("feedback", "")
     llm_issues = llm_result.get("issues", [])
 
-    # Early exit: LLM explicitly says passed or "无需改进"
-    if llm_passed or "无需改进" in feedback:
+    # 只信任结构化 passed=true；自然语言 feedback 不能覆盖失败状态。
+    if llm_passed:
         logger.info("Reflection Agent passed on iter %d (early exit)", iterations)
         return {
             "compliance_passed": True,

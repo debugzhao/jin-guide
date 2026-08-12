@@ -307,6 +307,7 @@ async def report_agent(state: VolunteerPlanState) -> dict:
             report = existing.scalar_one_or_none()
             if report:
                 report_id = report.id
+                report.status = "generating"
                 report.risk_level = overall_risk
                 report.risk_score = risk_score
                 report.plan_json = plan_json
@@ -319,7 +320,7 @@ async def report_agent(state: VolunteerPlanState) -> dict:
                     user_id=state.get("user_id") or None,
                     anonymous_id=state.get("anonymous_id") or None,
                     run_id=run_id,
-                    status="completed",
+                    status="generating",
                     risk_level=overall_risk,
                     risk_score=risk_score,
                     plan_json=plan_json,

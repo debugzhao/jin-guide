@@ -135,11 +135,10 @@ class TestReflectionLayer2:
         assert result["compliance_issues"] == []
 
     @pytest.mark.asyncio
-    async def test_early_exit_on_wuxu_gaijin_in_feedback(self):
-        """'无需改进' in feedback → early exit with passed=True regardless of passed field."""
+    async def test_feedback_cannot_override_failed_structured_result(self):
+        """自然语言写“无需改进”也不能覆盖结构化 passed=false。"""
         from app.agent.nodes.reflection_agent import reflection_agent
 
-        # Even if passed=False but feedback contains "无需改进" → treat as passed
         llm_result = {"passed": False, "feedback": "无需改进，报告内容合规", "issues": []}
         with patch(
             "app.agent.nodes.reflection_agent._llm_judge",
@@ -147,7 +146,7 @@ class TestReflectionLayer2:
         ):
             result = await reflection_agent(_make_state(CLEAN_PLAN))
 
-        assert result["compliance_passed"] is True
+        assert result["compliance_passed"] is False
 
     @pytest.mark.asyncio
     async def test_llm_judge_fail_returns_issues(self):
@@ -169,8 +168,8 @@ class TestReflectionLayer2:
         assert "录取概率极高" in result["compliance_issues"]
 
     @pytest.mark.asyncio
-    async def test_llm_judge_exception_treated_as_passed(self):
-        """If LLM judge raises exception, fallback returns passed=True (conservative)."""
+    async def test_llm_judge_exception_fails_closed(self):
+        """审查服务异常时必须失败关闭，不能把“未审查”当作“已通过”。"""
         from app.agent.nodes.reflection_agent import _llm_judge
 
         with patch(
@@ -179,8 +178,9 @@ class TestReflectionLayer2:
             mock_client.return_value.__aenter__.side_effect = Exception("connection error")
             result = await _llm_judge(CLEAN_PLAN, [])
 
-        assert result["passed"] is True
-        assert result["feedback"] == "judge unavailable"
+        assert result["passed"] is False
+        assert result["feedback"] == "合规审查暂时不可用"
+        assert result["issues"] == ["合规审查服务不可用"]
 
     @pytest.mark.asyncio
     async def test_issues_deduplicated(self):
@@ -231,22 +231,24 @@ class TestReflectionRouting:
         }
         assert self._call_route(state) == "report"
 
-    def test_fail_iter3_routes_to_end_best_effort(self):
-        """达最大轮次（3）仍未通过：不再有 human_review 分支，best-effort 交付。"""
+    def test_fail_iter3_stops_delivery(self):
+        """达最大轮次仍未通过时终止任务，不能交付未通过审查的报告。"""
         state = {
             "compliance_passed": False,
             "reflection_iterations": 3,
         }
-        assert self._call_route(state) == "end"
+        with pytest.raises(RuntimeError, match="未通过合规审查"):
+            self._call_route(state)
 
-    def test_fail_iter4_routes_to_end_best_effort(self):
-        """超过最大轮次同样 best-effort 交付。"""
+    def test_fail_iter4_stops_delivery(self):
+        """超过最大轮次同样不能降级放行。"""
         state = {
             "compliance_passed": False,
             "reflection_iterations": 4,
         }
-        assert self._call_route(state) == "end"
+        with pytest.raises(RuntimeError, match="未通过合规审查"):
+            self._call_route(state)
 
-    def test_default_state_routes_to_end(self):
-        """Missing fields default to safe values → end."""
-        assert self._call_route({}) == "end"
+    def test_default_state_does_not_fail_open(self):
+        """缺失审查状态不能默认视为通过。"""
+        assert self._call_route({}) == "report"
