@@ -11,6 +11,7 @@ from app.api.v1.router import router as v1_router
 from app.config import settings
 from app.database import engine
 from app.logging_config import configure_logging
+from app.prompts import prompt_registry
 
 # LangSmith tracing: must be set before any LangChain/LangGraph import creates a client.
 # LangGraph auto-reads these env vars; no code changes needed in graph.py.
@@ -21,6 +22,7 @@ if settings.langsmith_api_key:
 
 configure_logging()
 logger = structlog.get_logger()
+prompt_registry.validate_all()
 
 app = FastAPI(
     title="问津 Agent API",

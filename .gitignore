@@ -12,6 +12,7 @@ venv/
 env/
 .env
 .env.*
+!.env.example
 *.egg-info/
 dist/
 build/

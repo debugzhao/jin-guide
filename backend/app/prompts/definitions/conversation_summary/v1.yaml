@@ -1,0 +1,31 @@
+prompt_name: conversation_summary
+version: v1
+owner: agent-platform
+description: 长对话早期信息结构化摘要
+input_variables: [previous_summary, conversation_segment]
+output_schema: ConversationSummaryOutput
+model:
+  alias: profile-agent
+  temperature: 1
+  max_tokens: 3000
+  timeout_seconds: 240
+  stream: true
+templates:
+  user: |-
+    你在维护一段高考志愿咨询对话的结构化摘要，用于在对话变长后仍能记住早期关键信息。
+    下面是已有的摘要（JSON），以及本轮需要并入摘要、即将从原文窗口中滑出的对话片段。
+    请基于两者输出【更新后】的完整摘要 JSON（覆盖式输出全部字段，不要只输出增量）。字段含义：
+    - confirmed_facts：用户明确给出的硬事实（预算、省份、分数、位次等），新事实覆盖旧值；
+    - preferences：用户表达过的偏好（城市、专业方向等）；
+    - rejected_options：用户明确排除/不考虑的选项；
+    - previous_decisions：本轮对话中做过的决定或结论；
+    - open_questions：还没解决、需要后续跟进的问题。
+    每个字段的值必须是【字符串数组】，即使只有一条也要用数组包裹（例如
+    "confirmed_facts": ["预算：12万元/年"]，不要输出成对象 {"annual_budget": "12万元/年"}）。
+    只输出 JSON 本身，不要任何解释文字，不要 markdown 代码块围栏。
+
+    已有摘要：
+    $previous_summary
+
+    本轮需要并入摘要的对话片段：
+    $conversation_segment

@@ -1,12 +1,16 @@
 """Prompt 注入、流式输出和工具边界的 P0 安全回归测试。"""
 from __future__ import annotations
 
+import pytest
+
+from app.agent import intake_agent
 from app.agent.conversation_agent import _SYSTEM_PROMPT as CONVERSATION_SYSTEM_PROMPT
 from app.agent.conversation_agent import _build_messages as build_conversation_messages
 from app.agent.intake_agent import _SYSTEM_PROMPT as INTAKE_SYSTEM_PROMPT
 from app.agent.intake_agent import _build_messages as build_intake_messages
 from app.agent.intake_agent import _validate_tool_arguments
 from app.agent.output_guard import StreamingOutputGuard, sanitize_citations
+from app.prompts import prompt_registry
 
 
 def test_forbidden_phrase_split_across_chunks_is_sanitized_before_emit():
@@ -71,6 +75,14 @@ def test_direct_user_injection_stays_in_user_role():
     assert messages[-1] == {"role": "user", "content": injection}
 
 
+def test_user_controlled_data_is_not_a_system_prompt_variable():
+    intake_prompt = prompt_registry.get("intake_chat")
+    report_prompt = prompt_registry.get("report_conversation")
+
+    assert intake_prompt.input_variables == ["forbidden_phrases"]
+    assert report_prompt.input_variables == ["forbidden_phrases"]
+
+
 def test_tool_arguments_reject_unknown_fields_and_out_of_range_year():
     args, error = _validate_tool_arguments(
         "lookup_university_score",
@@ -100,3 +112,61 @@ def test_unknown_tool_is_rejected():
 
     assert args is None
     assert error == "未知工具 dump_database"
+
+
+class _DummyAsyncClient:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return False
+
+
+async def _fake_reasoning_stream(client, messages, *, use_tools):
+    yield {
+        "choices": [
+            {"delta": {"reasoning_content": "内部分析保证"}, "finish_reason": None}
+        ]
+    }
+    yield {
+        "choices": [
+            {"delta": {"reasoning_content": "录取后再回答"}, "finish_reason": None}
+        ]
+    }
+    yield {"choices": [{"delta": {"content": "安全答复"}, "finish_reason": "stop"}]}
+
+
+@pytest.mark.asyncio
+async def test_reasoning_is_not_emitted_when_backend_flag_is_disabled(monkeypatch):
+    monkeypatch.setattr(intake_agent.httpx, "AsyncClient", _DummyAsyncClient)
+    monkeypatch.setattr(intake_agent, "_stream_chat", _fake_reasoning_stream)
+
+    events = [
+        event
+        async for event in intake_agent.stream_intake_response(
+            history=[], user_message="测试", reasoning_display_enabled=False
+        )
+    ]
+
+    assert not any(event["type"] == "thinking" for event in events)
+    assert any(event == {"type": "token", "content": "安全答复"} for event in events)
+
+
+@pytest.mark.asyncio
+async def test_enabled_reasoning_is_filtered_before_emit(monkeypatch):
+    monkeypatch.setattr(intake_agent.httpx, "AsyncClient", _DummyAsyncClient)
+    monkeypatch.setattr(intake_agent, "_stream_chat", _fake_reasoning_stream)
+
+    events = [
+        event
+        async for event in intake_agent.stream_intake_response(
+            history=[], user_message="测试", reasoning_display_enabled=True
+        )
+    ]
+    thinking = "".join(event["content"] for event in events if event["type"] == "thinking")
+
+    assert "保证录取" not in thinking
+    assert "有录取可能" in thinking

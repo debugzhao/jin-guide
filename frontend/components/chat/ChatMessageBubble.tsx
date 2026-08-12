@@ -1,7 +1,7 @@
 'use client'
 
-import { memo, useDeferredValue } from 'react'
-import { Bot } from 'lucide-react'
+import { memo, useDeferredValue, useState } from 'react'
+import { Bot, ChevronDown, ChevronRight } from 'lucide-react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { ChatMessage, ChatCitation } from '@/types'
@@ -9,6 +9,7 @@ import CitationInline from './CitationInline'
 
 interface Props {
   message: ChatMessage
+  showReasoning?: boolean
 }
 
 const CITATION_PATTERN = /\[来源:([^\]]+)\]/g
@@ -20,6 +21,40 @@ const CITATION_PATTERN = /\[来源:([^\]]+)\]/g
  */
 function preprocessCitations(content: string) {
   return content.replace(CITATION_PATTERN, (_match, sourceId) => `[来源:${sourceId}](#citation:${encodeURIComponent(sourceId)})`)
+}
+
+export function ThinkingDisclosure({
+  thinking,
+  label = '查看 AI 推理过程',
+  defaultExpanded = false,
+  pulsing = false,
+}: {
+  thinking: string
+  label?: string
+  defaultExpanded?: boolean
+  pulsing?: boolean
+}) {
+  const [manualExpanded, setManualExpanded] = useState<boolean | null>(null)
+  const expanded = manualExpanded ?? defaultExpanded
+
+  return (
+    <div className="my-1.5">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setManualExpanded(!expanded)}
+        className="flex items-center gap-1 text-caption text-neutral-placeholder transition-colors hover:text-neutral-text-secondary"
+      >
+        {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        <span className={pulsing ? 'animate-pulse' : undefined}>{label}</span>
+      </button>
+      {expanded && (
+        <div className="mt-1 max-h-60 overflow-y-auto whitespace-pre-wrap rounded-btn border border-neutral-border bg-neutral-border/20 px-3 py-2 text-caption leading-relaxed text-neutral-text-secondary">
+          {thinking}
+        </div>
+      )}
+    </div>
+  )
 }
 
 function buildMarkdownComponents(citations: ChatCitation[]): Components {
@@ -74,7 +109,7 @@ function buildMarkdownComponents(citations: ChatCitation[]): Components {
  * 变长而线性变差。message 对象在 store 里只追加不修改，引用稳定，默认浅比较
  * 就能正确跳过没变化的历史消息。
  */
-function ChatMessageBubble({ message }: Props) {
+function ChatMessageBubble({ message, showReasoning = false }: Props) {
   const isUser = message.role === 'user'
 
   if (isUser) {
@@ -95,6 +130,7 @@ function ChatMessageBubble({ message }: Props) {
         <Bot className="w-4 h-4 text-white" />
       </div>
       <div className="max-w-[85%] pt-1 text-sm leading-relaxed text-[#0F172A] break-words">
+        {showReasoning && message.thinking && <ThinkingDisclosure thinking={message.thinking} />}
         <ReactMarkdown remarkPlugins={[remarkGfm]} components={buildMarkdownComponents(message.citations)}>
           {preprocessCitations(message.content)}
         </ReactMarkdown>
@@ -139,7 +175,15 @@ export function ChatTypingIndicator() {
  * Deferring lets React deprioritize/interrupt this specific re-parse under
  * load instead of blocking the frame, while the cursor still tracks the latest value immediately.
  */
-export function ChatStreamingBubble({ content }: { content: string }) {
+export function ChatStreamingBubble({
+  content,
+  thinking,
+  showReasoning = false,
+}: {
+  content: string
+  thinking?: string
+  showReasoning?: boolean
+}) {
   const deferredContent = useDeferredValue(content)
   return (
     <div className="flex gap-2 items-start wj-stream-fade-in">
@@ -148,17 +192,25 @@ export function ChatStreamingBubble({ content }: { content: string }) {
         <Bot className="w-4 h-4 text-white" />
       </div>
       <div className="max-w-[85%] pt-1 text-sm leading-relaxed text-[#0F172A] break-words">
+        {showReasoning && thinking && (
+          <ThinkingDisclosure
+            thinking={thinking}
+            label={content ? '查看 AI 推理过程' : 'AI 正在思考…'}
+            defaultExpanded={!content}
+            pulsing={!content}
+          />
+        )}
         {content ? (
           <ReactMarkdown remarkPlugins={[remarkGfm]} components={buildMarkdownComponents([])}>
             {preprocessCitations(deferredContent)}
           </ReactMarkdown>
-        ) : (
+        ) : !showReasoning || !thinking ? (
           <div className="flex gap-1 items-center h-4">
             <span className="w-1.5 h-1.5 rounded-full bg-[#94A3B8] animate-bounce [animation-delay:0ms]" />
             <span className="w-1.5 h-1.5 rounded-full bg-[#94A3B8] animate-bounce [animation-delay:150ms]" />
             <span className="w-1.5 h-1.5 rounded-full bg-[#94A3B8] animate-bounce [animation-delay:300ms]" />
           </div>
-        )}
+        ) : null}
         <span className="inline-block w-0.5 h-4 bg-[#1E40AF] animate-pulse ml-0.5 align-text-bottom" />
       </div>
     </div>

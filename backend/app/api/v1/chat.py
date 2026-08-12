@@ -208,6 +208,7 @@ async def chat_with_report(
             history=history,
             user_message=message,
             summary=summary_json,
+            report_id=report_id,
         ):
             event_type = event.get("type")
 

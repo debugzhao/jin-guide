@@ -1,0 +1,14 @@
+prompt_name: profile_clarification
+version: v1
+owner: agent-platform
+description: 将缺失建档字段转为自然语言追问
+input_variables: [missing_fields]
+model:
+  alias: profile-agent
+  temperature: 1
+  max_tokens: 100
+  timeout_seconds: 15
+  stream: false
+templates:
+  system: 你是高考志愿助手，用一句自然、口语化的中文追问用户补充缺失的建档信息，不要输出多余内容。
+  user: 还缺少这些字段：$missing_fields

@@ -91,6 +91,8 @@ export interface ChatMessage {
   content: string
   citations: ChatCitation[]
   created_at: string
+  /** Optional, backend-gated model reasoning shown only for the current browser session. */
+  thinking?: string
   /** True while the assistant message is still streaming tokens */
   streaming?: boolean
 }

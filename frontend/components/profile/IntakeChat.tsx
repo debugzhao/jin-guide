@@ -55,6 +55,8 @@ export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) 
   const {
     messages,
     streamingContent,
+    thinkingContent,
+    reasoningDisplayEnabled,
     isStreaming,
     dailyLimitReached,
     dailyLimitMessage,
@@ -126,6 +128,7 @@ export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) 
     const CATCHUP_DIVISOR = 12
 
     let contentQueue = ''
+    let thinkingQueue = ''
     let revealHandle: number | null = null
     let pendingDone: { conversationId?: string } | null = null
 
@@ -144,13 +147,18 @@ export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) 
     const revealTick = () => {
       revealHandle = null
 
+      if (thinkingQueue) {
+        const n = Math.max(BASE_CHARS_PER_FRAME, Math.ceil(thinkingQueue.length / CATCHUP_DIVISOR))
+        useAppStore.getState().intakeAppendThinkingToken(key, thinkingQueue.slice(0, n))
+        thinkingQueue = thinkingQueue.slice(n)
+      }
       if (contentQueue) {
         const n = Math.max(BASE_CHARS_PER_FRAME, Math.ceil(contentQueue.length / CATCHUP_DIVISOR))
         useAppStore.getState().intakeAppendStreamToken(key, contentQueue.slice(0, n))
         contentQueue = contentQueue.slice(n)
       }
 
-      if (contentQueue) {
+      if (contentQueue || thinkingQueue) {
         revealHandle = requestAnimationFrame(revealTick)
       } else if (pendingDone) {
         finalizeDone()
@@ -166,6 +174,14 @@ export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) 
     // key 在这里被闭包捕获——即使用户后来切到别的会话，这些回调也一直只写回
     // 当初发消息时所在的那个会话，不会被"当前正在看哪个会话"影响。
     const abort = intakeChatApi.streamMessage(text, key === INTAKE_DRAFT_KEY ? null : key, {
+      onReasoningConfig: (enabled) => {
+        useAppStore.getState().intakeSetReasoningDisplayEnabled(key, enabled)
+        if (!enabled) thinkingQueue = ''
+      },
+      onThinking: (token) => {
+        thinkingQueue += token
+        scheduleReveal()
+      },
       onToken: (token) => {
         contentQueue += token
         scheduleReveal()
@@ -180,7 +196,7 @@ export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) 
         // 不立刻收尾——队列里可能还有没吐完的字，等 revealTick 把队列吐空了
         // 再真正 commit，否则最终消息会缺最后一截还没显示出来的文本。
         pendingDone = { conversationId }
-        if (!contentQueue) finalizeDone()
+        if (!contentQueue && !thinkingQueue) finalizeDone()
         else scheduleReveal()
       },
       onComplianceWarning: () => {},
@@ -191,6 +207,7 @@ export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) 
         if (revealHandle !== null) cancelAnimationFrame(revealHandle)
         revealHandle = null
         contentQueue = ''
+        thinkingQueue = ''
         const store = useAppStore.getState()
         if (key !== INTAKE_DRAFT_KEY) {
           store.intakeRenameConversationKey(key, INTAKE_DRAFT_KEY)
@@ -206,6 +223,7 @@ export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) 
         if (revealHandle !== null) cancelAnimationFrame(revealHandle)
         revealHandle = null
         contentQueue = ''
+        thinkingQueue = ''
         useAppStore.getState().intakeSetStreaming(key, false)
         useAppStore.getState().intakeSetLastFailedMessage(key, text)
         console.error('Intake chat error:', msg)
@@ -236,9 +254,15 @@ export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) 
   const messageList = (
     <div className="space-y-3">
       {messages.map((msg) => (
-        <ChatMessageBubble key={msg.id} message={msg} />
+        <ChatMessageBubble key={msg.id} message={msg} showReasoning={reasoningDisplayEnabled} />
       ))}
-      {isStreaming && <ChatStreamingBubble content={streamingContent} />}
+      {isStreaming && (
+        <ChatStreamingBubble
+          content={streamingContent}
+          thinking={thinkingContent}
+          showReasoning={reasoningDisplayEnabled}
+        />
+      )}
 
       {lastFailedMessage && !isStreaming && (
         <div className="flex items-center justify-between gap-2 px-3 py-2.5 rounded-btn bg-[#FEF2F2] border border-[#FECACA]">

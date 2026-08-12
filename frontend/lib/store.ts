@@ -74,6 +74,8 @@ export const INTAKE_DRAFT_KEY = '__draft__'
 export interface IntakeConversationState {
   messages: ChatMessage[]
   streamingContent: string
+  thinkingContent: string
+  reasoningDisplayEnabled: boolean
   isStreaming: boolean
   dailyLimitReached: boolean
   dailyLimitMessage: string | null
@@ -85,6 +87,8 @@ export interface IntakeConversationState {
 export const EMPTY_INTAKE_CONVERSATION_STATE: IntakeConversationState = Object.freeze({
   messages: [],
   streamingContent: '',
+  thinkingContent: '',
+  reasoningDisplayEnabled: false,
   isStreaming: false,
   dailyLimitReached: false,
   dailyLimitMessage: null,
@@ -109,6 +113,8 @@ interface IntakeSlice {
   setIntakeHistoryLoaded: (key: string, messages: ChatMessage[]) => void
   intakeAppendUserMessage: (key: string, content: string) => void
   intakeAppendStreamToken: (key: string, token: string) => void
+  intakeAppendThinkingToken: (key: string, token: string) => void
+  intakeSetReasoningDisplayEnabled: (key: string, enabled: boolean) => void
   intakeCommitStreamingMessage: (key: string) => void
   intakeSetStreaming: (key: string, streaming: boolean) => void
   intakeSetDailyLimit: (key: string, reached: boolean, message?: string) => void
@@ -224,6 +230,7 @@ export const useAppStore = create<AppStore>()(
                 messages: [...prev.messages, msg],
                 isStreaming: true,
                 streamingContent: '',
+                thinkingContent: '',
                 historyLoaded: true,
               },
             },
@@ -238,6 +245,33 @@ export const useAppStore = create<AppStore>()(
             intakeConversations: {
               ...s.intakeConversations,
               [key]: { ...prev, streamingContent: prev.streamingContent + token },
+            },
+          }
+        }),
+
+      intakeAppendThinkingToken: (key, token) =>
+        set((s) => {
+          const prev = s.intakeConversations[key] ?? EMPTY_INTAKE_CONVERSATION_STATE
+          if (!prev.reasoningDisplayEnabled) return {}
+          return {
+            intakeConversations: {
+              ...s.intakeConversations,
+              [key]: { ...prev, thinkingContent: prev.thinkingContent + token },
+            },
+          }
+        }),
+
+      intakeSetReasoningDisplayEnabled: (key, enabled) =>
+        set((s) => {
+          const prev = s.intakeConversations[key] ?? EMPTY_INTAKE_CONVERSATION_STATE
+          return {
+            intakeConversations: {
+              ...s.intakeConversations,
+              [key]: {
+                ...prev,
+                reasoningDisplayEnabled: enabled,
+                thinkingContent: enabled ? prev.thinkingContent : '',
+              },
             },
           }
         }),
@@ -257,6 +291,7 @@ export const useAppStore = create<AppStore>()(
             id: uuidv4(),
             role: 'assistant',
             content: prev.streamingContent,
+            thinking: prev.reasoningDisplayEnabled ? prev.thinkingContent || undefined : undefined,
             citations: [],
             created_at: new Date().toISOString(),
           }
@@ -267,6 +302,7 @@ export const useAppStore = create<AppStore>()(
                 ...prev,
                 messages: [...prev.messages, msg],
                 streamingContent: '',
+                thinkingContent: '',
                 isStreaming: false,
               },
             },

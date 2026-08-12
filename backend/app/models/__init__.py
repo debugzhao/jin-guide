@@ -21,6 +21,7 @@ from app.models.admission import (
     RuleRequirement,
 )
 from app.models.notification import Notification
+from app.models.prompt_invocation import PromptInvocation
 
 __all__ = [
     "Base",
@@ -45,4 +46,5 @@ __all__ = [
     "AdmissionPlan",
     "RuleRequirement",
     "Notification",
+    "PromptInvocation",
 ]

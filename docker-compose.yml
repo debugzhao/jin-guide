@@ -69,6 +69,7 @@ services:
       COHERE_API_KEY: ${COHERE_API_KEY:-}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       EMAIL_FROM: ${EMAIL_FROM:-问津 <onboarding@resend.dev>}
+      ENABLE_REASONING_DISPLAY: ${ENABLE_REASONING_DISPLAY:-true}
       ENV: development
     depends_on:
       postgres:

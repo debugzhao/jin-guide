@@ -1,0 +1,16 @@
+prompt_name: conversation_title
+version: v1
+owner: agent-platform
+description: 为 Intake 首轮对话生成短标题
+input_variables: [user_message, assistant_response]
+model:
+  alias: profile-agent
+  temperature: 1
+  max_tokens: 500
+  timeout_seconds: 30
+  stream: false
+templates:
+  user: |-
+    为下面这轮高考志愿咨询对话拟一个不超过 14 个字的简短标题，只输出标题本身，不要引号、句末标点或任何解释。
+    用户：$user_message
+    助手：$assistant_response

@@ -11,16 +11,27 @@ from uuid import uuid4
 
 import httpx
 import redis.asyncio as aioredis
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.agent.nodes.compliance import check_compliance_report
 from app.agent.state import VolunteerPlanState
 from app.config import settings
+from app.prompts import prompt_registry
+from app.prompts.tracing import track_prompt_invocation
 
 logger = logging.getLogger(__name__)
 
-_REPORT_MODEL = "report-agent"
+_PROMPT = prompt_registry.get("report_generation")
+_REPORT_MODEL = _PROMPT.model.alias
 _MAX_CANDIDATES_FOR_LLM = 12  # limit to avoid huge prompts
-_LLM_TIMEOUT = 60.0
+_LLM_TIMEOUT = _PROMPT.model.timeout_seconds
+
+
+class ReportGenerationOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reasons: dict[str, list[str]]
+    condition_commentary: str = ""
 
 
 async def _push_sse(run_id: str, event: str, data: dict) -> None:
@@ -35,23 +46,19 @@ async def _push_sse(run_id: str, event: str, data: dict) -> None:
         await redis_client.aclose()
 
 
-async def _call_llm(messages: list[dict]) -> str:
+async def _call_llm(messages: list[dict], *, run_id: str | None = None) -> str:
     """Call LiteLLM proxy to generate report text."""
-    async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as client:
-        resp = await client.post(
-            f"{settings.litellm_base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {settings.litellm_master_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": _REPORT_MODEL,
-                "messages": messages,
-                "max_tokens": 2000,
-                "temperature": 1,
-            },
-        )
-        resp.raise_for_status()
+    async with track_prompt_invocation(_PROMPT, agent_run_id=run_id) as invocation:
+        async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as client:
+            resp = await client.post(
+                f"{settings.litellm_base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.litellm_master_key}",
+                    "Content-Type": "application/json",
+                },
+                json={**invocation.request_options(), "messages": messages},
+            )
+            resp.raise_for_status()
     return resp.json()["choices"][0]["message"]["content"]
 
 
@@ -75,14 +82,6 @@ def _build_llm_prompt(profile: dict, top_candidates: list[dict], has_preferences
 
     candidates_text = "\n".join(cand_lines)
 
-    system_msg = (
-        "你是一位专业的高考志愿咨询师。根据学生档案和候选院校信息，"
-        "为每所院校生成2-3条具体的推荐理由，并生成一段简短的条件点评。"
-        "要求：语言简洁、基于数据事实、避免模糊表述。"
-        "禁止出现：保证录取、必中、精准录取、包过、保上、百分百录取、内部数据等表述。"
-        "只返回JSON格式，不要其他内容。"
-    )
-
     if has_preferences:
         commentary_instruction = (
             "condition_commentary：指出学生输入条件里的张力或可优化点（例如地域偏好和预算存在冲突），"
@@ -94,27 +93,22 @@ def _build_llm_prompt(profile: dict, top_candidates: list[dict], has_preferences
             "生成一句引导性点评，说明报告会先覆盖更多候选、建议后续补充偏好以收窄范围，不要编造张力。"
         )
 
-    user_msg = f"""学生信息：
-- 省份：{province}，批次：{batch}
-- 成绩：{score}分，位次：{rank}
-- 选科：{'、'.join(subjects)}
-
-候选院校列表（共{len(top_candidates)}所）：
-{candidates_text}
-
-{commentary_instruction}
-
-请生成推荐理由和条件点评，返回格式：
-{{
-  "reasons": {{
-    "院校序号（1-{len(top_candidates)}）": ["理由1", "理由2", "理由3（可选）"]
-  }},
-  "condition_commentary": "一句话点评"
-}}"""
-
     return [
-        {"role": "system", "content": system_msg},
-        {"role": "user", "content": user_msg},
+        {"role": "system", "content": _PROMPT.render("system")},
+        {
+            "role": "user",
+            "content": _PROMPT.render(
+                "user",
+                province=province,
+                batch=batch,
+                score=score,
+                rank=rank,
+                subjects="、".join(subjects),
+                candidate_count=len(top_candidates),
+                candidates=candidates_text,
+                commentary_instruction=commentary_instruction,
+            ),
+        },
     ]
 
 
@@ -127,8 +121,8 @@ def _parse_llm_reasons(content: str, candidate_count: int) -> tuple[dict[int, li
             lines = text.split("\n")
             text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
 
-        parsed = json.loads(text)
-        reasons_raw = parsed.get("reasons", {})
+        parsed = ReportGenerationOutput.model_validate_json(text)
+        reasons_raw = parsed.reasons
         result: dict[int, list[str]] = {}
         for k, v in reasons_raw.items():
             try:
@@ -137,9 +131,9 @@ def _parse_llm_reasons(content: str, candidate_count: int) -> tuple[dict[int, li
                     result[idx] = [str(r) for r in v[:3]]
             except (ValueError, TypeError):
                 pass
-        commentary = str(parsed.get("condition_commentary") or "").strip()
+        commentary = parsed.condition_commentary.strip()
         return result, commentary
-    except Exception:
+    except (ValueError, ValidationError):
         logger.warning("Failed to parse LLM reasons response")
         return {}, ""
 
@@ -225,7 +219,7 @@ async def report_agent(state: VolunteerPlanState) -> dict:
     if top_candidates:
         try:
             messages = _build_llm_prompt(profile, top_candidates, has_preferences)
-            llm_content = await _call_llm(messages)
+            llm_content = await _call_llm(messages, run_id=run_id)
             llm_reasons, condition_commentary = _parse_llm_reasons(llm_content, len(top_candidates))
         except Exception as exc:
             logger.warning("LLM call failed in report_agent: %s", exc)

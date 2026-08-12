@@ -22,6 +22,7 @@ from app.logging_config import configure_logging
 from app.models.agent_run import AgentRun
 from app.models.profile import Preference, StudentProfile
 from app.models.report import Report
+from app.prompts import prompt_registry
 
 if settings.langsmith_api_key:
     os.environ["LANGCHAIN_TRACING_V2"] = "true"
@@ -30,6 +31,7 @@ if settings.langsmith_api_key:
 
 configure_logging()
 logger = structlog.get_logger()
+prompt_registry.validate_all()
 
 
 def _checkpoint_dsn() -> str:

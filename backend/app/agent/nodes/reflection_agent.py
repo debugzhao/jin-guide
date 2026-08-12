@@ -22,15 +22,19 @@ import logging
 import re
 
 import httpx
+from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
 from app.agent.nodes.compliance import check_compliance_report
 from app.agent.state import VolunteerPlanState
 from app.config import settings
+from app.prompts import prompt_registry
+from app.prompts.tracing import track_prompt_invocation
 
 logger = logging.getLogger(__name__)
 
-_JUDGE_MODEL = "report-agent"
-_LLM_TIMEOUT = 30.0
+_PROMPT = prompt_registry.get("reflection_review")
+_JUDGE_MODEL = _PROMPT.model.alias
+_LLM_TIMEOUT = _PROMPT.model.timeout_seconds
 _MAX_ITERATIONS = 3
 
 # Semantic over-promise patterns for LLM judge prompt guidance
@@ -43,7 +47,23 @@ _SEMANTIC_RISK_EXAMPLES = [
 ]
 
 
-async def _llm_judge(plan_json: dict, compliance_issues: list[str]) -> dict:
+class ReflectionReviewOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    passed: bool
+    feedback: str
+    issues: list[str]
+
+    @model_validator(mode="after")
+    def passing_result_cannot_contain_issues(self) -> "ReflectionReviewOutput":
+        if self.passed and self.issues:
+            raise ValueError("passed=true 时 issues 必须为空")
+        return self
+
+
+async def _llm_judge(
+    plan_json: dict, compliance_issues: list[str], *, run_id: str | None = None
+) -> dict:
     """
     Layer 2 LLM judge: semantic over-promise detection.
     Returns {"passed": bool, "feedback": str, "issues": list[str]}.
@@ -60,41 +80,27 @@ async def _llm_judge(plan_json: dict, compliance_issues: list[str]) -> dict:
         else "正则层未发现明显禁词。"
     )
 
-    system_msg = (
-        "你是高考志愿报告的合规审查员。"
-        "你的任务是检测报告文本中是否存在语义层面的过度承诺或误导性表述，"
-        "即使没有触发明确的禁词。"
-        "常见风险表述示例：录取概率极高、几乎必然录取、可以放心报、稳拿、必然上岸等。"
-        "输出必须是合法 JSON，格式如下：\n"
-        '{"passed": true/false, "feedback": "简洁说明", "issues": ["具体问题1", ...]}\n'
-        "如果报告文本没有任何问题，输出 "
-        '{"passed": true, "feedback": "无需改进", "issues": []}'
-    )
-
-    user_msg = (
-        f"{regex_note}\n\n"
-        f"请审查以下报告内容是否存在过度承诺或误导：\n\n{plan_text}"
-    )
+    system_msg = _PROMPT.render("system")
+    user_msg = _PROMPT.render("user", regex_note=regex_note, plan_text=plan_text)
 
     try:
-        async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as client:
-            resp = await client.post(
-                f"{settings.litellm_base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.litellm_master_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": _JUDGE_MODEL,
-                    "messages": [
-                        {"role": "system", "content": system_msg},
-                        {"role": "user", "content": user_msg},
-                    ],
-                    "max_tokens": 500,
-                    "temperature": 1,
-                },
-            )
-            resp.raise_for_status()
+        async with track_prompt_invocation(_PROMPT, agent_run_id=run_id) as invocation:
+            async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as client:
+                resp = await client.post(
+                    f"{settings.litellm_base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {settings.litellm_master_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        **invocation.request_options(),
+                        "messages": [
+                            {"role": "system", "content": system_msg},
+                            {"role": "user", "content": user_msg},
+                        ],
+                    },
+                )
+                resp.raise_for_status()
         content = resp.json()["choices"][0]["message"]["content"].strip()
 
         # Strip markdown fences
@@ -102,20 +108,11 @@ async def _llm_judge(plan_json: dict, compliance_issues: list[str]) -> dict:
             lines = content.split("\n")
             content = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
 
-        result = json.loads(content)
-        if not isinstance(result, dict):
-            raise ValueError("合规审查返回值不是 JSON 对象")
-        raw_issues = result.get("issues", [])
-        if not isinstance(raw_issues, list):
-            raise ValueError("合规审查 issues 不是数组")
-        issues = [str(i) for i in raw_issues if i]
-        passed = result.get("passed") is True
-        if passed and issues:
-            passed = False
+        result = ReflectionReviewOutput.model_validate_json(content)
         return {
-            "passed": passed,
-            "feedback": str(result.get("feedback", "")),
-            "issues": issues,
+            "passed": result.passed,
+            "feedback": result.feedback,
+            "issues": result.issues,
         }
     except Exception as exc:
         logger.warning("LLM judge unavailable in reflection_agent: %s", exc)
@@ -153,7 +150,7 @@ async def reflection_agent(state: VolunteerPlanState) -> dict:
         }
 
     # ── Layer 2: LLM judge for semantic over-promise ──────────────────────────
-    llm_result = await _llm_judge(plan_json, regex_issues)
+    llm_result = await _llm_judge(plan_json, regex_issues, run_id=run_id)
     llm_passed = llm_result["passed"]
     feedback = llm_result.get("feedback", "")
     llm_issues = llm_result.get("issues", [])

@@ -40,6 +40,8 @@ from app.api.dependencies import Identity, get_identity
 from app.config import settings
 from app.database import get_db
 from app.models.conversation import IntakeConversation
+from app.prompts import prompt_registry
+from app.prompts.tracing import track_prompt_invocation
 from app.services import conversation_store as store
 from app.services.conversation_summary import maybe_generate_summary
 
@@ -50,7 +52,8 @@ _DAILY_LIMIT = 30
 _MAX_MESSAGE_LENGTH = 200
 _TITLE_MAX_LENGTH = 20
 _RENAME_TITLE_MAX_LENGTH = 50
-_TITLE_SUMMARY_MODEL = "profile-agent"  # 轻量虚拟模型，见 litellm_config.yaml
+_TITLE_PROMPT = prompt_registry.get("conversation_title")
+_TITLE_SUMMARY_MODEL = _TITLE_PROMPT.model.alias
 
 
 def _derive_title(message: str) -> str:
@@ -73,34 +76,29 @@ async def _get_owned_conversation(
     return result.scalar_one_or_none()
 
 
-async def _summarize_title(message: str, full_response: str) -> str | None:
+async def _summarize_title(
+    message: str, full_response: str, *, conversation_id: str | None = None
+) -> str | None:
     """用轻量模型把首条消息拟成一句自然标题，失败返回 None（调用方 fallback 到截断标题）。"""
-    prompt = (
-        "为下面这轮高考志愿咨询对话拟一个不超过 14 个字的简短标题，"
-        "只输出标题本身，不要引号、句末标点或任何解释。\n"
-        f"用户：{message}\n"
-        f"助手：{full_response[:200]}"
+    prompt = _TITLE_PROMPT.render(
+        "user", user_message=message, assistant_response=full_response[:200]
     )
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(
-            f"{settings.litellm_base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {settings.litellm_master_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": _TITLE_SUMMARY_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                # kimi-k2.6 是推理模型，即使这么简单的任务也会先输出几百字的
-                # reasoning_content 才产出最终 content——实测 max_tokens=30~150 时
-                # token 预算全部耗在推理过程上，content 永远是空字符串，必须给够预算。
-                "max_tokens": 500,
-                # Moonshot Kimi 只允许 temperature=1，传其他值会被 LiteLLM 直接 400（见
-                # backend/app/agent/intake_agent.py 里同样固定传 1 的先例）
-                "temperature": 1,
-            },
-        )
-        resp.raise_for_status()
+    async with track_prompt_invocation(
+        _TITLE_PROMPT, conversation_id=conversation_id
+    ) as invocation:
+        async with httpx.AsyncClient(timeout=_TITLE_PROMPT.model.timeout_seconds) as client:
+            resp = await client.post(
+                f"{settings.litellm_base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.litellm_master_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    **invocation.request_options(),
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+            )
+            resp.raise_for_status()
         text = resp.json()["choices"][0]["message"]["content"].strip()
     text = text.strip("\"'“”。.， ").strip()
     if not text:
@@ -120,7 +118,9 @@ async def _maybe_upgrade_title(
     from app.database import async_session_maker
 
     try:
-        new_title = await _summarize_title(message, full_response)
+        new_title = await _summarize_title(
+            message, full_response, conversation_id=conversation_id
+        )
     except Exception:
         return
     if not new_title or new_title == seed_title:
@@ -370,13 +370,27 @@ async def intake_chat(
     async def event_generator():
         full_response = ""
         last_flush = time.monotonic()
+        reasoning_display_enabled = settings.enable_reasoning_display
+
+        config_payload = json.dumps(
+            {"reasoning_display_enabled": reasoning_display_enabled}, ensure_ascii=False
+        )
+        yield f"event: reasoning_config\ndata: {config_payload}\n\n"
 
         async for event in stream_intake_response(
-            history=history, user_message=message, summary=summary_json
+            history=history,
+            user_message=message,
+            summary=summary_json,
+            reasoning_display_enabled=reasoning_display_enabled,
+            conversation_id=conversation_id,
         ):
             event_type = event.get("type")
 
-            if event_type == "token":
+            if event_type == "thinking":
+                payload = json.dumps({"content": event["content"]}, ensure_ascii=False)
+                yield f"event: thinking\ndata: {payload}\n\n"
+
+            elif event_type == "token":
                 payload = json.dumps({"content": event["content"]}, ensure_ascii=False)
                 yield f"event: token\ndata: {payload}\n\n"
 

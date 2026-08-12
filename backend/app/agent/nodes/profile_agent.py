@@ -16,11 +16,14 @@ import redis.asyncio as aioredis
 
 from app.agent.state import VolunteerPlanState
 from app.config import settings
+from app.prompts import prompt_registry
+from app.prompts.tracing import track_prompt_invocation
 
 logger = logging.getLogger(__name__)
 
-_PROFILE_AGENT_MODEL = "profile-agent"
-_LLM_TIMEOUT = 15.0
+_PROMPT = prompt_registry.get("profile_clarification")
+_PROFILE_AGENT_MODEL = _PROMPT.model.alias
+_LLM_TIMEOUT = _PROMPT.model.timeout_seconds
 
 _REQUIRED_FIELD_LABELS = {
     "province": "省份",
@@ -47,31 +50,25 @@ def _missing_fields(profile: dict) -> list[str]:
     return [label for field, label in _REQUIRED_FIELD_LABELS.items() if not profile.get(field)]
 
 
-async def _phrase_clarification(missing: list[str]) -> str:
+async def _phrase_clarification(missing: list[str], *, run_id: str | None = None) -> str:
     """把缺失字段列表转成一句自然语言追问；LLM 不可用时用确定性模板兜底。"""
     fallback = f"还差一点信息才能生成报告：{'、'.join(missing)}，麻烦补充一下～"
+    messages = [
+        {"role": "system", "content": _PROMPT.render("system")},
+        {"role": "user", "content": _PROMPT.render("user", missing_fields="、".join(missing))},
+    ]
     try:
-        async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as client:
-            resp = await client.post(
-                f"{settings.litellm_base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.litellm_master_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": _PROFILE_AGENT_MODEL,
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": "你是高考志愿助手，用一句自然、口语化的中文追问用户补充缺失的建档信息，不要输出多余内容。",
-                        },
-                        {"role": "user", "content": f"还缺少这些字段：{'、'.join(missing)}"},
-                    ],
-                    "max_tokens": 100,
-                    "temperature": 1,
-                },
-            )
-            resp.raise_for_status()
+        async with track_prompt_invocation(_PROMPT, agent_run_id=run_id) as invocation:
+            async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as client:
+                resp = await client.post(
+                    f"{settings.litellm_base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {settings.litellm_master_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={**invocation.request_options(), "messages": messages},
+                )
+                resp.raise_for_status()
         content = resp.json()["choices"][0]["message"]["content"].strip()
         return content or fallback
     except Exception as exc:
@@ -84,7 +81,11 @@ async def profile_agent(state: VolunteerPlanState) -> dict:
     profile = state.get("profile") or {}
 
     missing = _missing_fields(profile)
-    message = await _phrase_clarification(missing) if missing else "档案信息不完整，请补充后重试。"
+    message = (
+        await _phrase_clarification(missing, run_id=run_id)
+        if missing
+        else "档案信息不完整，请补充后重试。"
+    )
 
     await _push_sse(run_id, "profile_incomplete", {"missing_fields": missing, "message": message})
 

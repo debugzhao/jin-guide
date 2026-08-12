@@ -403,6 +403,8 @@ export const intakeChatApi = {
     conversationId: string | null,
     callbacks: {
       onToken: (token: string) => void
+      onThinking: (token: string) => void
+      onReasoningConfig: (enabled: boolean) => void
       onTriggerProfileCapture: () => void
       onDone: (conversationId?: string) => void
       onComplianceWarning: (issues: string[]) => void
@@ -469,6 +471,10 @@ export const intakeChatApi = {
                 const data = JSON.parse(raw)
                 if (currentEvent === 'token') {
                   callbacks.onToken(data.content ?? '')
+                } else if (currentEvent === 'thinking') {
+                  callbacks.onThinking(data.content ?? '')
+                } else if (currentEvent === 'reasoning_config') {
+                  callbacks.onReasoningConfig(data.reasoning_display_enabled === true)
                 } else if (currentEvent === 'trigger_profile_capture') {
                   callbacks.onTriggerProfileCapture()
                 } else if (currentEvent === 'done') {

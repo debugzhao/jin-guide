@@ -25,17 +25,21 @@ import json
 
 import httpx
 import structlog
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.conversation import ConversationMessage
+from app.prompts import prompt_registry
+from app.prompts.tracing import track_prompt_invocation
 from app.services import conversation_store as store
 
 logger = structlog.get_logger()
 
-_SUMMARY_MODEL = "profile-agent"  # 轻量虚拟模型，见 litellm_config.yaml
-_PROMPT_VERSION = "v1"
+_PROMPT = prompt_registry.get("conversation_summary")
+_SUMMARY_MODEL = _PROMPT.model.alias
+_PROMPT_VERSION = _PROMPT.version
 _SUMMARY_KEYS = (
     "confirmed_facts",
     "preferences",
@@ -45,6 +49,21 @@ _SUMMARY_KEYS = (
 )
 
 
+class ConversationSummaryOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirmed_facts: list[str] = Field(default_factory=list)
+    preferences: list[str] = Field(default_factory=list)
+    rejected_options: list[str] = Field(default_factory=list)
+    previous_decisions: list[str] = Field(default_factory=list)
+    open_questions: list[str] = Field(default_factory=list)
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def normalize_list_fields(cls, value):
+        return _normalize_summary_field(value)
+
+
 def _build_summary_prompt(previous_summary: dict | None, segment_messages: list[ConversationMessage]) -> str:
     segment_text = "\n".join(
         f"{'用户' if m.role == 'user' else '助手'}：{m.content}" for m in segment_messages
@@ -52,24 +71,16 @@ def _build_summary_prompt(previous_summary: dict | None, segment_messages: list[
     previous_text = (
         json.dumps(previous_summary, ensure_ascii=False) if previous_summary else "（还没有历史摘要）"
     )
-    return (
-        "你在维护一段高考志愿咨询对话的结构化摘要，用于在对话变长后仍能记住早期关键信息。\n"
-        "下面是已有的摘要（JSON），以及本轮需要并入摘要、即将从原文窗口中滑出的对话片段。\n"
-        "请基于两者输出【更新后】的完整摘要 JSON（覆盖式输出全部字段，不要只输出增量）。字段含义：\n"
-        "- confirmed_facts：用户明确给出的硬事实（预算、省份、分数、位次等），新事实覆盖旧值；\n"
-        "- preferences：用户表达过的偏好（城市、专业方向等）；\n"
-        "- rejected_options：用户明确排除/不考虑的选项；\n"
-        "- previous_decisions：本轮对话中做过的决定或结论；\n"
-        "- open_questions：还没解决、需要后续跟进的问题。\n"
-        "每个字段的值必须是【字符串数组】，即使只有一条也要用数组包裹（例如\n"
-        '"confirmed_facts": ["预算：12万元/年"]，不要输出成对象 {\"annual_budget\": \"12万元/年\"}）。\n'
-        "只输出 JSON 本身，不要任何解释文字，不要 markdown 代码块围栏。\n\n"
-        f"已有摘要：\n{previous_text}\n\n"
-        f"本轮需要并入摘要的对话片段：\n{segment_text}\n"
+    return _PROMPT.render(
+        "user",
+        previous_summary=previous_text,
+        conversation_segment=segment_text,
     )
 
 
-async def _call_summary_llm(prompt: str) -> str:
+async def _call_summary_llm(
+    prompt: str, *, parent_kind: str | None = None, parent_id: str | None = None
+) -> str:
     """
     这里必须走流式请求，不能像 report_agent.py 那样一次性等完整响应：结构化
     摘要这类任务 kimi-k2.6 的 reasoning_content 经常很长，实测非流式请求哪怕
@@ -80,38 +91,38 @@ async def _call_summary_llm(prompt: str) -> str:
     返回给调用方解析。
     """
     full_content = ""
-    async with httpx.AsyncClient(timeout=240.0) as client:
-        async with client.stream(
-            "POST",
-            f"{settings.litellm_base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {settings.litellm_master_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": _SUMMARY_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                # kimi-k2.6 是推理模型，结构化摘要比 intake_chat.py 的标题摘要复杂得多，
-                # 必须给足够预算覆盖 reasoning_content + 最终 JSON，否则 content 为空字符串。
-                "max_tokens": 3000,
-                # Moonshot Kimi 只允许 temperature=1，传其他值会被 LiteLLM 直接 400。
-                "temperature": 1,
-                "stream": True,
-            },
-        ) as resp:
-            resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                if not line.startswith("data: "):
-                    continue
-                raw = line[6:].strip()
-                if raw == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(raw)
-                    delta = chunk["choices"][0]["delta"]
-                    full_content += delta.get("content") or ""
-                except (json.JSONDecodeError, KeyError, IndexError):
-                    continue
+    context = {"parent_kind": parent_kind}
+    if parent_kind == "report":
+        context["report_id"] = parent_id
+    elif parent_kind == "intake":
+        context["conversation_id"] = parent_id
+    async with track_prompt_invocation(_PROMPT, **context) as invocation:
+        async with httpx.AsyncClient(timeout=_PROMPT.model.timeout_seconds) as client:
+            async with client.stream(
+                "POST",
+                f"{settings.litellm_base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.litellm_master_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    **invocation.request_options(),
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+            ) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    raw = line[6:].strip()
+                    if raw == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(raw)
+                        delta = chunk["choices"][0]["delta"]
+                        full_content += delta.get("content") or ""
+                    except (json.JSONDecodeError, KeyError, IndexError):
+                        continue
     return full_content.strip()
 
 
@@ -129,13 +140,10 @@ def _parse_summary_response(content: str) -> dict | None:
         parsed = json.loads(text)
     except Exception:
         return None
-    if not isinstance(parsed, dict):
+    try:
+        return ConversationSummaryOutput.model_validate(parsed).model_dump()
+    except Exception:
         return None
-    # 缺失字段补空数组；即使 Prompt 明确要求数组，kimi-k2.6 仍偶尔把
-    # confirmed_facts 这类字段输出成 {"annual_budget": "12万元/年"} 这样的对象
-    # ——统一压平成字符串数组，保证下游渲染（_build_summary_block）和存库结构稳定，
-    # 不依赖模型每次都严格遵守格式指令。
-    return {key: _normalize_summary_field(parsed.get(key)) for key in _SUMMARY_KEYS}
 
 
 def _normalize_summary_field(value) -> list[str]:
@@ -208,7 +216,9 @@ async def maybe_generate_summary(
             return
 
         try:
-            raw_response = await _call_summary_llm(prompt)
+            raw_response = await _call_summary_llm(
+                prompt, parent_kind=parent_kind, parent_id=parent_id
+            )
             new_summary = _parse_summary_response(raw_response)
         except Exception as exc:
             logger.warning(
