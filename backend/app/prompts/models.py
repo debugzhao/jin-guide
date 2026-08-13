@@ -18,6 +18,7 @@ class PromptModelConfig(BaseModel):
     stream: bool = False
 
 
+# definitions/ 下一份已加载并通过校验的 Prompt 版本定义，prompt_registry.get() 对外返回的唯一类型
 class PromptSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -32,7 +33,12 @@ class PromptSpec(BaseModel):
     # 加载时留空，由 prompt_content_hash() 基于原始定义算出后回填，不能在 YAML 里手写
     content_hash: str = ""
 
+    # @model_validator 是 pydantic 用来注册"跨字段"校验函数的装饰器，在各字段自己的 Field() 校验都通过后才执行，
+    # 用于表达单个字段管不到的整体一致性规则
+    # mode="after"而非默认的"before"：要交叉核对 self.templates 和 self.input_variables，
+    # 必须等字段都解析成模型属性后才能跑，before 模式拿到的还是原始 dict，没有 self 可用
     @model_validator(mode="after")
+    # 加引号是因为它在类还没定义完的时候就被引用了（自引用类型注解）
     def validate_templates(self) -> "PromptSpec":
         if not self.templates:
             raise ValueError("templates 不能为空")
