@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class PromptModelConfig(BaseModel):
+    # 禁止多余字段，避免 YAML 里的拼写错误被静默忽略
     model_config = ConfigDict(extra="forbid")
 
     alias: str = Field(min_length=1)
@@ -28,6 +29,7 @@ class PromptSpec(BaseModel):
     templates: dict[str, str]
     model: PromptModelConfig
     output_schema: str | None = None
+    # 加载时留空，由 prompt_content_hash() 基于原始定义算出后回填，不能在 YAML 里手写
     content_hash: str = ""
 
     @model_validator(mode="after")
@@ -44,10 +46,12 @@ class PromptSpec(BaseModel):
                 raise ValueError("模板名称和内容不能为空")
             try:
                 used.update(_template_variables(content))
+                # 用空字符串填充做一次试渲染，只为触发 Template 的占位符语法校验，结果不使用
                 Template(content).substitute({name: "" for name in declared})
             except (KeyError, ValueError) as exc:
                 raise ValueError(f"模板 {template_name} 包含非法变量: {exc}") from exc
 
+        # 双向校验而非只查未声明：declared 多余同样要拒绝，否则线上改错变量名会被悄悄忽略而不报错
         undeclared = used - declared
         unused = declared - used
         if undeclared:
@@ -64,6 +68,7 @@ class PromptSpec(BaseModel):
         if missing := required - provided:
             raise ValueError(f"模板 {template_name} 缺少变量: {sorted(missing)}")
         if extra := provided - required:
+            # 多余变量同样报错：调用方传参和模板已经对不上，说明调用点或模板改动漏了同步
             raise ValueError(f"模板 {template_name} 收到多余变量: {sorted(extra)}")
         return Template(self.templates[template_name]).substitute(
             {key: str(value) for key, value in variables.items()}
@@ -101,7 +106,9 @@ def _template_variables(content: str) -> set[str]:
 
 
 def prompt_content_hash(raw_definition: dict) -> str:
+    # 这个 hash 是 version_hashes.yaml 比对的依据：已发布版本内容被原地改过会在启动校验时被拦下
     import json
 
+    # sort_keys + 紧凑分隔符保证同一份内容无论 YAML 里字段顺序如何都算出相同 hash
     canonical = json.dumps(raw_definition, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return "sha256:" + sha256(canonical.encode("utf-8")).hexdigest()
