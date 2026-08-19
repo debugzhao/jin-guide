@@ -48,4 +48,28 @@
 
 ### 问津Agent 如何优化提示词工程？
 
-  
+使用git 有限的提示词注册器管理系统提示词，每个agent 都有自己的提示词， 只不过统一通过注册器获取
+
+```  
+backend/app/prompts/
+├── registry.py
+├── schemas.py
+├── common/
+│   ├── safety.md
+│   └── untrusted_context.md
+├── intake/
+│   └── v1.md
+├── conversation/
+│   └── v1.md
+├── report/
+│   └── v1.md
+├── reflection/
+│   └── v1.md
+├── profile_clarification/
+│   └── v1.md
+├── conversation_summary/
+│   └── v1.md
+└── conversation_title/
+    └── v1.md
+```
+
