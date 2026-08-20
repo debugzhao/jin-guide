@@ -36,7 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.intake_agent import MAX_HISTORY_MESSAGES, stream_intake_response
 from app.api.cursor import decode_cursor, encode_cursor
-from app.api.dependencies import Identity, get_identity
+from app.api.dependencies import Identity, get_client_ip, get_identity
 from app.config import settings
 from app.database import get_db
 from app.models.conversation import IntakeConversation
@@ -272,7 +272,10 @@ async def intake_chat(
     Send a message to IntakeAgent. Returns an SSE stream with
     token / trigger_profile_capture / done / compliance_warning / error events.
 
-    Rate limit: 30 messages per identity per day (across all of that identity's conversations).
+    Rate limit: 30 messages/day for logged-in identities; anonymous identities get a
+    lower `settings.intake_anon_daily_limit` (default 4) plus a per-IP fallback cap —
+    see docs/backend-prd-v2.md §11.4. Duplicate/near-duplicate questions within
+    `settings.dedup_window_minutes` replay the cached answer instead of calling the LLM.
     """
     owner_key = store.require_owner_key(identity)
 
@@ -294,20 +297,53 @@ async def intake_chat(
     else:
         conversation_id = str(uuid4())
 
+    # 匿名请求走更低的每日阈值（转化引导登录），登录用户仍是原 _DAILY_LIMIT；两者
+    # 共用同一个 Redis 计数 key，只是判定阈值不同（docs/backend-prd-v2.md §11.4）。
+    is_anonymous = identity.user is None
+    daily_limit = settings.intake_anon_daily_limit if is_anonymous else _DAILY_LIMIT
     count = await store.check_and_increment_rate_limit(_NAMESPACE, owner_key)
-    if count > _DAILY_LIMIT:
+    if count > daily_limit:
         raise HTTPException(
             status_code=429,
             detail={
-                "code": "rate_limited",
-                "message": f"今日对话次数已达上限（{_DAILY_LIMIT}条），明日 0 点重置",
-                "limit": _DAILY_LIMIT,
+                "code": "login_required" if is_anonymous else "rate_limited",
+                "message": (
+                    f"今日匿名对话次数已达上限（{daily_limit}条），登录后可继续对话"
+                    if is_anonymous
+                    else f"今日对话次数已达上限（{daily_limit}条），明日 0 点重置"
+                ),
+                "limit": daily_limit,
                 "used": count - 1,
             },
         )
 
+    # 同一 IP 每日兜底限流——anonymous_id 完全依附 session_token cookie，清 cookie
+    # 就能绕开上面的匿名日限；只对匿名请求生效，阈值比日限宽松，只防批量刷号。
+    if is_anonymous:
+        client_ip = get_client_ip(request)
+        ip_count = await store.check_and_increment_rate_limit(f"{_NAMESPACE}_ip", client_ip)
+        if ip_count > settings.intake_anon_ip_daily_limit:
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "code": "rate_limited",
+                    "message": "当前网络下的对话请求过多，请稍后再试",
+                    "limit": settings.intake_anon_ip_daily_limit,
+                    "used": ip_count - 1,
+                },
+            )
+
     redis_key = store.history_key(_NAMESPACE, owner_key, conversation_id)
     history = await store.load_history_from_redis(redis_key)
+
+    # 重复/相似问题去重：命中且历史回答已完整（非仍在生成中的占位消息）就复用，
+    # 不重新调用 LLM（docs/backend-prd-v2.md §11.4）。
+    cached = store.find_cached_answer(
+        history,
+        message,
+        window_minutes=settings.dedup_window_minutes,
+        similarity_threshold=settings.dedup_similarity_threshold,
+    )
 
     # 已有摘要（best-effort；覆盖已经滑出原文窗口的早期消息，见 P2）。
     # 新会话/尚未攒够摘要窗口时天然是 None，不特殊处理。
@@ -334,7 +370,11 @@ async def intake_chat(
     seed_title = _derive_title(message) if is_new_conversation else None
     now_iso = datetime.now(UTC).isoformat()
     user_msg_dict = {"role": "user", "content": message, "created_at": now_iso}
-    placeholder_msg_dict = {"role": "assistant", "content": "", "created_at": now_iso}
+    placeholder_msg_dict = {
+        "role": "assistant",
+        "content": cached["content"] if cached else "",
+        "created_at": now_iso,
+    }
 
     conversation_row_id: str | None = None
     assistant_message_id: str | None = None
@@ -368,6 +408,23 @@ async def intake_chat(
     await store.append_history_to_redis(redis_key, [user_msg_dict, placeholder_msg_dict])
 
     async def event_generator():
+        if cached is not None:
+            # 复用命中的历史回答，不调用 IntakeAgent——见上面的去重检查。
+            cached_content = cached["content"]
+            payload = json.dumps({"content": cached_content}, ensure_ascii=False)
+            yield f"event: token\ndata: {payload}\n\n"
+
+            if conversation_row_id:
+                background_tasks.add_task(
+                    maybe_generate_summary, "intake", conversation_row_id, window_size=MAX_HISTORY_MESSAGES,
+                )
+            if seed_title:
+                background_tasks.add_task(
+                    _maybe_upgrade_title, owner_key, conversation_id, seed_title, message, cached_content,
+                )
+            yield f"event: done\ndata: {json.dumps({'conversation_id': conversation_id}, ensure_ascii=False)}\n\n"
+            return
+
         full_response = ""
         last_flush = time.monotonic()
         reasoning_display_enabled = settings.enable_reasoning_display

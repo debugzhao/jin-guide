@@ -430,7 +430,7 @@ SSE 响应事件：`token`（增量文本）、`trigger_profile_capture`（前�
 
 历史持久化与报告问答（§5.10）同构：Redis 热层（`intake:history:{owner_key}:{conversation_id}`，7 天 TTL）+ PostgreSQL `intake_conversations` 表冷层兜底，限流 30 条/身份/天（跨该身份的所有会话共享一个计数）。`owner_key` 是登录用户的 `user_id` 或匿名会话的 `anonymous_id`（`anon:{anonymous_id}` 前缀）二选一——建档前还没有 `report_id` 可挂靠，前端需要先调用 `POST /api/v1/auth/anonymous-session` 换一个 `session_token` Cookie，否则本接口返回 401。持久化在 SSE `done` 事件 yield 之前完成（不是之后）——客户端收到 `done` 会立即用返回的 `conversation_id` 刷新侧栏会话列表，必须保证这时数据库已经能查到这条会话，否则会有"列表刷新跑在写入提交之前"的竞态。
 
-**匿名限流增强（设计已定，代码待实现）**：仅对匿名请求（`owner_key` 以 `anon:` 开头）额外收紧——每日对话上限从 30 条降到 **4 条**（阈值独立计数，不影响已登录用户仍适用的 30 条/天），超出后返回 `429 login_required` 提示登录，不再继续对话；同时叠加**同一客户端 IP 每日 20 条**的兜底限流（`intake:daily_ip:{ip}:{date}`），防止清 `session_token`/`anonymous_id` Cookie 批量绕过 4 条限制。登录后 `owner_key` 切换为真实 `user_id`，限制自动解除。详细设计见 §11.4。
+**匿名限流增强**：仅对匿名请求（`owner_key` 以 `anon:` 开头）额外收紧——每日对话上限从 30 条降到 **4 条**（阈值独立计数，不影响已登录用户仍适用的 30 条/天），超出后返回 `429 login_required` 提示登录，不再继续对话；同时叠加**同一客户端 IP 每日 20 条**的兜底限流（`intake:daily_ip:{ip}:{date}`），防止清 `session_token`/`anonymous_id` Cookie 批量绕过 4 条限制。登录后 `owner_key` 切换为真实 `user_id`，限制自动解除。详细设计见 §11.4。
 
 ### 5.7 Agent run 与协作可视化 SSE 事件
 
@@ -635,7 +635,7 @@ data: {"conversation_id": "conv_abc", "message_id": "msg_007", "total_tokens": 1
 
 **限流**：每用户每日对话条数上限 30 条（独立于报告生成限流），超出返回 `429 rate_limited`。
 
-**重复/相似问题去重（设计已定，代码待实现）**：同一会话 30 分钟内，若新消息归一化后与历史某条用户消息完全相同、或 `difflib.SequenceMatcher` 相似度 ≥0.85，且该消息对应的历史回答内容非空（不是还在生成中的占位消息），直接复用那条历史回答（SSE `token`+`done`）而不重新调用 LLM，避免重复问题浪费 token；不使用 embedding 语义去重，零额外 API 成本和延迟。同一套逻辑也应用于 §5.6b IntakeAgent 聊天。详细设计见 §11.4。
+**重复/相似问题去重**：同一会话 30 分钟内，若新消息归一化后与历史某条用户消息完全相同、或 `difflib.SequenceMatcher` 相似度 ≥0.85，且该消息对应的历史回答内容非空（不是还在生成中的占位消息），直接复用那条历史回答（SSE `token`+`done`）而不重新调用 LLM，避免重复问题浪费 token；不使用 embedding 语义去重，零额外 API 成本和延迟。同一套逻辑也应用于 §5.6b IntakeAgent 聊天。详细设计见 §11.4。
 
 ---
 
@@ -1205,15 +1205,15 @@ Prompt 注入防护（RAG 文档作为数据，不允许覆盖系统规则）；
 | 每用户每日 run 次数 | 10 次（Redis 计数器） |
 | Reflection 最大轮次 | 3 次 |
 | 对话每日条数 | 30 条 |
-| 匿名用户每日对话条数（仅 IntakeAgent） | 4 条，独立计数，超出后需登录（设计已定，代码待实现） |
-| 匿名请求同一 IP 每日对话条数兜底（仅 IntakeAgent） | 20 条（设计已定，代码待实现） |
+| 匿名用户每日对话条数（仅 IntakeAgent） | 4 条，独立计数，超出后需登录 |
+| 匿名请求同一 IP 每日对话条数兜底（仅 IntakeAgent） | 20 条 |
 | 异步任务超时 | 120s 自动标记 timeout |
 
-**匿名用户 4 次上限（设计已定，代码待实现）**：`POST /api/v1/intake/chat` 对匿名请求（`owner_key` 以 `anon:` 开头）单独设一个比登录用户更低的每日阈值，复用现有 `intake:daily:{owner_key}:{date}` 计数 key 形态（`check_and_increment_rate_limit`），只是把匿名分支的判定阈值从 30 改成 4；命中后返回 `429 {"code": "login_required", ...}`（见 §5.2 错误码表），前端展示登录 CTA 而非"明日再来"文案。已登录用户不受影响，仍走原 30 条/天。
+**匿名用户 4 次上限**：`POST /api/v1/intake/chat` 对匿名请求（`owner_key` 以 `anon:` 开头）单独设一个比登录用户更低的每日阈值，复用现有 `intake:daily:{owner_key}:{date}` 计数 key 形态（`check_and_increment_rate_limit`），只是把匿名分支的判定阈值从 30 改成 4；命中后返回 `429 {"code": "login_required", ...}`（见 §5.2 错误码表），前端展示登录 CTA 而非"明日再来"文案。已登录用户不受影响，仍走原 30 条/天。
 
-**IP 维度兜底（设计已定，代码待实现）**：`anonymous_id` 完全依附于 `session_token` Cookie（`_SESSION_DAYS=30`），清 Cookie/隐身窗口即可拿到全新 `anonymous_id`，绕开上面的 4 次限制——这是已知豁免，无法仅靠 `anonymous_id` 堵住。因此额外新增 `intake:daily_ip:{ip}:{date}` 计数器，仅对匿名请求生效，阈值设得比 4 更宽松（如 20/天），只作批量刷号的兜底防线，不用于正常转化引导。客户端 IP 优先取 `X-Forwarded-For` 首段，回退 `request.client.host`；依赖反向代理正确转发该 header——nginx 配置不在本仓库（部署在 jdy_server，由运维管理），上线前需要额外确认。
+**IP 维度兜底**：`anonymous_id` 完全依附于 `session_token` Cookie（`_SESSION_DAYS=30`），清 Cookie/隐身窗口即可拿到全新 `anonymous_id`，绕开上面的 4 次限制——这是已知豁免，无法仅靠 `anonymous_id` 堵住。因此额外新增 `intake:daily_ip:{ip}:{date}` 计数器，仅对匿名请求生效，阈值设得比 4 更宽松（如 20/天），只作批量刷号的兜底防线，不用于正常转化引导。客户端 IP 优先取 `X-Forwarded-For` 首段，回退 `request.client.host`；依赖反向代理正确转发该 header——nginx 配置不在本仓库（部署在 jdy_server，由运维管理），上线前需要额外确认。
 
-**重复/相似问题去重（设计已定，代码待实现）**：`POST /api/v1/intake/chat` 与 `POST /api/v1/reports/{id}/chat` 在调用 LLM 之前，先在同一会话最近 30 分钟的历史消息里做一次文本匹配——新消息归一化（去首尾空白、合并连续空白、统一半角、去末尾标点）后与某条历史 user 消息完全相同，或 `difflib.SequenceMatcher` 相似度 ≥0.85，且该消息对应的历史回答非空（不是仍在生成中的占位内容），则直接复用那条历史回答，不重新调用 LLM。不使用 embedding 语义去重（仓库内虽有 `embed_text`/pgvector 基建，但用于 RAG 检索，不用于聊天去重），保持零额外 API 成本和延迟。
+**重复/相似问题去重**：`POST /api/v1/intake/chat` 与 `POST /api/v1/reports/{id}/chat` 在调用 LLM 之前，先在同一会话最近 30 分钟的历史消息里做一次文本匹配——新消息归一化（去首尾空白、合并连续空白、统一半角、去末尾标点）后与某条历史 user 消息完全相同，或 `difflib.SequenceMatcher` 相似度 ≥0.85，且该消息对应的历史回答非空（不是仍在生成中的占位内容），则直接复用那条历史回答，不重新调用 LLM。不使用 embedding 语义去重（仓库内虽有 `embed_text`/pgvector 基建，但用于 RAG 检索，不用于聊天去重），保持零额外 API 成本和延迟。
 
 ---
 

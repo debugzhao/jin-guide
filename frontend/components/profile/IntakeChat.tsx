@@ -60,6 +60,7 @@ export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) 
     isStreaming,
     dailyLimitReached,
     dailyLimitMessage,
+    loginRequired,
     lastFailedMessage,
   } = conv
 
@@ -228,8 +229,8 @@ export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) 
         useAppStore.getState().intakeSetLastFailedMessage(key, text)
         console.error('Intake chat error:', msg)
       },
-      onRateLimit: (msg) => {
-        useAppStore.getState().intakeSetDailyLimit(key, true, msg)
+      onRateLimit: (msg, code) => {
+        useAppStore.getState().intakeSetDailyLimit(key, true, msg, code === 'login_required')
         useAppStore.getState().intakeSetStreaming(key, false)
       },
     })
@@ -277,7 +278,15 @@ export default function IntakeChat({ onStartProfile, locked }: IntakeChatProps) 
       {dailyLimitReached && (
         <div className="flex items-center gap-2 px-3 py-2.5 rounded-btn bg-[#FFFBEB] border border-[#FDE68A]">
           <AlertCircle className="w-4 h-4 text-[#D97706] flex-shrink-0" />
-          <p className="text-xs text-[#D97706]">{dailyLimitMessage || '今日对话次数已达上限，明日 0 点重置'}</p>
+          <p className="text-xs text-[#D97706] flex-1">{dailyLimitMessage || '今日对话次数已达上限，明日 0 点重置'}</p>
+          {loginRequired && (
+            <button
+              onClick={() => useAppStore.getState().setLoginModalOpen(true)}
+              className="text-xs font-medium text-[#1E40AF] hover:underline flex-shrink-0"
+            >
+              去登录
+            </button>
+          )}
         </div>
       )}
     </div>

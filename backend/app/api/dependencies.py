@@ -10,7 +10,7 @@ get_identity         — resolve (User | None, anonymous_id | None) from session
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from fastapi import Cookie, Depends, HTTPException
+from fastapi import Cookie, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -89,3 +89,16 @@ async def get_identity(
         user_result = await db.execute(select(User).where(User.id == session.user_id))
         return Identity(user=user_result.scalar_one_or_none(), anonymous_id=None)
     return Identity(user=None, anonymous_id=session.anonymous_id)
+
+
+def get_client_ip(request: Request) -> str:
+    """
+    Best-effort client IP for IP-scoped rate limiting (e.g. the intake chat
+    anonymous fallback limit — docs/backend-prd-v2.md §11.4). Reads
+    X-Forwarded-For (set by the nginx reverse proxy in front of the API) and
+    falls back to the raw peer address for local/direct requests.
+    """
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"

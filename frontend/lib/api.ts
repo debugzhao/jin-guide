@@ -256,7 +256,7 @@ export const chatApi = {
       onDone: (citations: { source_id: string; text: string }[]) => void
       onComplianceWarning: (issues: string[]) => void
       onError: (msg: string) => void
-      onRateLimit: (message?: string) => void
+      onRateLimit: (message?: string, code?: string) => void
     }
   ): (() => void) => {
     const BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -276,7 +276,10 @@ export const chatApi = {
         if (resp.status === 429) {
           const body = await resp.json().catch(() => ({}))
           const detail = body?.detail
-          callbacks.onRateLimit(typeof detail === 'object' ? detail?.message : undefined)
+          callbacks.onRateLimit(
+            typeof detail === 'object' ? detail?.message : undefined,
+            typeof detail === 'object' ? detail?.code : undefined
+          )
           return
         }
         if (!resp.ok) {
@@ -409,7 +412,10 @@ export const intakeChatApi = {
       onDone: (conversationId?: string) => void
       onComplianceWarning: (issues: string[]) => void
       onError: (msg: string) => void
-      onRateLimit: (message?: string) => void
+      /** `code` distinguishes `login_required`（匿名超出每日对话上限，需要登录）
+       *  from the generic `rate_limited`（含 IP 兜底限流）——调用方据此决定要不要
+       *  展示登录 CTA。 */
+      onRateLimit: (message?: string, code?: string) => void
       /** 404：传入的 conversationId 在服务端不存在或不属于当前身份（持久化的 id 与
        *  cookie 身份错配，如匿名会话轮换/登出后残留的孤儿 id）。调用方应清掉这个 id
        *  并回落到新会话，而不是当致命错误处理——否则重试会一直发同一个坏 id 卡死。 */
@@ -433,7 +439,10 @@ export const intakeChatApi = {
         if (resp.status === 429) {
           const body = await resp.json().catch(() => ({}))
           const detail = body?.detail
-          callbacks.onRateLimit(typeof detail === 'object' ? detail?.message : undefined)
+          callbacks.onRateLimit(
+            typeof detail === 'object' ? detail?.message : undefined,
+            typeof detail === 'object' ? detail?.code : undefined
+          )
           return
         }
         if (resp.status === 404 && callbacks.onConversationGone) {

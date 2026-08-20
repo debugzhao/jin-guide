@@ -192,9 +192,9 @@ GET /api/v1/reports?cursor=eyJpZCI6Ijk5In0&limit=20
 | 用户维度 | Redis 计数器 | 每用户每日 10 次报告生成 |
 | 并发 run 数 | Redis 计数器 | 同一用户最多 2 个活跃 run |
 | Token 预算 | LiteLLM / State | 单次 run 上限 150K tokens |
-| IntakeAgent 匿名对话限流（设计已定，代码待实现） | Redis 计数器（`anonymous_id` + IP 双层） | 匿名每日 4 条 + 同 IP 每日 20 条兜底，超出需登录；详见 `docs/backend-prd-v2.md` §11.4 |
+| IntakeAgent 匿名对话限流 | Redis 计数器（`anonymous_id` + IP 双层） | 匿名每日 4 条 + 同 IP 每日 20 条兜底，超出需登录；详见 `docs/backend-prd-v2.md` §11.4 |
 
-### 4.5 重复/相似问题去重（设计已定，代码待实现）
+### 4.5 重复/相似问题去重
 
 同一会话 30 分钟内命中"归一化后完全相同"或"`difflib.SequenceMatcher` 相似度 ≥0.85"的历史用户消息时，直接复用对应历史回答，不重新调用 LLM——纯文本匹配，不引入 embedding，零额外 API 成本。避免用户重复提问（含误触/复制粘贴同一问题）反复消耗 token。适用于 `POST /intake/chat` 与 `POST /reports/{id}/chat`。详见 `docs/backend-prd-v2.md` §11.4。
 

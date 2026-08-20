@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.conversation_agent import MAX_HISTORY_MESSAGES, stream_conversation_response
 from app.api.dependencies import Identity, get_identity
+from app.config import settings
 from app.database import async_session_maker, get_db
 from app.models.conversation import ConversationMessage, ReportConversation
 from app.models.report import Report
@@ -79,8 +80,9 @@ async def chat_with_report(
     Send a message to ConversationAgent about a specific report.
     Returns an SSE stream with token / citation / done / compliance_warning events.
 
-    Rate limit: 30 messages per user per day.
-    Report must have status=completed.
+    Rate limit: 30 messages per user per day. Duplicate/near-duplicate questions within
+    `settings.dedup_window_minutes` replay the cached answer instead of calling the LLM
+    (docs/backend-prd-v2.md §11.4). Report must have status=completed.
     """
     # ── Validate report ────────────────────────────────────────────────────
     if report_id == "demo-report":
@@ -126,6 +128,15 @@ async def chat_with_report(
     redis_key = store.history_key(_NAMESPACE, report_id, owner_key)
     history = await store.load_history_from_redis(redis_key)
 
+    # ── 重复/相似问题去重：命中且历史回答已完整就复用，不重新调用 LLM ──────────
+    # （docs/backend-prd-v2.md §11.4）
+    cached = store.find_cached_answer(
+        history,
+        message,
+        window_minutes=settings.dedup_window_minutes,
+        similarity_threshold=settings.dedup_similarity_threshold,
+    )
+
     # ── Load structured summary (best-effort; covers messages that have
     # already aged out of the raw history window — see P2) ─────────────────
     summary_json: dict | None = None
@@ -160,7 +171,12 @@ async def chat_with_report(
     # assistant_message_id 保持 None，下面的 DB 同步全部自动退化成 no-op）。
     now_iso = datetime.now(UTC).isoformat()
     user_msg_dict = {"role": "user", "content": message, "created_at": now_iso}
-    placeholder_msg_dict = {"role": "assistant", "content": "", "citations": [], "created_at": now_iso}
+    placeholder_msg_dict = {
+        "role": "assistant",
+        "content": cached["content"] if cached else "",
+        "citations": (cached.get("citations") or []) if cached else [],
+        "created_at": now_iso,
+    }
 
     conversation_row_id: str | None = None
     assistant_message_id: str | None = None
@@ -198,6 +214,29 @@ async def chat_with_report(
 
     # ── Stream response ────────────────────────────────────────────────────
     async def event_generator():
+        if cached is not None:
+            # 复用命中的历史回答，不调用 ConversationAgent——见上面的去重检查。
+            cached_content = cached["content"]
+            cached_citations = cached.get("citations") or []
+            payload = json.dumps({"content": cached_content}, ensure_ascii=False)
+            yield f"event: token\ndata: {payload}\n\n"
+            for c in cached_citations:
+                cpayload = json.dumps(
+                    {"source_id": c.get("source_id"), "text": c.get("text")}, ensure_ascii=False
+                )
+                yield f"event: citation\ndata: {cpayload}\n\n"
+
+            done_payload = json.dumps(
+                {"citations": cached_citations, "message_id": str(uuid4())}, ensure_ascii=False
+            )
+            yield f"event: done\ndata: {done_payload}\n\n"
+
+            if conversation_row_id:
+                background_tasks.add_task(
+                    maybe_generate_summary, "report", conversation_row_id, window_size=MAX_HISTORY_MESSAGES,
+                )
+            return
+
         full_response = ""
         citations = []
         last_flush = time.monotonic()

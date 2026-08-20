@@ -79,6 +79,9 @@ export interface IntakeConversationState {
   isStreaming: boolean
   dailyLimitReached: boolean
   dailyLimitMessage: string | null
+  /** true 只在命中匿名每日 4 次上限（`code: "login_required"`）时——决定要不要在
+   *  限流提示条里额外展示"去登录"按钮，而不是普通的"明日再来"文案。 */
+  loginRequired: boolean
   lastFailedMessage: string | null
   /** 是否已经问过一次后端历史（哪怕结果是空历史）——避免每次重新挂载都重新拉取 */
   historyLoaded: boolean
@@ -92,6 +95,7 @@ export const EMPTY_INTAKE_CONVERSATION_STATE: IntakeConversationState = Object.f
   isStreaming: false,
   dailyLimitReached: false,
   dailyLimitMessage: null,
+  loginRequired: false,
   lastFailedMessage: null,
   historyLoaded: false,
 })
@@ -117,7 +121,7 @@ interface IntakeSlice {
   intakeSetReasoningDisplayEnabled: (key: string, enabled: boolean) => void
   intakeCommitStreamingMessage: (key: string) => void
   intakeSetStreaming: (key: string, streaming: boolean) => void
-  intakeSetDailyLimit: (key: string, reached: boolean, message?: string) => void
+  intakeSetDailyLimit: (key: string, reached: boolean, message?: string, loginRequired?: boolean) => void
   intakeSetLastFailedMessage: (key: string, message: string | null) => void
   /** 草稿会话拿到后端真实 id 后，把它的 state 平移到新 key 下 */
   intakeRenameConversationKey: (oldKey: string, newKey: string) => void
@@ -163,9 +167,20 @@ interface DebugSlice {
   setAutoScroll: (auto: boolean) => void
 }
 
+// ── UI slice ─────────────────────────────────────────────────────────────────
+//
+// loginModalOpen 提到 store 里（而不是 app/page.tsx 的本地 state），是因为触发
+// 登录弹层的入口不止 SidebarNav 一处——命中匿名每日 4 次上限时 IntakeChat 里的
+// "去登录" 按钮也要能直接打开它，不想为此一路多加 prop 透传。
+
+interface UiSlice {
+  loginModalOpen: boolean
+  setLoginModalOpen: (open: boolean) => void
+}
+
 // ── App store ─────────────────────────────────────────────────────────────────
 
-interface AppStore extends ChatSlice, DebugSlice, AuthSlice, IntakeSlice {
+interface AppStore extends ChatSlice, DebugSlice, AuthSlice, IntakeSlice, UiSlice {
   profileId: string | null
   setProfileId: (id: string) => void
   currentTab: PlanType
@@ -315,13 +330,18 @@ export const useAppStore = create<AppStore>()(
           return { intakeConversations: { ...s.intakeConversations, [key]: { ...prev, isStreaming: streaming } } }
         }),
 
-      intakeSetDailyLimit: (key, reached, message) =>
+      intakeSetDailyLimit: (key, reached, message, loginRequired) =>
         set((s) => {
           const prev = s.intakeConversations[key] ?? EMPTY_INTAKE_CONVERSATION_STATE
           return {
             intakeConversations: {
               ...s.intakeConversations,
-              [key]: { ...prev, dailyLimitReached: reached, dailyLimitMessage: reached ? message ?? null : null },
+              [key]: {
+                ...prev,
+                dailyLimitReached: reached,
+                dailyLimitMessage: reached ? message ?? null : null,
+                loginRequired: reached ? !!loginRequired : false,
+              },
             },
           }
         }),
@@ -412,6 +432,10 @@ export const useAppStore = create<AppStore>()(
       authChecked: false,
       setUser: (user) => set({ user, authChecked: true }),
       clearUser: () => set({ user: null, authChecked: true }),
+
+      // ── ui slice ──
+      loginModalOpen: false,
+      setLoginModalOpen: (open) => set({ loginModalOpen: open }),
 
       // ── debug slice ──
       selectedRunId: null,

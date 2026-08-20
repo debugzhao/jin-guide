@@ -26,14 +26,19 @@ function appUrl(path: `/${string}`): string {
  * （frontend-prd-v2.md §4.2「拿到可分享的 report_id 后地址栏无刷新切换」）。
  */
 export default function HomePage() {
-  const [loginOpen, setLoginOpen] = useState(false)
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   const [conversationKey, setConversationKey] = useState(0)
   const [stage, setStage] = useState<Stage>('idle')
   const [reportId, setReportId] = useState<string | null>(null)
   const [rightCollapsed, setRightCollapsed] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-  const { setUser, clearUser, setCurrentIntakeConversationId } = useAppStore()
+  const {
+    setUser,
+    clearUser,
+    setCurrentIntakeConversationId,
+    loginModalOpen,
+    setLoginModalOpen,
+  } = useAppStore()
 
   useEffect(() => {
     api.me().then(setUser).catch(() => clearUser())
@@ -88,7 +93,7 @@ export default function HomePage() {
           <SidebarNav
             onNewConversation={handleNewConversation}
             onSelectConversation={handleSelectConversation}
-            onLoginClick={() => setLoginOpen(true)}
+            onLoginClick={() => setLoginModalOpen(true)}
             onToggleSidebar={() => setSidebarCollapsed((v) => !v)}
           />
         }
@@ -103,7 +108,11 @@ export default function HomePage() {
         onCloseMobileSidebar={() => setMobileSidebarOpen(false)}
       />
 
-      <LoginSheet isOpen={loginOpen} onClose={() => setLoginOpen(false)} onSuccess={() => setLoginOpen(false)} />
+      <LoginSheet
+        isOpen={loginModalOpen}
+        onClose={() => setLoginModalOpen(false)}
+        onSuccess={() => setLoginModalOpen(false)}
+      />
     </div>
   )
 }

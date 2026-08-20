@@ -19,6 +19,12 @@ class Settings(BaseSettings):
     resend_api_key: str = ""
     email_from: str = "问津 <onboarding@resend.dev>"
 
+    # Intake chat 匿名限流 + 重复/相似问题去重（docs/backend-prd-v2.md §11.4）
+    intake_anon_daily_limit: int = 4
+    intake_anon_ip_daily_limit: int = 20
+    dedup_window_minutes: int = 30
+    dedup_similarity_threshold: float = 0.85
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
