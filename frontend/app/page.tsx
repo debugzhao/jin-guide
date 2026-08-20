@@ -10,6 +10,13 @@ import LiveReportPanel from '@/components/report/LiveReportPanel'
 import { api } from '@/lib/api'
 import { useAppStore } from '@/lib/store'
 
+const APP_BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH || ''
+
+/** 原生 History API 不感知 Next basePath，必须显式补上子路径部署前缀。 */
+function appUrl(path: `/${string}`): string {
+  return `${APP_BASE_PATH}${path}`
+}
+
 /**
  * 首屏即 Chat-first AI 对话（docs/frontend-prd-v2.md §Chat-first 建档入口）。
  * 左侧对话流承载纯聊天 → 建档 → 生成过程 → 报告问答四个阶段；报告栏只在
@@ -36,7 +43,7 @@ export default function HomePage() {
   const handleReportReady = (id: string) => {
     setReportId(id)
     if (id !== 'demo-report') {
-      window.history.replaceState(null, '', `/reports/${id}`)
+      window.history.replaceState(null, '', appUrl(`/reports/${id}`))
     }
   }
 
@@ -46,7 +53,7 @@ export default function HomePage() {
     setRightCollapsed(false)
     setMobileSidebarOpen(false)
     setCurrentIntakeConversationId(null)
-    window.history.replaceState(null, '', '/')
+    window.history.replaceState(null, '', appUrl('/'))
     setConversationKey((k) => k + 1)
   }
 
@@ -57,7 +64,7 @@ export default function HomePage() {
     setRightCollapsed(false)
     setMobileSidebarOpen(false)
     setCurrentIntakeConversationId(conversationId)
-    window.history.replaceState(null, '', '/')
+    window.history.replaceState(null, '', appUrl('/'))
     setConversationKey((k) => k + 1)
   }
 
