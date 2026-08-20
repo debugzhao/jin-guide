@@ -78,6 +78,10 @@ export default function LoginSheet({ isOpen, onClose, onSuccess }: LoginSheetPro
       await api.login({ email, password })
       const me = await api.me()
       setUser(me)
+      // 登录后 owner_key 从 anon:{id} 切到真实 user_id（后端已把匿名会话合并
+      // 过来），当前正在看的这条会话原样保留即可；但侧栏列表只按 owner_key
+      // 拉取过一次匿名身份下的会话，需要重新拉取才能看到这个账号自己的历史。
+      useAppStore.getState().bumpConversationListVersion()
       onSuccess?.()
       onClose()
     } catch (e: unknown) {
@@ -110,6 +114,7 @@ export default function LoginSheet({ isOpen, onClose, onSuccess }: LoginSheetPro
       await api.register({ email, code, password })
       const me = await api.me()
       setUser(me)
+      useAppStore.getState().bumpConversationListVersion()
       onSuccess?.()
       onClose()
     } catch (e: unknown) {

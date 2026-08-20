@@ -195,6 +195,13 @@ interface AppStore extends ChatSlice, DebugSlice, AuthSlice, IntakeSlice, UiSlic
    *  updated_at 排序时递增，触发侧栏重新 fetch，避免跨组件传函数式 refetch。 */
   conversationListVersion: number
   bumpConversationListVersion: () => void
+  /** 退出登录时调用——清空所有身份相关的聊天状态（建档前聊天的消息缓存/当前
+   *  会话 id、报告问答的消息），否则退出登录后组件不会重新挂载，Zustand 里
+   *  还缓存着刚才那个账号的对话内容，会原样展示给下一个匿名访客看到。不能
+   *  塞进 clearUser 里——clearUser 在应用启动探测登录态失败时也会调用，那时
+   *  若清空 currentIntakeConversationId 会把匿名访客刷新页面后本该恢复的
+   *  上一次会话也清掉。 */
+  resetOnLogout: () => void
 }
 
 export const useAppStore = create<AppStore>()(
@@ -211,6 +218,20 @@ export const useAppStore = create<AppStore>()(
       conversationListVersion: 0,
       bumpConversationListVersion: () =>
         set((s) => ({ conversationListVersion: s.conversationListVersion + 1 })),
+
+      resetOnLogout: () =>
+        set((s) => ({
+          intakeConversations: {},
+          currentIntakeConversationId: null,
+          conversationListVersion: s.conversationListVersion + 1,
+          activeReportId: null,
+          messages: [],
+          streamingContent: '',
+          isStreaming: false,
+          dailyLimitReached: false,
+          dailyLimitMessage: null,
+          lastFailedMessage: null,
+        })),
 
       // ── intake chat slice ──
       intakeConversations: {},

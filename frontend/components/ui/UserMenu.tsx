@@ -32,6 +32,9 @@ export default function UserMenu() {
       // 尽力而为——无论如何都清空本地状态，避免 UI 卡住的感觉
     }
     clearUser()
+    // 清掉建档前聊天/报告问答缓存的消息和当前会话 id，避免退出登录后浏览器
+    // 上还残留着刚才那个账号的对话内容（见 store.ts resetOnLogout 的说明）。
+    useAppStore.getState().resetOnLogout()
   }
 
   return (
