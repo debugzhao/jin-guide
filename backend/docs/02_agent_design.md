@@ -262,6 +262,14 @@ else:
 - `self_check_round`：在 `reflection` 节点完成后广播，对应 debug 层的 `reflection_iteration`，只传 `issue_category`（`over_promise`/`none`，当前 Reflection 只做合规检测，`evidence_gap` 类别留给未来 `check_evidence_coverage` 落地后启用），不传原始违规文本。
 - `degraded_notice`：在 `retrieval_agent.py` 里 `emit_degraded` 调用旁同步广播，固定文案"检索遇到延迟，已切换备用数据源"，不暴露 Cohere/pgvector 等具体服务名。
 
+### 6.1 LangSmith 追踪链路
+
+`app/main.py`/`app/worker.py` 在任何 LangChain/LangGraph 导入前设置 `LANGCHAIN_TRACING_V2`/`LANGCHAIN_API_KEY`/`LANGCHAIN_PROJECT`，LangGraph 据此自动把主图/refine 子图的每个节点执行记录为 trace 树的子 run（图结构、节点耗时），`app/worker.py::_get_langsmith_stats` 跑完图后回读 LangSmith 统计写入 `agent_runs.trace_url`（`/admin/runs`、`/agent/runs/{id}` 暴露该字段）。
+
+`report_agent`/`profile_agent`/`reflection_agent` 三个 LLM 节点统一通过 `app/agent/llm_client.py::call_chat_completion`（`@traceable(run_type="llm")`）调用 LiteLLM 网关，而不是各自手写裸 `httpx` 请求——节点执行时处于 LangGraph 建立的活跃 trace 上下文内，被 `@traceable` 包裹的调用会自动挂成该节点 run 的子 run，且返回原始 completion JSON（含 `usage` 字段），LangSmith 按 OpenAI 兼容格式识别 token 消耗并汇总到父 run，`_get_langsmith_stats` 读到的 `total_tokens`/`cost_usd` 因此是真实值。若某个新节点要调用 LLM，必须走这个 helper，不要再手写 httpx，否则该次调用会脱离 trace 树、token 也不会被统计到。
+
+`conversation_agent.py`/`intake_agent.py`（不在 LangGraph 图内运行，见 §10.2/§10.3）仍是裸 `httpx` 流式调用，未接入这层追踪——它们的可观测性依赖 LiteLLM 网关自身的 `success_callback: langsmith`（`litellm_config.yaml`），会作为独立顶层 run 上报，不挂在任何图 trace 下面。
+
 ---
 
 ## 7. 工具可靠性设计（ToolResponse 三态协议）

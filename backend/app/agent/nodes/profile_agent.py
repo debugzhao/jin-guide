@@ -11,9 +11,9 @@ from __future__ import annotations
 import json
 import logging
 
-import httpx
 import redis.asyncio as aioredis
 
+from app.agent.llm_client import call_chat_completion
 from app.agent.state import VolunteerPlanState
 from app.config import settings
 from app.prompts import prompt_registry
@@ -59,17 +59,10 @@ async def _phrase_clarification(missing: list[str], *, run_id: str | None = None
     ]
     try:
         async with track_prompt_invocation(_PROMPT, agent_run_id=run_id) as invocation:
-            async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as client:
-                resp = await client.post(
-                    f"{settings.litellm_base_url}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {settings.litellm_master_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={**invocation.request_options(), "messages": messages},
-                )
-                resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"].strip()
+            response = await call_chat_completion(
+                {**invocation.request_options(), "messages": messages}, timeout=_LLM_TIMEOUT
+            )
+        content = response["choices"][0]["message"]["content"].strip()
         return content or fallback
     except Exception as exc:
         logger.warning("profile_agent LLM phrasing failed, using fallback: %s", exc)

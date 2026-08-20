@@ -21,12 +21,11 @@ import json
 import logging
 import re
 
-import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
+from app.agent.llm_client import call_chat_completion
 from app.agent.nodes.compliance import check_compliance_report
 from app.agent.state import VolunteerPlanState
-from app.config import settings
 from app.prompts import prompt_registry
 from app.prompts.tracing import track_prompt_invocation
 
@@ -85,23 +84,17 @@ async def _llm_judge(
 
     try:
         async with track_prompt_invocation(_PROMPT, agent_run_id=run_id) as invocation:
-            async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as client:
-                resp = await client.post(
-                    f"{settings.litellm_base_url}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {settings.litellm_master_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        **invocation.request_options(),
-                        "messages": [
-                            {"role": "system", "content": system_msg},
-                            {"role": "user", "content": user_msg},
-                        ],
-                    },
-                )
-                resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"].strip()
+            response = await call_chat_completion(
+                {
+                    **invocation.request_options(),
+                    "messages": [
+                        {"role": "system", "content": system_msg},
+                        {"role": "user", "content": user_msg},
+                    ],
+                },
+                timeout=_LLM_TIMEOUT,
+            )
+        content = response["choices"][0]["message"]["content"].strip()
 
         # 去掉 markdown 代码块围栏
         if content.startswith("```"):

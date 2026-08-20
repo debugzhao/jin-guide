@@ -9,10 +9,10 @@ import logging
 from datetime import UTC, datetime
 from uuid import uuid4
 
-import httpx
 import redis.asyncio as aioredis
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from app.agent.llm_client import call_chat_completion
 from app.agent.nodes.compliance import check_compliance_report
 from app.agent.state import VolunteerPlanState
 from app.config import settings
@@ -49,17 +49,10 @@ async def _push_sse(run_id: str, event: str, data: dict) -> None:
 async def _call_llm(messages: list[dict], *, run_id: str | None = None) -> str:
     """调用 LiteLLM 代理生成报告文本。"""
     async with track_prompt_invocation(_PROMPT, agent_run_id=run_id) as invocation:
-        async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as client:
-            resp = await client.post(
-                f"{settings.litellm_base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.litellm_master_key}",
-                    "Content-Type": "application/json",
-                },
-                json={**invocation.request_options(), "messages": messages},
-            )
-            resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"]
+        response = await call_chat_completion(
+            {**invocation.request_options(), "messages": messages}, timeout=_LLM_TIMEOUT
+        )
+    return response["choices"][0]["message"]["content"]
 
 
 def _build_llm_prompt(profile: dict, top_candidates: list[dict], has_preferences: bool) -> list[dict]:
