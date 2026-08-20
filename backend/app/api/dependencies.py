@@ -1,11 +1,11 @@
 """
-Shared FastAPI dependencies.
+FastAPI 公共依赖。
 
-get_current_user    — resolve User from session_token cookie (or None)
-require_auth        — 401 if not logged in
-require_admin_role  — 403 if not admin
-get_identity         — resolve (User | None, anonymous_id | None) from session_token cookie,
-                       covers both logged-in and anonymous-session requests
+get_current_user    — 从 session_token cookie 解析出 User（未登录则返回 None）
+require_auth        — 未登录时抛 401
+require_admin_role  — 非管理员时抛 403
+get_identity         — 从 session_token cookie 解析出 (User | None, anonymous_id | None)，
+                       同时覆盖已登录和匿名会话两种请求场景
 """
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -22,7 +22,7 @@ async def get_current_user(
     session_token: str | None = Cookie(default=None),
     db: AsyncSession = Depends(get_db),
 ) -> User | None:
-    """Return the authenticated User or None for anonymous requests."""
+    """返回已认证的 User；匿名请求返回 None。"""
     if not session_token:
         return None
     result = await db.execute(
@@ -41,7 +41,7 @@ async def get_current_user(
 async def require_auth(
     current_user: User | None = Depends(get_current_user),
 ) -> User:
-    """Raise 401 if the request has no valid session."""
+    """请求没有有效 session 时抛 401。"""
     if not current_user:
         raise HTTPException(status_code=401, detail="未登录")
     return current_user
@@ -50,7 +50,7 @@ async def require_auth(
 async def require_admin_role(
     current_user: User | None = Depends(get_current_user),
 ) -> User:
-    """Raise 403 if the current user is not an admin."""
+    """当前用户不是管理员时抛 403。"""
     if not current_user:
         raise HTTPException(status_code=401, detail="未登录")
     if current_user.role != "admin":
@@ -69,10 +69,10 @@ async def get_identity(
     db: AsyncSession = Depends(get_db),
 ) -> Identity:
     """
-    Resolve the requester's identity from the session_token cookie —
-    either a logged-in User, an anonymous_id (匿名会话), or neither.
-    Used by endpoints that scope data to "the current user or anonymous session"
-    (e.g. report history) instead of requiring a full login.
+    从 session_token cookie 解析请求方身份——可能是已登录的 User、
+    一个 anonymous_id（匿名会话），或两者都不是。
+    供那些按"当前用户或匿名会话"划分数据范围的接口使用（例如报告历史），
+    这些接口不强制要求完整登录。
     """
     if not session_token:
         return Identity(user=None, anonymous_id=None)
@@ -93,10 +93,9 @@ async def get_identity(
 
 def get_client_ip(request: Request) -> str:
     """
-    Best-effort client IP for IP-scoped rate limiting (e.g. the intake chat
-    anonymous fallback limit — docs/backend-prd-v2.md §11.4). Reads
-    X-Forwarded-For (set by the nginx reverse proxy in front of the API) and
-    falls back to the raw peer address for local/direct requests.
+    尽力获取客户端 IP，用于按 IP 限流（例如建档前聊天的匿名兜底限流——
+    docs/backend-prd-v2.md §11.4）。优先读取 X-Forwarded-For（由 API 前面的
+    nginx 反向代理设置），本地/直连请求时回退到原始 peer 地址。
     """
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:

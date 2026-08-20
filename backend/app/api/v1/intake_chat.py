@@ -5,8 +5,8 @@ Endpoints:
   GET    /intake/conversations             — list current owner_key 下的会话（游标分页，侧栏用）
   PATCH  /intake/conversations/{id}         — 重命名会话
   DELETE /intake/conversations/{id}         — 软删除会话
-  POST   /intake/chat                       — send message, SSE streaming response
-  GET    /intake/chat/history               — fetch conversation history (cold layer)
+  POST   /intake/chat                       — 发送消息，SSE 流式返回
+  GET    /intake/chat/history               — 获取会话历史（冷层）
 
 多会话模型：`intake_conversations.id` 即会话/thread id，不传 `conversation_id`
 时后端在首条用户消息产出后懒创建新会话（避免"新建对话"点一下就产生空行）；
@@ -15,9 +15,9 @@ Endpoints:
 通过 SSE `trigger_profile_capture` 事件通知前端内联渲染建档表单，见
 `docs/frontend-prd-v2.md` §Chat-first 建档入口、`docs/backend-prd-v2.md` §5.6b。
 
-Redis/PostgreSQL persistence mechanics (key shape, identity resolution, CAS
-writes, DB failure logging) live in app.services.conversation_store, shared
-with ConversationAgent's chat.py — see docs/memory-architecture.md §六 P0.
+Redis/PostgreSQL 持久化的具体机制（key 结构、身份解析、CAS 写入、DB 失败日志）
+统一放在 app.services.conversation_store，与 ConversationAgent 的 chat.py 共用
+——详见 docs/memory-architecture.md §六 P0。
 """
 from __future__ import annotations
 
@@ -269,13 +269,13 @@ async def intake_chat(
     identity: Identity = Depends(get_identity),
 ):
     """
-    Send a message to IntakeAgent. Returns an SSE stream with
-    token / trigger_profile_capture / done / compliance_warning / error events.
+    向 IntakeAgent 发送一条消息。返回 SSE 流，事件类型包括
+    token / trigger_profile_capture / done / compliance_warning / error。
 
-    Rate limit: 30 messages/day for logged-in identities; anonymous identities get a
-    lower `settings.intake_anon_daily_limit` (default 4) plus a per-IP fallback cap —
-    see docs/backend-prd-v2.md §11.4. Duplicate/near-duplicate questions within
-    `settings.dedup_window_minutes` replay the cached answer instead of calling the LLM.
+    限流：已登录身份每天 30 条；匿名身份用更低的 `settings.intake_anon_daily_limit`
+    （默认 4）外加一层按 IP 的兜底上限——见 docs/backend-prd-v2.md §11.4。
+    `settings.dedup_window_minutes` 时间窗内的重复/近似重复问题会直接复用缓存
+    回答，不再调用 LLM。
     """
     owner_key = store.require_owner_key(identity)
 
@@ -358,7 +358,7 @@ async def intake_chat(
                 )
                 if summary_row:
                     summary_json = summary_row.summary_json
-        except Exception:  # noqa: BLE001 - a summary-read failure must not block chat
+        except Exception:  # noqa: BLE001 - 摘要读取失败不能阻塞聊天
             summary_json = None
 
     # ── 生成开始前先落一条用户消息 + 空内容的助手占位消息 ─────────────────────
@@ -482,10 +482,9 @@ async def intake_chat(
                 await store.update_last_message_content_in_redis(redis_key, full_response)
 
                 if conversation_row_id:
-                    # Best-effort structured summary refresh — only
-                    # actually regenerates once a full window's worth of
-                    # messages has aged out (see P2); a no-op most of
-                    # the time.
+                    # best-effort 结构化摘要刷新——只有当满一个窗口的消息
+                    # 滑出历史范围时才会真正重新生成（见 P2），大多数时候
+                    # 是空操作。
                     background_tasks.add_task(
                         maybe_generate_summary,
                         "intake",
@@ -526,7 +525,7 @@ async def get_intake_chat_history(
     db: AsyncSession = Depends(get_db),
     identity: Identity = Depends(get_identity),
 ):
-    """Return one conversation's history. No conversation_id → empty (fresh conversation state)."""
+    """返回某个会话的历史。不传 conversation_id → 返回空（相当于全新会话状态）。"""
     owner_key = store.owner_key(identity)
     if not owner_key or not conversation_id:
         return IntakeChatHistoryOut(messages=[], total=0)
@@ -537,9 +536,9 @@ async def get_intake_chat_history(
 
     messages = await store.load_history_from_redis(store.history_key(_NAMESPACE, owner_key, conversation_id))
     if not messages:
-        # Fall back to DB — reads from the append-only conversation_messages
-        # table rather than the legacy messages_json column (see P2 cutover,
-        # docs/memory-architecture.md §六 P2).
+        # 回退到 DB——读的是追加式的 conversation_messages 表，
+        # 不是已废弃的 messages_json 列（见 P2 切换，
+        # docs/memory-architecture.md §六 P2）。
         messages = await store.load_recent_messages_from_db(
             db, parent_kind="intake", parent_id=conv.id
         )

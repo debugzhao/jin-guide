@@ -14,7 +14,7 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
       if (typeof detail === 'string') message = detail
       else if (Array.isArray(detail)) message = detail.map((d: { msg?: string }) => d.msg).filter(Boolean).join('；') || message
     } catch {
-      // ignore parse errors
+      // 忽略解析错误
     }
     // 把 HTTP 状态码带在 error 上，调用方才能区分"会话孤儿"(404) 之类的可自愈错误，
     // 而不是把所有失败一律当致命错误处理（见 IntakeChat 对持久化 conversation_id 的自愈）。
@@ -234,18 +234,18 @@ export interface ChatHistoryResult {
 }
 
 export const chatApi = {
-  /** Load existing chat history for a report */
+  /** 加载某份报告已有的聊天历史 */
   getHistory: (reportId: string) =>
     apiFetch<ChatHistoryResult>(`/api/v1/reports/${reportId}/chat/history`),
 
-  /** Clear conversation history */
+  /** 清空对话历史 */
   clearHistory: (reportId: string) =>
     apiFetch<void>(`/api/v1/reports/${reportId}/chat`, { method: 'DELETE' }),
 
   /**
-   * Open a streaming SSE connection for a chat message.
-   * Returns a native EventSource-compatible URL (or use fetch with ReadableStream).
-   * Since EventSource doesn't support POST, we use fetch directly.
+   * 为一条聊天消息打开流式 SSE 连接。
+   * 返回值不是原生 EventSource 兼容的 URL（也可以用 fetch + ReadableStream 代替）；
+   * 因为 EventSource 不支持 POST，这里直接用 fetch 手动实现。
    */
   streamMessage: (
     reportId: string,
@@ -321,7 +321,7 @@ export const chatApi = {
                   callbacks.onError(data.message ?? '未知错误')
                 }
               } catch {
-                // ignore parse errors on non-JSON lines
+                // 非 JSON 行直接忽略解析错误
               }
               currentEvent = ''
             }
@@ -368,38 +368,37 @@ export interface IntakeConversationListResult {
 }
 
 export const intakeChatApi = {
-  /** List the current identity's intake chat conversations (cursor-paginated, sidebar history list) */
+  /** 列出当前身份下的建档前聊天会话（游标分页，用于侧栏历史列表） */
   listConversations: (cursor?: string) =>
     apiFetch<IntakeConversationListResult>(
       `/api/v1/intake/conversations${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`
     ),
 
-  /** Load one conversation's history. `conversationId` must belong to the current identity. */
+  /** 加载某个会话的历史消息。`conversationId` 必须属于当前身份。 */
   getHistory: (conversationId: string) =>
     apiFetch<IntakeChatHistoryResult>(
       `/api/v1/intake/chat/history?conversation_id=${encodeURIComponent(conversationId)}`
     ),
 
-  /** Rename a conversation (sidebar history label) */
+  /** 重命名会话（侧栏历史列表里展示的标题） */
   renameConversation: (conversationId: string, title: string) =>
     apiFetch<IntakeConversationListItem>(
       `/api/v1/intake/conversations/${encodeURIComponent(conversationId)}`,
       { method: 'PATCH', body: JSON.stringify({ title }) }
     ),
 
-  /** Soft-delete a conversation */
+  /** 软删除一个会话 */
   deleteConversation: (conversationId: string) =>
     apiFetch<void>(`/api/v1/intake/conversations/${encodeURIComponent(conversationId)}`, {
       method: 'DELETE',
     }),
 
   /**
-   * Open a streaming SSE connection for an intake chat message.
-   * `conversationId` — pass null to let the backend lazily create a new conversation on
-   * first message; `onDone` then receives the newly created id so the caller can persist it
-   * for subsequent messages in the same thread.
-   * `onTriggerProfileCapture` fires when IntakeAgent's `start_profile_capture` tool
-   * is called — the caller should render the profile capture form inline.
+   * 为一条建档前聊天消息打开流式 SSE 连接。
+   * `conversationId` 传 null 表示让后端在第一条消息时懒创建新会话；随后 `onDone`
+   * 会带回新创建的 id，供调用方持久化，用于同一线程后续消息。
+   * `onTriggerProfileCapture` 在 IntakeAgent 调用了 `start_profile_capture` 工具时
+   * 触发——调用方应就地渲染建档表单。
    */
   streamMessage: (
     message: string,
@@ -412,8 +411,8 @@ export const intakeChatApi = {
       onDone: (conversationId?: string) => void
       onComplianceWarning: (issues: string[]) => void
       onError: (msg: string) => void
-      /** `code` distinguishes `login_required`（匿名超出每日对话上限，需要登录）
-       *  from the generic `rate_limited`（含 IP 兜底限流）——调用方据此决定要不要
+      /** `code` 用于区分 `login_required`（匿名超出每日对话上限，需要登录）
+       *  与普通的 `rate_limited`（含 IP 兜底限流）——调用方据此决定要不要
        *  展示登录 CTA。 */
       onRateLimit: (message?: string, code?: string) => void
       /** 404：传入的 conversationId 在服务端不存在或不属于当前身份（持久化的 id 与
@@ -494,7 +493,7 @@ export const intakeChatApi = {
                   callbacks.onError(data.message ?? '未知错误')
                 }
               } catch {
-                // ignore parse errors on non-JSON lines
+                // 非 JSON 行直接忽略解析错误
               }
               currentEvent = ''
             }

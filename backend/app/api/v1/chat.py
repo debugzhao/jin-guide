@@ -2,13 +2,13 @@
 Chat API — 报告问答 ConversationAgent
 
 Endpoints:
-  POST   /reports/{report_id}/chat          — send message, SSE streaming response
-  GET    /reports/{report_id}/chat/history  — fetch conversation history (cold layer)
-  DELETE /reports/{report_id}/chat          — clear conversation history
+  POST   /reports/{report_id}/chat          — 发送消息，SSE 流式返回
+  GET    /reports/{report_id}/chat/history  — 获取会话历史（冷层）
+  DELETE /reports/{report_id}/chat          — 清空会话历史
 
-Redis/PostgreSQL persistence mechanics (key shape, identity resolution, CAS
-writes, DB failure logging) live in app.services.conversation_store, shared
-with IntakeAgent's intake_chat.py — see docs/memory-architecture.md §六 P0.
+Redis/PostgreSQL 持久化的具体机制（key 结构、身份解析、CAS 写入、DB 失败日志）
+统一放在 app.services.conversation_store，与 IntakeAgent 的 intake_chat.py 共用
+——详见 docs/memory-architecture.md §六 P0。
 """
 from __future__ import annotations
 
@@ -41,10 +41,9 @@ _MAX_MESSAGE_LENGTH = 200
 
 def _db_owner_filter(user_id: str | None, anonymous_id: str | None) -> tuple:
     """
-    Row-scoping filter for report_conversations. Logged-in users are scoped by
-    user_id; anonymous sessions must additionally match anonymous_id — matching
-    only `user_id IS NULL` would let every anonymous visitor share one row
-    (and read each other's history) for the same report_id.
+    report_conversations 的行级过滤条件。已登录用户按 user_id 限定；匿名会话
+    必须额外匹配 anonymous_id——如果只匹配 `user_id IS NULL`，同一个 report_id
+    下所有匿名访客会共用一行（互相读到对方的历史）。
     """
     if user_id:
         return (ReportConversation.user_id == user_id,)
@@ -54,7 +53,7 @@ def _db_owner_filter(user_id: str | None, anonymous_id: str | None) -> tuple:
     )
 
 
-# ── Schemas ────────────────────────────────────────────────────────────────────
+# ── 数据结构 ────────────────────────────────────────────────────────────────────
 
 class ChatIn(BaseModel):
     message: str
@@ -66,7 +65,7 @@ class ChatHistoryOut(BaseModel):
     total: int
 
 
-# ── Endpoints ──────────────────────────────────────────────────────────────────
+# ── 接口 ──────────────────────────────────────────────────────────────────────
 
 @router.post("/{report_id}/chat")
 async def chat_with_report(
@@ -77,14 +76,14 @@ async def chat_with_report(
     identity: Identity = Depends(get_identity),
 ):
     """
-    Send a message to ConversationAgent about a specific report.
-    Returns an SSE stream with token / citation / done / compliance_warning events.
+    针对某份报告向 ConversationAgent 发送一条消息。
+    返回 SSE 流，事件类型包括 token / citation / done / compliance_warning。
 
-    Rate limit: 30 messages per user per day. Duplicate/near-duplicate questions within
-    `settings.dedup_window_minutes` replay the cached answer instead of calling the LLM
-    (docs/backend-prd-v2.md §11.4). Report must have status=completed.
+    限流：每用户每天 30 条。`settings.dedup_window_minutes` 时间窗内的重复/
+    近似重复问题会直接复用缓存回答，不再调用 LLM（docs/backend-prd-v2.md
+    §11.4）。报告必须处于 status=completed 状态。
     """
-    # ── Validate report ────────────────────────────────────────────────────
+    # ── 校验报告 ────────────────────────────────────────────────────────────
     if report_id == "demo-report":
         from app.api.v1.mock_data import MOCK_REPORT_PLAN, MOCK_REPORT_EVIDENCE
         report_plan_json = MOCK_REPORT_PLAN
@@ -101,7 +100,7 @@ async def chat_with_report(
         report_plan_json = report.plan_json
         report_evidence_json = report.evidence_json
 
-    # ── Validate message ───────────────────────────────────────────────────
+    # ── 校验消息内容 ────────────────────────────────────────────────────────
     message = body.message.strip()
     if not message:
         raise HTTPException(status_code=422, detail="消息不能为空")
@@ -110,7 +109,7 @@ async def chat_with_report(
             status_code=422, detail=f"消息不能超过 {_MAX_MESSAGE_LENGTH} 个字符"
         )
 
-    # ── Rate limit ─────────────────────────────────────────────────────────
+    # ── 限流 ────────────────────────────────────────────────────────────────
     owner_key = store.require_owner_key(identity)
     count = await store.check_and_increment_rate_limit(_NAMESPACE, owner_key)
     if count > _DAILY_LIMIT:
@@ -124,7 +123,7 @@ async def chat_with_report(
             },
         )
 
-    # ── Load history ───────────────────────────────────────────────────────
+    # ── 加载历史 ────────────────────────────────────────────────────────────
     redis_key = store.history_key(_NAMESPACE, report_id, owner_key)
     history = await store.load_history_from_redis(redis_key)
 
@@ -137,8 +136,7 @@ async def chat_with_report(
         similarity_threshold=settings.dedup_similarity_threshold,
     )
 
-    # ── Load structured summary (best-effort; covers messages that have
-    # already aged out of the raw history window — see P2) ─────────────────
+    # ── 加载结构化摘要（best-effort；覆盖已经滑出原始历史窗口的消息——见 P2）──
     summary_json: dict | None = None
     if report_id != "demo-report":
         db_user_id = identity.user.id if identity.user else None
@@ -160,7 +158,7 @@ async def chat_with_report(
                     )
                     if summary_row:
                         summary_json = summary_row.summary_json
-        except Exception:  # noqa: BLE001 - a summary-read failure must not block chat
+        except Exception:  # noqa: BLE001 - 摘要读取失败不能阻塞聊天
             summary_json = None
 
     # ── 生成开始前先落一条用户消息 + 空内容的助手占位消息 ──────────────────────
@@ -212,7 +210,7 @@ async def chat_with_report(
 
     await store.append_history_to_redis(redis_key, [user_msg_dict, placeholder_msg_dict])
 
-    # ── Stream response ────────────────────────────────────────────────────
+    # ── 流式返回 ────────────────────────────────────────────────────────────
     async def event_generator():
         if cached is not None:
             # 复用命中的历史回答，不调用 ConversationAgent——见上面的去重检查。
@@ -299,10 +297,9 @@ async def chat_with_report(
                 await store.update_last_message_content_in_redis(redis_key, full_response, citations=citations)
 
                 if conversation_row_id:
-                    # Best-effort structured summary refresh — only
-                    # actually regenerates once a full window's worth
-                    # of messages has aged out (see P2); a no-op most
-                    # of the time.
+                    # best-effort 结构化摘要刷新——只有当满一个窗口的消息
+                    # 滑出历史范围时才会真正重新生成（见 P2），大多数时候
+                    # 是空操作。
                     background_tasks.add_task(
                         maybe_generate_summary,
                         "report",
@@ -318,10 +315,9 @@ async def chat_with_report(
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
-        # StreamingResponse is constructed by hand here, so FastAPI won't
-        # auto-mount the injected background_tasks the way it does for a
-        # plain return value — it must be passed explicitly or add_task
-        # registrations (e.g. the summary refresh above) never actually run.
+        # 这里是手动构造 StreamingResponse，FastAPI 不会像处理普通返回值那样
+        # 自动挂载注入的 background_tasks——必须显式传入，否则上面注册的
+        # add_task（例如摘要刷新）根本不会被执行。
         background=background_tasks,
         headers={
             "Cache-Control": "no-cache",
@@ -338,8 +334,8 @@ async def get_chat_history(
     identity: Identity = Depends(get_identity),
 ):
     """
-    Return the conversation history for a report.
-    Tries Redis hot layer first; falls back to PostgreSQL.
+    返回某份报告的会话历史。
+    优先尝试 Redis 热层，未命中则回退到 PostgreSQL。
     """
     owner_key = store.require_owner_key(identity)
     db_user_id = identity.user.id if identity.user else None
@@ -355,13 +351,13 @@ async def get_chat_history(
         if not result.scalar_one_or_none():
             raise HTTPException(status_code=404, detail="报告不存在")
 
-        # Try hot layer first
+        # 先尝试热层
         messages = await store.load_history_from_redis(redis_key)
 
         if not messages:
-            # Fall back to DB — reads from the append-only conversation_messages
-            # table rather than the legacy messages_json column (see P2 cutover,
-            # docs/memory-architecture.md §六 P2).
+            # 回退到 DB——读的是追加式的 conversation_messages 表，
+            # 不是已废弃的 messages_json 列（见 P2 切换，
+            # docs/memory-architecture.md §六 P2）。
             conv_result = await db.execute(
                 select(ReportConversation).where(
                     ReportConversation.report_id == report_id,
@@ -387,7 +383,7 @@ async def clear_chat_history(
     db: AsyncSession = Depends(get_db),
     identity: Identity = Depends(get_identity),
 ):
-    """Clear conversation history from both Redis and PostgreSQL."""
+    """同时清空 Redis 和 PostgreSQL 中的会话历史。"""
     owner_key = store.require_owner_key(identity)
     db_user_id = identity.user.id if identity.user else None
     db_anonymous_id = identity.anonymous_id if not identity.user else None
@@ -401,7 +397,7 @@ async def clear_chat_history(
         if not result.scalar_one_or_none():
             raise HTTPException(status_code=404, detail="报告不存在")
 
-        # Clear DB
+        # 清空 DB
         conv_result = await db.execute(
             select(ReportConversation).where(
                 ReportConversation.report_id == report_id,
@@ -411,8 +407,8 @@ async def clear_chat_history(
         conv = conv_result.scalar_one_or_none()
         if conv:
             conv.updated_at = datetime.now(UTC)
-            # Message content lives in ConversationMessage — clear it there
-            # (see docs/memory-architecture.md §六 P2).
+            # 消息内容存在 ConversationMessage 里——清空那边的记录
+            # （见 docs/memory-architecture.md §六 P2）。
             await db.execute(
                 delete(ConversationMessage).where(
                     ConversationMessage.report_conversation_id == conv.id

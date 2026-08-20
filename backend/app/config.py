@@ -12,10 +12,10 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     cohere_api_key: str = ""
     env: str = "development"
-    # Diagnostic-only feature. Keep disabled by default because model-generated
-    # reasoning may contain internal context that should not reach end users.
+    # 仅用于调试的功能。默认关闭，因为模型生成的推理过程可能包含
+    # 不该暴露给终端用户的内部上下文信息。
     enable_reasoning_display: bool = False
-    # Resend — free tier 100 emails/day: https://resend.com
+    # Resend —— 免费额度每天 100 封邮件：https://resend.com
     resend_api_key: str = ""
     email_from: str = "问津 <onboarding@resend.dev>"
 
