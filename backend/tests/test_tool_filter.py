@@ -1,5 +1,5 @@
 """
-Unit tests for tool_filter.py — per-agent tool visibility registry (PRD §10.8).
+tool_filter.py 单元测试 —— 按 Agent 划分工具可见性的注册表（PRD §10.8）。
 """
 import pytest
 from app.agent.tool_filter import ToolFilter
@@ -57,7 +57,7 @@ class TestFilter:
         f = ToolFilter("retrieval_agent")
         tools = [
             FakeTool("vector_search"),
-            FakeTool("check_subject_req"),  # belongs to policy_rule_agent
+            FakeTool("check_subject_req"),  # 属于 policy_rule_agent，不应被 retrieval_agent 拿到
             FakeTool("rerank_evidence"),
             FakeTool("some_random_tool"),
         ]

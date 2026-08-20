@@ -1,6 +1,6 @@
 """
-Data Resolver node (M2): loads student profile from DB, checks data
-availability for the province/batch, locks dataset_version.
+Data Resolver 节点（M2）：从数据库加载学生档案，检查该省份/批次下的
+数据可用性，锁定 dataset_version。
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ async def _push_sse(run_id: str, event: str, data: dict) -> None:
 
 
 def _load_profile_sync(profile_id: str) -> tuple[dict, list[str], str]:
-    """Run in thread pool — uses sync SQLAlchemy Session."""
+    """跑在线程池里 —— 使用同步的 SQLAlchemy Session。"""
     from app.database import SyncSessionLocal
     from app.models.admission import AdmissionScore
     from app.models.profile import Preference, StudentProfile

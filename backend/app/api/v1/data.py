@@ -20,7 +20,7 @@ class DataAvailabilityOut(BaseModel):
     dataset_version: str
     available: bool
     warnings: list
-    # max_volunteers: used by frontend to cap volunteer table size (see PRD 8.3)
+    # max_volunteers：前端据此限制志愿表最大条数（见 PRD 8.3）
     max_volunteers: int
 
 
@@ -32,8 +32,8 @@ def check_data_availability(
     db: Session = Depends(get_sync_db),
 ) -> DataAvailabilityOut:
     """
-    Query real data availability: count admission score records for province/year/batch.
-    Falls back gracefully if no data exists.
+    查询真实数据的可用性：统计指定省份/年份/批次下的录取分数记录数。
+    数据不存在时优雅降级，给出提示而不是报错。
     """
     count = db.execute(
         select(func.count()).where(
@@ -50,7 +50,7 @@ def check_data_availability(
         warnings.append(
             f"暂无 {province} {year} 年 {batch} 录取数据，建议使用相邻年份参考"
         )
-        # Try adjacent year
+        # 尝试查找相邻年份的数据
         nearest_year = db.execute(
             select(func.max(AdmissionScore.year)).where(
                 AdmissionScore.province == province,

@@ -1,12 +1,12 @@
 """
-Unit tests for reflection_agent.py — Day 8 compliance self-check.
+reflection_agent.py 单元测试 —— Day 8 合规自检。
 
-Tests cover:
-  - Layer 1 (regex) pass/fail paths
-  - Layer 2 (LLM judge) early exit on passed=true and "无需改进"
-  - LLM judge failure fallback (treats as passed)
-  - Iteration counter incremented correctly
-  - All issues deduplicated
+覆盖范围：
+  - 第一层（正则）通过/不通过两条路径
+  - 第二层（LLM judge）在 passed=true 且反馈为"无需改进"时提前退出
+  - LLM judge 调用失败时的兜底行为（异常必须 fail closed，不能当作通过）
+  - 迭代计数器正确累加
+  - 所有 issue 去重
 """
 from __future__ import annotations
 
@@ -55,7 +55,7 @@ DIRTY_PLAN = {
 class TestReflectionLayer1:
     @pytest.mark.asyncio
     async def test_layer1_clean_plan_calls_llm_judge(self):
-        """When regex passes, Layer 2 LLM judge should be called."""
+        """正则通过时，应继续调用第二层 LLM judge。"""
         from app.agent.nodes.reflection_agent import reflection_agent
 
         llm_result = {"passed": True, "feedback": "无需改进", "issues": []}
@@ -73,7 +73,7 @@ class TestReflectionLayer1:
 
     @pytest.mark.asyncio
     async def test_layer1_dirty_plan_fails_immediately(self):
-        """When regex detects forbidden words, return fail without calling LLM."""
+        """正则命中禁用词时应直接判定不通过，不需要再调用 LLM。"""
         from app.agent.nodes.reflection_agent import reflection_agent
 
         with patch(
@@ -85,11 +85,11 @@ class TestReflectionLayer1:
 
         assert result["compliance_passed"] is False
         assert "保证录取" in result["compliance_issues"]
-        mock_judge.assert_not_awaited()  # Layer 1 fail → skip Layer 2
+        mock_judge.assert_not_awaited()  # 第一层未通过 → 跳过第二层
 
     @pytest.mark.asyncio
     async def test_iteration_counter_increments(self):
-        """reflection_iterations starts at 0 and increments +1 per call."""
+        """reflection_iterations 初始为 0，每调用一次自增 1。"""
         from app.agent.nodes.reflection_agent import reflection_agent
 
         llm_result = {"passed": True, "feedback": "无需改进", "issues": []}
@@ -103,7 +103,7 @@ class TestReflectionLayer1:
 
     @pytest.mark.asyncio
     async def test_iteration_counter_continues_from_existing(self):
-        """If iterations=2 before call, result should be 3."""
+        """调用前 iterations=2，调用后结果应为 3。"""
         from app.agent.nodes.reflection_agent import reflection_agent
 
         llm_result = {"passed": True, "feedback": "无需改进", "issues": []}
@@ -121,7 +121,7 @@ class TestReflectionLayer1:
 class TestReflectionLayer2:
     @pytest.mark.asyncio
     async def test_early_exit_on_passed_true(self):
-        """LLM returns passed=true → compliance_passed=True, issues empty."""
+        """LLM 返回 passed=true → compliance_passed=True，issues 为空。"""
         from app.agent.nodes.reflection_agent import reflection_agent
 
         llm_result = {"passed": True, "feedback": "内容合规", "issues": []}
@@ -150,7 +150,7 @@ class TestReflectionLayer2:
 
     @pytest.mark.asyncio
     async def test_llm_judge_fail_returns_issues(self):
-        """LLM returns passed=false with issues → compliance_passed=False."""
+        """LLM 返回 passed=false 且带 issues → compliance_passed=False。"""
         from app.agent.nodes.reflection_agent import reflection_agent
 
         llm_result = {
@@ -184,14 +184,14 @@ class TestReflectionLayer2:
 
     @pytest.mark.asyncio
     async def test_issues_deduplicated(self):
-        """Issues from regex and LLM judge are deduplicated in output."""
+        """正则和 LLM judge 各自发现的 issue 在输出中要合并去重。"""
         from app.agent.nodes.reflection_agent import reflection_agent
 
-        # Plan with no regex issues but LLM finds semantic problem
+        # 方案本身没有触发正则规则，但 LLM 从语义层面发现了问题
         llm_result = {
             "passed": False,
             "feedback": "语义过度承诺",
-            "issues": ["录取概率极高", "录取概率极高"],  # duplicates
+            "issues": ["录取概率极高", "录取概率极高"],  # 重复项
         }
         with patch(
             "app.agent.nodes.reflection_agent._llm_judge",
@@ -199,7 +199,7 @@ class TestReflectionLayer2:
         ):
             result = await reflection_agent(_make_state(CLEAN_PLAN))
 
-        # Duplicates removed
+        # 重复项已被去重
         assert result["compliance_issues"].count("录取概率极高") == 1
 
 

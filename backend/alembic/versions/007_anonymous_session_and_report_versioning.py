@@ -1,17 +1,17 @@
-"""Anonymous session support, report versioning, notifications, data model scaffolding
+"""匿名会话支持、报告版本化、站内通知、数据模型脚手架
 
 Revision ID: 007
 Revises: 006
 Create Date: 2026-07-09
 
-Changes (docs/backend-prd-v2.md §6.1):
-1. reports: add user_id, anonymous_id, version (default 1), parent_report_id
-   (self-referential, for /refine version lineage), run_summary_json (JSONB)
-2. student_profiles: add anonymous_id (匿名建档草稿归属)
-3. agent_runs: add anonymous_id (让匿名 run 产出的 report 能被正确归属)
-4. New table: admission_plans (招生计划，区别于 admission_scores 历年投档线)
-5. New table: rule_requirements (通用规则+来源引用存储)
-6. New table: notifications (站内通知)
+变更（docs/backend-prd-v2.md §6.1）：
+1. reports：新增 user_id、anonymous_id、version（默认 1）、parent_report_id
+   （自引用，用于 /refine 版本沿革追溯）、run_summary_json（JSONB）
+2. student_profiles：新增 anonymous_id（匿名建档草稿归属）
+3. agent_runs：新增 anonymous_id（让匿名 run 产出的 report 能被正确归属）
+4. 新增表：admission_plans（招生计划，区别于 admission_scores 的历年投档线）
+5. 新增表：rule_requirements（通用规则 + 来源引用存储）
+6. 新增表：notifications（站内通知）
 """
 
 from typing import Sequence, Union
@@ -27,7 +27,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # ── reports: versioning + ownership ─────────────────────────────────────────
+    # ── reports：版本化 + 归属 ─────────────────────────────────────────
     op.add_column("reports", sa.Column("user_id", sa.String(36), sa.ForeignKey("users.id"), nullable=True))
     op.add_column("reports", sa.Column("anonymous_id", sa.String(36), nullable=True))
     op.add_column("reports", sa.Column("version", sa.Integer, nullable=False, server_default="1"))
@@ -40,11 +40,11 @@ def upgrade() -> None:
     op.create_index("ix_reports_anonymous_id", "reports", ["anonymous_id"])
     op.create_index("ix_reports_parent_report_id", "reports", ["parent_report_id"])
 
-    # ── student_profiles: anonymous draft ownership ─────────────────────────────
+    # ── student_profiles：匿名建档草稿归属 ─────────────────────────────
     op.add_column("student_profiles", sa.Column("anonymous_id", sa.String(36), nullable=True))
     op.create_index("ix_student_profiles_anonymous_id", "student_profiles", ["anonymous_id"])
 
-    # ── agent_runs: anonymous ownership (so the Report it produces can be stamped) ──
+    # ── agent_runs：匿名归属（让其产出的 Report 能被正确打上归属标记）──
     op.add_column("agent_runs", sa.Column("anonymous_id", sa.String(36), nullable=True))
     op.create_index("ix_agent_runs_anonymous_id", "agent_runs", ["anonymous_id"])
 

@@ -1,16 +1,16 @@
 """
 ConversationAgent — 报告问答 AI 助手
 
-Responsibilities:
-- Accept a user question about a specific report.
-- Build context from the report (plan_json, evidence_json, profile) within ~20K token budget.
-- Perform scoped RAG: vector_search limited to the same province+year.
-- Call LiteLLM streaming endpoint and yield tokens.
-- Apply regex compliance check on the final assembled response.
-- Never make over-promises; always cite evidence source IDs.
+职责：
+- 接收用户针对某份具体报告提出的问题。
+- 在约 20K token 预算内，从报告（plan_json、evidence_json、profile）构建上下文。
+- 执行范围受限的 RAG：vector_search 限定在同一省份+年份内检索。
+- 调用 LiteLLM 流式接口并逐个产出 token。
+- 对最终拼装完成的回复做正则合规检查。
+- 绝不做过度承诺；始终引用证据的 source ID。
 
-Flow (per message):
-    load_report_context → [optional] vector_search → LLM streaming → compliance_check → yield
+每条消息的处理流程：
+    load_report_context → [可选] vector_search → LLM 流式生成 → compliance_check → 逐段产出
 """
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 _PROMPT = prompt_registry.get("report_conversation")
 _CONV_MODEL = _PROMPT.model.alias
 _LLM_TIMEOUT = _PROMPT.model.timeout_seconds
-MAX_HISTORY_MESSAGES = 10  # trim to last N messages for context
+MAX_HISTORY_MESSAGES = 10  # 只保留最近 N 条消息作为上下文
 _MAX_PLAN_JSON_CHARS = 8000
 _MAX_EVIDENCE_CHARS = 3000
 
@@ -47,7 +47,7 @@ def _build_context_block(
     evidence_json: list | None,
 ) -> tuple[str, dict[str, str], dict[str, bool]]:
     """
-    Compress report context to fit within token budget.
+    把报告上下文压缩到 token 预算之内。
 
     Returns (拼进 Prompt 的最终文本, {来源名: 原始文本} 明细, {来源名: 是否被
     截断过}) —— 后两项只用于 context_budget 的 token 统计日志（P3 第一阶段，见
@@ -66,7 +66,7 @@ def _build_context_block(
         breakdown["plan_json"] = plan_text
 
     if evidence_json:
-        ev_text = json.dumps(evidence_json[:10], ensure_ascii=False)  # top-10 evidence
+        ev_text = json.dumps(evidence_json[:10], ensure_ascii=False)  # 取前 10 条证据
         if len(ev_text) > _MAX_EVIDENCE_CHARS:
             truncated["evidence"] = True
             ev_text = ev_text[:_MAX_EVIDENCE_CHARS] + "...(已截断)"
@@ -77,7 +77,7 @@ def _build_context_block(
 
 
 def _trim_history(messages: list[dict]) -> list[dict]:
-    """Keep only the last N turns to avoid huge prompts."""
+    """只保留最近 N 轮对话，避免 Prompt 过大。"""
     return messages[-MAX_HISTORY_MESSAGES:]
 
 
@@ -92,11 +92,10 @@ _SUMMARY_LABELS = {
 
 def _build_summary_block(summary: dict | None) -> str:
     """
-    Render the structured incremental summary (see docs/memory-architecture.md
-    §六 P2) as a compact context block. This is what keeps facts stated
-    earlier in a long conversation from being forgotten once they age out of
-    _trim_history's raw MAX_HISTORY_MESSAGES window — the summary is
-    generated to cover exactly the messages that window no longer includes.
+    把结构化的增量摘要（见 docs/memory-architecture.md §六 P2）渲染成一个
+    精简的上下文块。这正是长对话中较早陈述的事实不会因为超出
+    _trim_history 的 MAX_HISTORY_MESSAGES 原文窗口而被遗忘的原因 ——
+    摘要正是为覆盖那个窗口已不再包含的消息而生成的。
     """
     if not summary:
         return ""
@@ -166,13 +165,13 @@ def _build_messages(
 
 
 def _compliance_check(text: str) -> tuple[bool, list[str]]:
-    """Quick regex compliance check on generated response text."""
+    """对生成的回复文本做一次快速的正则合规检查。"""
     issues = check_compliance(text)
     return len(issues) == 0, issues
 
 
 def _sanitize_response(text: str, issues: list[str]) -> str:
-    """Replace compliance-violating phrases with safe alternatives (shared word list, see compliance.py)."""
+    """把违规短语替换为安全表述（共享词表，见 compliance.py）。"""
     return sanitize_text(text)
 
 
@@ -187,14 +186,13 @@ async def stream_conversation_response(
     report_id: str | None = None,
 ) -> AsyncGenerator[dict, None]:
     """
-    Core streaming generator for ConversationAgent.
+    ConversationAgent 的核心流式生成器。
 
-    `summary` is the structured incremental summary covering messages that
-    have already aged out of the raw history window (see P2) — pass None to
-    fall back to the pre-P2 behavior of only ever seeing the last
-    MAX_HISTORY_MESSAGES turns.
+    `summary` 是覆盖已超出原文历史窗口的消息的结构化增量摘要（见 P2）——
+    传 None 则退回 P2 之前的行为，即只能看到最近
+    MAX_HISTORY_MESSAGES 轮对话。
 
-    Yields dicts:
+    产出的字典：
         {"type": "token", "content": "..."}
         {"type": "citation", "source_id": "...", "text": "..."}
         {"type": "compliance_warning", "issues": [...]}
@@ -223,7 +221,7 @@ async def stream_conversation_response(
         },
     )
 
-    # Build messages array
+    # 构建消息数组
     messages = _build_messages(
         context_block=context_block,
         summary_block=summary_block,
@@ -286,14 +284,14 @@ async def stream_conversation_response(
         yield {"type": "token", "content": remaining}
 
     if not full_response.strip():
-        # Model returned a 200 with zero content tokens (seen with Moonshot under
-        # load) — treat as a failure instead of silently persisting an empty reply.
+        # 模型返回了 200 但没有任何内容 token（在 Moonshot 高负载时出现过）——
+        # 视为失败处理，而不是悄悄持久化一条空回复。
         logger.warning("ConversationAgent received an empty completion")
         fallback = "抱歉，AI 助手暂时无法生成回复，请稍后重试。"
         yield {"type": "token", "content": fallback}
         full_response = fallback
 
-    # ── Compliance check on full assembled response ──
+    # ── 对拼装完成的完整回复做合规检查 ──
     passed, issues = _compliance_check(full_response)
     issues = list(dict.fromkeys(output_guard.compliance_issues + issues))
     if output_guard.rejected_citations:
@@ -303,7 +301,7 @@ async def stream_conversation_response(
     if issues:
         yield {"type": "compliance_warning", "issues": issues}
 
-    # ── Extract citation references from response ──
+    # ── 从回复中提取引用标记 ──
     citation_pattern = re.compile(r"\[来源:([^\]]+)\]")
     for match in citation_pattern.finditer(full_response):
         source_id = match.group(1)

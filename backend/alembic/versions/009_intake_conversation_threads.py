@@ -1,4 +1,4 @@
-"""Intake conversation threads
+"""建档前聊天会话的多会话支持
 
 Revision ID: 009
 Revises: 008

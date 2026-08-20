@@ -52,8 +52,8 @@ async def create_agent_run(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Create an AgentRun, enqueue it to ARQ for background execution.
-    Uses thread_id as idempotency key (see PRD 13.2).
+    创建一条 AgentRun，投入 ARQ 队列后台执行。
+    用 thread_id 作幂等键（见 PRD 13.2）。
     """
     arq_pool = getattr(request.app.state, "arq_pool", None)
     if not arq_pool:
@@ -61,7 +61,7 @@ async def create_agent_run(
 
     thread_id = body.thread_id or str(uuid4())
 
-    # Idempotency check: same thread_id within 24h with active status → 409
+    # 幂等性检查：24h 内同一 thread_id 存在活跃状态的 run → 409
     existing = await db.execute(
         select(AgentRun).where(
             AgentRun.thread_id == thread_id,
@@ -94,7 +94,7 @@ async def create_agent_run(
     db.add(run)
     await db.commit()
 
-    # Enqueue to ARQ worker
+    # 投入 ARQ worker 队列
     await arq_pool.enqueue_job("run_agent", run_id)
 
     return AgentRunOut(
@@ -111,13 +111,11 @@ async def retry_agent_run(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Explicit full restart: discards this run's LangGraph checkpoint and
-    re-invokes the graph from scratch, even though a checkpoint may exist.
-    This is deliberately distinct from the default re-enqueue behavior in
-    run_agent (which resumes from checkpoint) — see docs/memory-architecture.md
-    §六 P1 Resume/Retry/Refine semantics. Only allowed for runs that stopped
-    without producing a report (failed/timeout/interrupted); a completed run
-    should be revised via /refine, not restarted.
+    显式的完全重启：丢弃这次 run 的 LangGraph checkpoint，从头重新调用图，
+    即便 checkpoint 可能还存在。这与 run_agent 默认的重新入队行为（从
+    checkpoint 恢复）故意区分开——见 docs/memory-architecture.md §六 P1
+    Resume/Retry/Refine 语义。只允许对未产出报告就停止的 run（failed/
+    timeout/interrupted）使用；已完成的 run 应该走 /refine 修订，而不是重启。
     """
     arq_pool = getattr(request.app.state, "arq_pool", None)
     if not arq_pool:
@@ -156,7 +154,7 @@ async def get_agent_run(
     run_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """Return the current status of an AgentRun."""
+    """返回某个 AgentRun 的当前状态。"""
     result = await db.execute(select(AgentRun).where(AgentRun.id == run_id))
     run = result.scalar_one_or_none()
     if not run:
@@ -182,9 +180,9 @@ async def stream_run_events(
     request: Request,
 ):
     """
-    SSE endpoint that streams events from Redis Stream key=sse:{run_id}.
-    Auth: HttpOnly Cookie session_token is validated by BFF before reaching here.
-    See PRD 5.3 for SSE auth strategy.
+    SSE 端点，从 Redis Stream（key=sse:{run_id}）读取并转发事件流。
+    鉴权：HttpOnly Cookie session_token 在到达这里之前已由 BFF 校验过。
+    SSE 鉴权方案详见 PRD 5.3。
     """
 
     async def event_generator():
@@ -193,15 +191,15 @@ async def stream_run_events(
         last_id = "0"
 
         try:
-            # Send initial connection confirmation
+            # 发送初始连接确认
             yield f"event: connected\ndata: {json.dumps({'run_id': run_id})}\n\n"
 
             while True:
-                # Check if client disconnected
+                # 检查客户端是否已断开
                 if await request.is_disconnected():
                     break
 
-                # Read from Redis Stream with 2s block timeout
+                # 从 Redis Stream 读取，阻塞超时 2 秒
                 messages = await redis_client.xread(
                     {stream_key: last_id}, block=2000, count=10
                 )
@@ -221,7 +219,7 @@ async def stream_run_events(
 
                             yield f"event: {event_type}\ndata: {data}\n\n"
 
-                            # Stop streaming after completed or failed event
+                            # 遇到 completed 或 failed 事件后停止流式推送
                             if event_type in ("completed", "failed", "error"):
                                 return
 

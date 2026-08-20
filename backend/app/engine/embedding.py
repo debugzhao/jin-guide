@@ -1,7 +1,7 @@
 """
-Embedding pipeline: batch vectorize text via LiteLLM Gateway.
-Model: text-embedding-3-small (1536 dims, per PRD §9.2)
-All embeddings go through the LiteLLM proxy — never call OpenAI directly.
+Embedding 流水线：通过 LiteLLM Gateway 批量将文本向量化。
+模型：text-embedding-3-small（1536 维，见 PRD §9.2）
+所有 embedding 调用都必须经过 LiteLLM proxy —— 禁止直连 OpenAI。
 """
 from __future__ import annotations
 
@@ -25,9 +25,9 @@ logger = logging.getLogger(__name__)
 
 async def embed_batch(texts: list[str]) -> list[list[float]]:
     """
-    Embed a list of texts via LiteLLM proxy.
-    Returns vectors in the same order as input.
-    Raises httpx.HTTPError on failure — caller handles retry/circuit-breaker.
+    通过 LiteLLM proxy 对一批文本做向量化。
+    返回的向量顺序与输入顺序一致。
+    失败时抛出 httpx.HTTPError —— 重试/熔断由调用方处理。
     """
     async with httpx.AsyncClient(timeout=60.0) as client:
         resp = await client.post(
@@ -41,7 +41,7 @@ async def embed_batch(texts: list[str]) -> list[list[float]]:
 
 
 async def embed_text(text: str) -> list[float]:
-    """Embed a single text string."""
+    """对单条文本做向量化。"""
     results = await embed_batch([text])
     return results[0]
 
@@ -51,10 +51,9 @@ async def embed_pending_chunks(
     batch_size: int = _BATCH_SIZE,
 ) -> int:
     """
-    Find all Chunk rows where embedding IS NULL, vectorize them in batches,
-    and write the vectors back to the database.
+    找出所有 embedding IS NULL 的 Chunk 记录，分批向量化后写回数据库。
 
-    Returns total number of chunks processed.
+    返回处理过的 chunk 总数。
     """
     result = await db.execute(
         select(Chunk).where(Chunk.embedding.is_(None)).order_by(Chunk.created_at)

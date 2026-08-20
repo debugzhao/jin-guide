@@ -1,4 +1,4 @@
-"""Conversation messages and summaries
+"""会话消息与摘要
 
 Revision ID: 014
 Revises: 013

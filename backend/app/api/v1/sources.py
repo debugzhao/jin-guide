@@ -21,7 +21,7 @@ class ChunkOut(BaseModel):
     id: str
     content: str
     metadata: dict = {}
-    similarity: Optional[float] = None  # present when returned from search context
+    similarity: Optional[float] = None  # 仅在检索结果场景下返回该字段
 
 
 class SourceOut(BaseModel):
@@ -48,7 +48,7 @@ async def get_source(
         select(Chunk)
         .where(Chunk.document_id == source_id)
         .order_by(
-            # chunk_index stored in metadata_json; fall back to created_at
+            # chunk_index 存在 metadata_json 里；这里退化用 created_at 排序
             Chunk.created_at.asc()
         )
     )

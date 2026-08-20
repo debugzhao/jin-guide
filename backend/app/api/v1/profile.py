@@ -67,8 +67,8 @@ class ProfileOut(BaseModel):
 
 def _compute_completeness(profile: StudentProfile) -> float:
     """
-    Compute profile completeness score (0.0 – 1.0) based on non-null field ratio.
-    Weighted: province+score/rank are required (higher weight); others are optional.
+    计算档案完整度分数（0.0 – 1.0），按非空字段的加权占比计算。
+    加权规则：省份+分数/位次是必填项（权重更高），其余字段是可选项。
     """
     fields = {
         "province": profile.province,
@@ -100,7 +100,7 @@ async def create_profile(
     body: ProfileIn,
     db: AsyncSession = Depends(get_db),
 ):
-    """Create a new StudentProfile and optionally its Preference."""
+    """创建一个新的 StudentProfile，可选同时创建其 Preference。"""
     profile = StudentProfile(
         id=str(uuid4()),
         user_id=body.user_id,
@@ -169,7 +169,7 @@ async def get_profile(
     profile_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """Fetch a StudentProfile with its Preference."""
+    """获取一个 StudentProfile 及其 Preference。"""
     result = await db.execute(
         select(StudentProfile).where(StudentProfile.id == profile_id)
     )

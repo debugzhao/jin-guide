@@ -1,6 +1,6 @@
 """
-Recommendation Agent node (M2): deterministic scoring + three-plan generation.
-Runs after the parallel fan-in of retrieval_agent + policy_rule_agent.
+Recommendation Agent 节点（M2）：确定性打分 + 生成三套方案。
+在 retrieval_agent + policy_rule_agent 并行 fan-in 汇合之后运行。
 """
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ def _score_all_sync(
     hard_blocked_items: list[str],
     max_candidates: int = 200,
 ) -> tuple[list[dict], dict, int]:
-    """Score all eligible universities and return (scored_candidates, tier_summary, max_volunteers)."""
+    """对所有符合条件的院校打分，返回 (scored_candidates, tier_summary, max_volunteers)。"""
     from app.database import SyncSessionLocal
     from app.engine.scoring import (
         assign_tier,
@@ -59,7 +59,7 @@ def _score_all_sync(
     home_province = province
     family_budget = profile.get("family_budget")
 
-    # Build set of hard-blocked university IDs from rule engine
+    # 从规则引擎结果构建被硬性阻断的院校 ID 集合
     blocked_univ_ids: set[str] = set()
     blocked_subject_combos: set[tuple[str, str]] = set()
     for item in hard_blocked_items:
@@ -76,7 +76,7 @@ def _score_all_sync(
     with SyncSessionLocal() as db:
         thresholds = get_province_threshold(db, province)
 
-        # Get distinct universities with admission data for this province/batch/subject_type
+        # 获取该省份/批次/选科类型下有录取数据的去重院校列表
         rows = db.execute(
             select(
                 University.id,
@@ -104,7 +104,7 @@ def _score_all_sync(
             if univ_id in blocked_univ_ids:
                 continue
 
-            # Compute admission score + rank_gap + tier
+            # 计算录取分数 + 位次差 + 档位
             try:
                 adm_score, rank_gap, tier = compute_admission_score(
                     student_rank=student_rank,
@@ -123,7 +123,7 @@ def _score_all_sync(
             major_fit = compute_major_fit_score(
                 preference_majors=major_prefs,
                 rejected_majors=rejected_majors,
-                major_name="",  # no per-major data in M2, use placeholder
+                major_name="",  # M2 阶段没有按专业细分的数据，用占位符代替
                 student_subjects=student_subjects,
                 required_subjects=[],
             )
@@ -186,7 +186,7 @@ def _score_all_sync(
                 "tags": label_parts,
             })
 
-    # Sort by overall_score descending
+    # 按 overall_score 降序排列
     scored.sort(key=lambda c: c["overall_score"], reverse=True)
 
     tier_summary = {
@@ -213,7 +213,7 @@ async def recommendation_agent(state: VolunteerPlanState) -> dict:
         tier_summary = {"high_rush": 0, "rush": 0, "target": 0, "safe": 0}
         max_volunteers = 96
 
-    # Generate three plans from scored candidates
+    # 从已打分的候选项生成三套方案
     try:
         from app.engine.planner import generate_plans
 
@@ -234,6 +234,6 @@ async def recommendation_agent(state: VolunteerPlanState) -> dict:
         "candidates": scored_candidates,
         "scored_candidates": scored_candidates,
         "tier_summary": tier_summary,
-        # Store plans in report_draft for report_agent to use
+        # 把方案存进 report_draft，供 report_agent 使用
         "report_draft": {"plans_raw": plans} if plans else None,
     }

@@ -1,11 +1,11 @@
 """
-Structured logging configuration (structlog).
+结构化日志配置（structlog）。
 
-Both the FastAPI process (app/main.py) and the ARQ worker process (app/worker.py)
-call configure_logging() once at startup, so every logger.info/warning call across
-API routes and agent nodes renders through the same processors — giving a consistent
-field set (timestamp, level, event) plus whatever structured kwargs the call site
-binds (e.g. run_id, node, latency_ms in app/worker.py's per-node execution logs).
+FastAPI 进程（app/main.py）和 ARQ worker 进程（app/worker.py）都会在启动时
+各自调用一次 configure_logging()，这样 API 路由和 Agent 节点里所有的
+logger.info/warning 调用都经过同一套 processor 渲染——保证输出统一带有
+timestamp、level、event 这套基础字段，外加调用点自己绑定的结构化 kwargs
+（例如 app/worker.py 里逐节点执行日志用到的 run_id、node、latency_ms）。
 """
 import logging
 
@@ -22,8 +22,8 @@ def configure_logging() -> None:
         structlog.processors.StackInfoRenderer(),
     ]
 
-    # JSON in production (log aggregators expect one JSON object per line);
-    # human-readable console output otherwise.
+    # 生产环境输出 JSON（日志采集系统期望每行一个 JSON 对象）；
+    # 其他环境输出人类可读的控制台格式。
     renderer = (
         structlog.processors.JSONRenderer()
         if settings.env == "production"

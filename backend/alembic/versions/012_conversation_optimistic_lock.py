@@ -1,4 +1,4 @@
-"""Conversation optimistic lock version column
+"""会话乐观锁版本列
 
 Revision ID: 012
 Revises: 011

@@ -117,9 +117,9 @@ async def generate_report(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Semantic entry point for report generation.
-    Internally equivalent to POST /agent/runs with task_type=generate_report.
-    See PRD 5.1 for the semantic description.
+    报告生成的语义化入口。
+    内部等价于 POST /agent/runs（task_type=generate_report）。
+    语义说明见 PRD 5.1。
     """
     arq_pool = getattr(request.app.state, "arq_pool", None)
     if not arq_pool:
@@ -140,7 +140,7 @@ async def generate_report(
     db.add(run)
     await db.commit()
 
-    # Enqueue to ARQ worker
+    # 投入 ARQ worker 队列
     await arq_pool.enqueue_job("run_agent", run_id)
 
     return GenerateReportOut(
@@ -214,7 +214,7 @@ async def list_reports(
 
 @router.get("/demo-report", response_model=ReportOut)
 async def get_demo_report():
-    """Static demo report for UI preview and SSE timeout fallback."""
+    """静态的演示报告，用于 UI 预览和 SSE 超时兜底。"""
     return _demo_report_out()
 
 
@@ -223,7 +223,7 @@ async def get_report_by_run(
     run_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """Fetch a report by the AgentRun that generated it."""
+    """按生成该报告的 AgentRun 反查报告。"""
     if run_id == "demo-run":
         return _demo_report_out()
 
@@ -241,7 +241,7 @@ async def get_report(
     report_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """Fetch a completed Report by ID."""
+    """按 ID 获取一份已完成的报告。"""
     if report_id == "demo-report":
         return _demo_report_out()
 

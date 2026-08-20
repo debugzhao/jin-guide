@@ -1,19 +1,19 @@
-"""Initial schema for 问津 Agent M1
+"""问津 Agent M1 初始 schema
 
 Revision ID: 001
 Revises:
 Create Date: 2026-06-29
 
-Creates all core tables:
+创建所有核心表：
 - users, sessions
 - student_profiles, preferences
 - agent_runs
 - reports, volunteer_checks
 - human_reviews
 - documents, chunks
-- province_thresholds (new in v0.9)
+- province_thresholds（v0.9 新增）
 
-Indexes follow PRD Section 6.2 key index strategy.
+索引设计遵循 PRD 第 6.2 节的关键索引策略。
 """
 from typing import Sequence, Union
 
@@ -27,7 +27,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Enable pgvector extension (placeholder; embedding stored as Text in M1)
+    # 启用 pgvector 扩展（先占位；M1 阶段 embedding 仍以 Text 类型存储）
     op.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
     # ── users ──────────────────────────────────────────────────────────────
@@ -138,9 +138,9 @@ def upgrade() -> None:
             sa.ForeignKey("student_profiles.id", ondelete="SET NULL"),
             nullable=True,
         ),
-        # generate_report / check_volunteer
+        # 可选值：generate_report / check_volunteer
         sa.Column("task_type", sa.String(50), nullable=False),
-        # queued / running / interrupted / completed / failed / timeout
+        # 可选值：queued / running / interrupted / completed / failed / timeout
         sa.Column("status", sa.String(20), nullable=False, server_default="queued"),
         sa.Column("cost_tokens", sa.Integer, nullable=False, server_default="0"),
         sa.Column("cost_usd", sa.Float, nullable=False, server_default="0.0"),
@@ -154,7 +154,7 @@ def upgrade() -> None:
         ),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
     )
-    # PRD 6.2: composite index for user run history queries and rate limiting
+    # PRD 6.2：为用户运行历史查询和限流场景建立的复合索引
     op.create_index(
         "ix_agent_runs_user_status_created",
         "agent_runs",
@@ -177,14 +177,14 @@ def upgrade() -> None:
             sa.ForeignKey("agent_runs.id", ondelete="SET NULL"),
             nullable=True,
         ),
-        # generating / completed / failed
+        # 可选值：generating / completed / failed
         sa.Column("status", sa.String(20), nullable=False, server_default="generating"),
-        # low / medium / high
+        # 可选值：low / medium / high
         sa.Column("risk_level", sa.String(20), nullable=True),
         sa.Column("risk_score", sa.Float, nullable=True),
-        # Structured three-tier plan (see PRD 6.4)
+        # 结构化的冲稳保三档方案（见 PRD 6.4）
         sa.Column("plan_json", sa.JSON, nullable=True),
-        # Evidence chain embedded (see PRD 6.5)
+        # 内嵌的证据链（见 PRD 6.5）
         sa.Column("evidence_json", sa.JSON, nullable=True),
         sa.Column("dataset_version", sa.String(100), nullable=True),
         sa.Column(
@@ -248,11 +248,11 @@ def upgrade() -> None:
             sa.ForeignKey("users.id", ondelete="SET NULL"),
             nullable=True,
         ),
-        # pending / in_review / need_more_info / reviewed / closed / timeout
+        # 可选值：pending / in_review / need_more_info / reviewed / closed / timeout
         sa.Column("status", sa.String(20), nullable=False, server_default="pending"),
-        # Checklist JSON (see PRD 11.5)
+        # 复核清单 JSON（见 PRD 11.5）
         sa.Column("checklist_json", sa.JSON, nullable=True),
-        # approved / rejected / need_more_info
+        # 可选值：approved / rejected / need_more_info
         sa.Column("conclusion", sa.String(50), nullable=True),
         sa.Column("reviewer_notes", sa.Text, nullable=True),
         sa.Column(
@@ -262,10 +262,10 @@ def upgrade() -> None:
             server_default=sa.text("NOW()"),
         ),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
-        # SLA timeout = created_at + 4h (see PRD 11.2, 13.3)
+        # SLA 超时时间 = created_at + 4 小时（见 PRD 11.2、13.3）
         sa.Column("timeout_at", sa.DateTime(timezone=True), nullable=True),
     )
-    # PRD 6.2: composite index for pending review queue ordering
+    # PRD 6.2：为待复核队列排序建立的复合索引
     op.create_index(
         "ix_human_reviews_status_created",
         "human_reviews",
@@ -276,15 +276,15 @@ def upgrade() -> None:
     op.create_table(
         "documents",
         sa.Column("id", sa.String(36), primary_key=True),
-        # admission_plan / admission_score / rank_segment / charter / major_intro / employment_report / policy
+        # 可选值：admission_plan / admission_score / rank_segment / charter / major_intro / employment_report / policy
         sa.Column("type", sa.String(50), nullable=False),
         sa.Column("title", sa.String(500), nullable=False),
         sa.Column("source_url", sa.String(1000), nullable=True),
         sa.Column("year", sa.Integer, nullable=True),
-        # official / semi-official / third-party / internal
+        # 可选值：official / semi-official / third-party / internal
         sa.Column("authority_level", sa.String(30), nullable=True),
         sa.Column("checksum", sa.String(64), nullable=True),
-        # raw / parsed / verified / published / deprecated
+        # 可选值：raw / parsed / verified / published / deprecated
         sa.Column("status", sa.String(20), nullable=False, server_default="raw"),
         sa.Column(
             "created_at",
@@ -308,11 +308,11 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("content", sa.Text, nullable=False),
-        # Stored as Text for M1; M2 will use pgvector vector(1536) type
+        # M1 阶段以 Text 存储；M2 将改用 pgvector 的 vector(1536) 类型
         sa.Column("embedding", sa.Text, nullable=True),
-        # Model identifier for migration filtering (see PRD 9.2)
+        # 模型标识，供迁移时按模型过滤（见 PRD 9.2）
         sa.Column("embedding_model", sa.String(100), nullable=True),
-        # Metadata: province, year, university_id, etc.
+        # 元数据：province、year、university_id 等
         sa.Column("metadata_json", sa.JSON, nullable=True),
         sa.Column(
             "created_at",
@@ -324,20 +324,20 @@ def upgrade() -> None:
     op.create_index("ix_chunks_document_id", "chunks", ["document_id"])
 
     # ── province_thresholds ──────────────────────────────────────────────────
-    # New in PRD v0.9: replaces hardcoded tier thresholds
+    # PRD v0.9 新增：取代原来硬编码的档位阈值
     op.create_table(
         "province_thresholds",
         sa.Column("id", sa.String(36), primary_key=True),
         sa.Column("province", sa.String(50), nullable=False),
         sa.Column("year", sa.Integer, nullable=False),
-        # high_rush: rank gap > this value (e.g. 5000)
+        # 冲（高）：位次差 > 该值（例如 5000）
         sa.Column("high_rush_rank_gap", sa.Integer, nullable=False, server_default="5000"),
-        # rush: rank gap in [rush_rank_gap_min, rush_rank_gap_max]
+        # 冲：位次差落在 [rush_rank_gap_min, rush_rank_gap_max] 区间内
         sa.Column("rush_rank_gap_min", sa.Integer, nullable=False, server_default="1000"),
         sa.Column("rush_rank_gap_max", sa.Integer, nullable=False, server_default="5000"),
-        # target: rank gap within ±target_rank_gap
+        # 稳：位次差在 ±target_rank_gap 范围内
         sa.Column("target_rank_gap", sa.Integer, nullable=False, server_default="1000"),
-        # safe: rank gap > safe_rank_gap (student rank safely below history avg)
+        # 保：位次差 > safe_rank_gap（考生位次显著优于历年平均线）
         sa.Column("safe_rank_gap", sa.Integer, nullable=False, server_default="2000"),
     )
     op.create_index(
@@ -347,7 +347,7 @@ def upgrade() -> None:
         unique=True,
     )
 
-    # Seed default thresholds for 河南/山东 (PRD 8.1.2)
+    # 为河南/山东填充默认阈值（PRD 8.1.2）
     op.execute("""
         INSERT INTO province_thresholds
             (id, province, year, high_rush_rank_gap, rush_rank_gap_min, rush_rank_gap_max, target_rank_gap, safe_rank_gap)

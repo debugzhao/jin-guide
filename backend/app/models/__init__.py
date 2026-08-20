@@ -1,4 +1,4 @@
-# Import all models here so Alembic can discover them via Base.metadata
+# 在这里统一导入所有模型，让 Alembic 能通过 Base.metadata 发现它们
 from app.models.base import Base
 from app.models.user import User, AuthSession
 from app.models.profile import StudentProfile, Preference

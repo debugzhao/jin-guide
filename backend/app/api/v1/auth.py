@@ -1,13 +1,13 @@
 """
-Auth API — email + password strategy.
+Auth API — 邮箱 + 密码鉴权方案。
 
 Endpoints:
-  POST /auth/send-code          — send 6-digit verification code to email (for registration)
-  POST /auth/register           — register with email + code + password
-  POST /auth/login              — login with email + password → set session cookie
-  POST /auth/logout             — clear session cookie
-  GET  /auth/me                 — return current user info (requires session)
-  POST /auth/anonymous-session  — create an anonymous session for unauthenticated draft/measure flows
+  POST /auth/send-code          — 向邮箱发送 6 位验证码（用于注册）
+  POST /auth/register           — 用邮箱 + 验证码 + 密码注册
+  POST /auth/login              — 用邮箱 + 密码登录 → 设置 session cookie
+  POST /auth/logout             — 清除 session cookie
+  GET  /auth/me                 — 返回当前用户信息（需要 session）
+  POST /auth/anonymous-session  — 为未登录的建档/测算流程创建匿名会话
 """
 import hashlib
 import hmac
@@ -42,14 +42,14 @@ _SESSION_DAYS = 30
 _CODE_PATTERN = re.compile(r"^\d{6}$")
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
+# ── 辅助函数 ────────────────────────────────────────────────────────────────────
 
 def _normalize_email(email: str) -> str:
     return email.strip().lower()
 
 
 def _hash_password(password: str) -> str:
-    """SHA-256 with SECRET_KEY as salt. For production use bcrypt/argon2."""
+    """用 SECRET_KEY 作盐的 SHA-256。生产环境应换成 bcrypt/argon2。"""
     return hashlib.sha256(
         settings.secret_key.encode() + password.encode()
     ).hexdigest()
@@ -88,7 +88,7 @@ async def _delete_code(email: str) -> None:
 
 
 async def _verify_code(email: str, user_code: str) -> None:
-    """Raise HTTPException if code is missing, expired, or mismatched."""
+    """验证码缺失、过期或不匹配时抛出 HTTPException。"""
     normalized = user_code.strip()
     if not _CODE_PATTERN.match(normalized):
         raise HTTPException(status_code=400, detail="验证码格式不正确，应为 6 位数字")
@@ -102,14 +102,14 @@ async def _verify_code(email: str, user_code: str) -> None:
 
 
 async def _send_email_code(email: str, code: str) -> bool:
-    """Send verification code email via Resend. Returns whether email was actually sent."""
+    """通过 Resend 发送验证码邮件。返回值表示邮件是否真的发出去了。"""
     return await send_verification_code(email, code, _CODE_TTL_MINUTES)
 
 
 async def _bind_anonymous_data(db: AsyncSession, anonymous_id: str, user_id: str) -> None:
     """
-    Idempotently attach anonymous-session drafts/reports to the newly authenticated user.
-    Only touches rows that aren't already owned by a user, so repeated logins are safe.
+    幂等地把匿名会话的草稿/报告挂到刚认证成功的用户上。
+    只处理尚未归属任何用户的行，因此重复登录也是安全的。
     """
     await db.execute(
         update(StudentProfile)
@@ -151,7 +151,7 @@ async def _get_current_user(
     return user_result.scalar_one_or_none()
 
 
-# ── Schemas ─────────────────────────────────────────────────────────────────────
+# ── 数据结构 ─────────────────────────────────────────────────────────────────────
 
 class SendCodeIn(BaseModel):
     email: EmailStr
@@ -198,11 +198,11 @@ class AnonymousSessionOut(BaseModel):
     session_id: str
 
 
-# ── Endpoints ────────────────────────────────────────────────────────────────────
+# ── 接口 ────────────────────────────────────────────────────────────────────────
 
 @router.post("/send-code", response_model=SendCodeOut)
 async def send_code(body: SendCodeIn):
-    """Send a 6-digit verification code to the given email."""
+    """向指定邮箱发送 6 位验证码。"""
     email = _normalize_email(body.email)
     code = _generate_code()
     await _store_code(email, code)
@@ -229,7 +229,7 @@ async def register(
     db: AsyncSession = Depends(get_db),
     session_token: str | None = Cookie(default=None),
 ):
-    """Register a new user with email + verification code + password."""
+    """用邮箱 + 验证码 + 密码注册新用户。"""
     email = _normalize_email(body.email)
     await _verify_code(email, body.code)
     await _delete_code(email)
@@ -251,7 +251,7 @@ async def register(
     db.add(user)
     await db.flush()
 
-    # Bind any anonymous-session drafts (student_profiles/reports) to the new user.
+    # 把匿名会话下的草稿（student_profiles/reports）绑定到新用户
     if session_token:
         old_session_result = await db.execute(
             select(AuthSession).where(AuthSession.id == session_token)
@@ -287,7 +287,7 @@ async def login(
     db: AsyncSession = Depends(get_db),
     session_token: str | None = Cookie(default=None),
 ):
-    """Login with email + password."""
+    """用邮箱 + 密码登录。"""
     email = _normalize_email(body.email)
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
@@ -296,7 +296,7 @@ async def login(
     if not _verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=401, detail="邮箱或密码不正确")
 
-    # Bind any anonymous-session drafts (student_profiles/reports) to this user.
+    # 把匿名会话下的草稿（student_profiles/reports）绑定到该用户
     if session_token:
         old_session_result = await db.execute(
             select(AuthSession).where(AuthSession.id == session_token)
@@ -327,14 +327,14 @@ async def login(
 
 @router.post("/logout")
 async def logout(response: Response):
-    """Clear session cookie."""
+    """清除 session cookie。"""
     response.delete_cookie("session_token")
     return {"message": "已退出登录"}
 
 
 @router.get("/me", response_model=MeOut)
 async def me(current_user: User | None = Depends(_get_current_user)):
-    """Return current user info. 401 if not logged in."""
+    """返回当前用户信息；未登录则 401。"""
     if not current_user:
         raise HTTPException(status_code=401, detail="未登录")
     return MeOut(
@@ -352,12 +352,12 @@ async def create_anonymous_session(
     session_token: str | None = Cookie(default=None),
 ):
     """
-    Create an anonymous session for unauthenticated measure/建档 flows.
+    为未登录的测算/建档流程创建匿名会话。
 
-    Idempotent: if the incoming session_token cookie already resolves to a valid
-    session (anonymous or logged-in), reuse it instead of creating a duplicate row.
-    Registering/logging in later binds student_profiles/reports created under this
-    anonymous_id to the real user (see _bind_anonymous_data).
+    幂等：如果传入的 session_token cookie 已经能解析出一个有效 session
+    （无论匿名还是已登录），直接复用它，不重复建行。之后注册/登录时会把
+    这个 anonymous_id 下产生的 student_profiles/reports 绑定给真实用户
+    （见 _bind_anonymous_data）。
     """
     if session_token:
         existing = await db.execute(

@@ -1,4 +1,4 @@
-"""Report run_id unique constraint
+"""reports.run_id 唯一约束
 
 Revision ID: 013
 Revises: 012

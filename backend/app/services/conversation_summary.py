@@ -1,23 +1,18 @@
 """
-Structured incremental conversation summary — see docs/memory-architecture.md
-§六 P2.
+结构化增量对话摘要 —— 见 docs/memory-architecture.md §六 P2。
 
-Agents only ever see the last MAX_HISTORY_MESSAGES raw messages (10 for
-ConversationAgent, 16 for IntakeAgent). Once a conversation runs longer than
-that, earlier turns simply never enter the prompt again — nothing captured
-them. This module maintains a structured JSON summary (confirmed_facts /
-preferences / rejected_options / previous_decisions / open_questions) that
-covers messages once they age out of that window, so facts like "budget is
-50k" stay visible to the agent long after the turn that stated it has
-scrolled away.
+Agent 每次只能看到最近 MAX_HISTORY_MESSAGES 条原始消息（ConversationAgent
+是 10 条，IntakeAgent 是 16 条）。一旦对话轮数超过这个窗口，更早的对话轮次
+就再也不会进入 prompt —— 没有任何机制记录它们。本模块维护一份结构化 JSON
+摘要（confirmed_facts / preferences / rejected_options / previous_decisions /
+open_questions），专门覆盖那些已经滑出窗口的历史消息，这样像"预算 5 万"这类
+事实，即使说出它的那轮对话早已被滚出窗口，依然能持续留在 Agent 视野里。
 
-The summary is not a source of truth — ConversationMessage rows are — so
-every regeneration records its model, prompt version, and covered range
-(see ConversationSummary). Generation is best-effort (same reliability tier
-as intake_chat.py's title upgrade, triggered via FastAPI BackgroundTasks):
-a failure leaves the previous summary untouched, and callers always still
-have the raw recent-message window as a fallback regardless of whether a
-summary exists.
+摘要不是权威数据源 —— ConversationMessage 表才是 —— 所以每次重新生成都会
+记录使用的模型、Prompt 版本、以及覆盖的消息范围（见 ConversationSummary）。
+生成过程是 best-effort 的（与 intake_chat.py 里标题升级同一可靠性级别，同样
+通过 FastAPI BackgroundTasks 触发）：失败时保留上一份摘要不变，且无论摘要
+是否存在，调用方始终还能兜底用原始的近期消息窗口。
 """
 from __future__ import annotations
 
@@ -156,13 +151,12 @@ def _normalize_summary_field(value) -> list[str]:
     return []
 
 
-# ConversationMessage-side column lookup, kept local to this module —
-# ConversationSummary's own equivalent columns are resolved inside
-# conversation_store.py's load_summary/upsert_summary from the same
-# `parent_kind` string, so the two models' columns are never crossed (see
-# the comment on conversation_store._MESSAGE_PARENT_COLUMNS for the bug this
-# avoids: passing one model's column into a query against the other model
-# silently produces a cross join instead of an error).
+# ConversationMessage 侧的列映射，特意留在本模块内——ConversationSummary
+# 自己对应的列是在 conversation_store.py 的 load_summary/upsert_summary 里
+# 根据同一个 `parent_kind` 字符串单独解析的，所以两个模型的列永远不会用混
+# （具体要避免的 bug 见 conversation_store._MESSAGE_PARENT_COLUMNS 上的
+# 注释：把一个模型的列传进针对另一个模型的查询，不会报错，只会悄悄产生
+# 一次 cross join）。
 _MESSAGE_PARENT_COLUMNS = {
     "report": ConversationMessage.report_conversation_id,
     "intake": ConversationMessage.intake_conversation_id,
@@ -176,15 +170,14 @@ async def maybe_generate_summary(
     window_size: int,
 ) -> None:
     """
-    Best-effort background task (FastAPI BackgroundTasks — same reliability
-    tier as intake_chat.py's _maybe_upgrade_title): check whether a full
-    window's worth of messages has aged out since the last summary update,
-    and if so regenerate the structured summary covering them.
+    best-effort 的后台任务（FastAPI BackgroundTasks —— 与 intake_chat.py 的
+    _maybe_upgrade_title 同一可靠性级别）：检查上次摘要更新之后，是否已经
+    有整整一个窗口的消息滑出了近期窗口，如果是就重新生成覆盖这部分消息的
+    结构化摘要。
 
-    `parent_kind` is "report" or "intake"; `window_size` should match the
-    corresponding agent's MAX_HISTORY_MESSAGES so the summary picks up
-    exactly where the raw recent-message window leaves off, with no gap and
-    no overlap.
+    `parent_kind` 取值 "report" 或 "intake"；`window_size` 应该与对应 Agent
+    的 MAX_HISTORY_MESSAGES 保持一致，这样摘要覆盖范围正好从原始近期消息
+    窗口结束的地方接上，不留缝隙也不重叠。
     """
     from app.database import async_session_maker
 
@@ -209,7 +202,7 @@ async def maybe_generate_summary(
             prompt = _build_summary_prompt(
                 existing.summary_json if existing else None, segment_messages
             )
-        except Exception as exc:  # noqa: BLE001 - best-effort, must not raise into BackgroundTasks
+        except Exception as exc:  # noqa: BLE001 - best-effort，不能让异常抛进 BackgroundTasks
             logger.warning(
                 "conversation_summary_prepare_failed", error=str(exc), parent_kind=parent_kind, parent_id=parent_id
             )

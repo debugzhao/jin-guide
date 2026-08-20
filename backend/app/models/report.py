@@ -33,9 +33,9 @@ class Report(Base):
     # low / medium / high
     risk_level: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     risk_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    # Structured plan with three tiers (conservative/balanced/aggressive)
+    # 冲稳保三档结构化方案（conservative/balanced/aggressive）
     plan_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    # Evidence chain embedded directly (see PRD 6.5)
+    # 直接内嵌的证据链（见 PRD 6.5）
     evidence_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     dataset_version: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     # 同一血缘链内从 1 递增；/refine 产出的新版本 parent_report_id 指向被 refine 的报告
@@ -48,7 +48,7 @@ class Report(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
-    # Soft delete support
+    # 软删除支持
     deleted_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -66,7 +66,7 @@ class VolunteerCheck(Base):
     report_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("reports.id"), nullable=True
     )
-    # List of risk item objects
+    # 风险条目对象列表
     risk_items_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     # low / medium / high
     overall_risk_level: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)

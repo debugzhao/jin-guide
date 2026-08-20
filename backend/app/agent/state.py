@@ -16,23 +16,23 @@ class VolunteerPlanState(TypedDict):
     task_type: Literal["generate_report", "check_volunteer"]
 
     # ── 档案 ──
-    profile: Optional[dict]  # StudentProfile serialized
+    profile: Optional[dict]  # StudentProfile 序列化结果
     profile_complete: bool
-    profile_pending_questions: list[str]  # Questions Profile Agent needs to ask
+    profile_pending_questions: list[str]  # Profile Agent 需要追问的问题
 
     # ── 数据版本 ──
     dataset_version: Optional[str]
-    data_warnings: list[str]  # Incomplete data hints
+    data_warnings: list[str]  # 数据不完整时的提示
 
     # ── 检索结果 ──
-    # Parallel write fields: must use Reducer to prevent later node from overwriting earlier
-    evidence_list: Annotated[list[dict], operator.add]  # append-merge, no overwrite
+    # 并行写入字段：必须用 Reducer，否则后写入的节点会覆盖先写入节点的结果
+    evidence_list: Annotated[list[dict], operator.add]  # 追加合并，不覆盖
     retrieval_complete: bool
 
     # ── 规则校验结果 ──
-    # Same: Policy Rule Agent and Retrieval Agent run in parallel, need Reducer
+    # 同理：Policy Rule Agent 和 Retrieval Agent 并行运行，需要 Reducer
     rule_results: Annotated[list[dict], operator.add]  # {rule_type, target, status, reason}
-    hard_blocked_items: Annotated[list[str], operator.add]  # hard-filtered school/major group ids
+    hard_blocked_items: Annotated[list[str], operator.add]  # 被硬性过滤的院校/专业组 id
 
     # ── 候选集 ──
     candidates: list[dict]
@@ -53,7 +53,7 @@ class VolunteerPlanState(TypedDict):
     # ── 合规自检 ──
     compliance_passed: bool
     compliance_issues: list[str]
-    reflection_iterations: int  # Max 3; after that best-effort result is returned
+    reflection_iterations: int  # 最多 3 次；超过后直接返回尽力而为的结果
 
     # ── 多轮对话消息 ──
     messages: Annotated[list[BaseMessage], add_messages]
@@ -62,7 +62,7 @@ class VolunteerPlanState(TypedDict):
     started_at: str
     completed_at: Optional[str]
     error: Optional[str]
-    degraded_agents: list[str]  # Track which agents degraded
+    degraded_agents: list[str]  # 记录哪些 agent 发生了降级
 
     # ── Debug 工具调用日志（Admin Debug Console 用，Worker 聚合 tool_call_summary） ──
     tool_call_log: Annotated[list[dict], operator.add]  # {node, tool, status, latency_ms}

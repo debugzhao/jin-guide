@@ -48,10 +48,10 @@ class StudentProfile(_ProvenanceMixin, Base):
     province: Mapped[str] = mapped_column(String(50))
     score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     rank: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    # JSON list of subject strings e.g. ["物理", "化学"]
+    # 选科字符串组成的 JSON 列表，例如 ["物理", "化学"]
     subjects: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     batch: Mapped[str] = mapped_column(String(50), default="本科批")
-    # Annual tuition budget in CNY
+    # 年度学费预算（人民币）
     family_budget: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     # conservative / balanced / aggressive
     risk_style: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
@@ -78,7 +78,7 @@ class Preference(_ProvenanceMixin, Base):
     profile_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("student_profiles.id")
     )
-    # JSON lists
+    # JSON 数组
     major_prefs: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     city_prefs: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     rejected_majors: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)

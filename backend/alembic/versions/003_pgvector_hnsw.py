@@ -1,4 +1,4 @@
-"""Enable pgvector, migrate chunks.embedding to vector(1536), add HNSW index
+"""启用 pgvector，将 chunks.embedding 迁移为 vector(1536) 类型，并新增 HNSW 索引
 
 Revision ID: 003
 Revises: 002
@@ -15,21 +15,21 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # 1. Enable pgvector extension
+    # 1. 启用 pgvector 扩展
     op.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
-    # 2. Replace text embedding column with proper vector type
+    # 2. 用真正的 vector 类型替换原来的文本类型 embedding 列
     op.execute("ALTER TABLE chunks DROP COLUMN IF EXISTS embedding")
     op.execute("ALTER TABLE chunks ADD COLUMN embedding vector(1536)")
 
-    # 3. HNSW index for cosine similarity search (m=16, ef_construction=64 per PRD §6.2)
+    # 3. 用于余弦相似度检索的 HNSW 索引（m=16、ef_construction=64，按 PRD §6.2 取值）
     op.execute("""
         CREATE INDEX chunks_embedding_hnsw
         ON chunks USING hnsw (embedding vector_cosine_ops)
         WITH (m = 16, ef_construction = 64)
     """)
 
-    # 4. B-tree index on (document_id, province) for metadata filter acceleration (PRD §6.2)
+    # 4. (document_id, province) 上的 B-tree 索引，加速元数据过滤查询（PRD §6.2）
     op.execute("""
         CREATE INDEX chunks_doc_province
         ON chunks (document_id, (metadata_json->>'province'))
@@ -42,4 +42,4 @@ def downgrade() -> None:
     op.execute("DROP INDEX IF EXISTS chunks_embedding_hnsw")
     op.execute("ALTER TABLE chunks DROP COLUMN IF EXISTS embedding")
     op.execute("ALTER TABLE chunks ADD COLUMN embedding TEXT")
-    # Do not drop vector extension — may be used by other tables
+    # 不删除 vector 扩展本身——其他表可能仍在使用它

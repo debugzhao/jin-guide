@@ -1,5 +1,5 @@
 """
-Unit tests for compliance.py — regex forbidden-word detection (PRD M2 Layer 1).
+compliance.py 单元测试 —— 正则禁用词检测（PRD M2 第一层）。
 """
 import pytest
 from app.agent.nodes.compliance import check_compliance, check_compliance_report
@@ -42,7 +42,7 @@ class TestCheckCompliance:
         assert "包过" in check_compliance("报了这个专业就包过了，放心吧")
 
     def test_no_partial_match(self):
-        # "内部" alone is not forbidden — only exact phrases
+        # 单独的"内部"不算违规 —— 只匹配完整词组
         result = check_compliance("这是内部评估报告，供参考")
         assert "内部数据" not in result
         assert "内部指标" not in result
@@ -102,7 +102,7 @@ class TestCheckComplianceReport:
             "plans": [
                 {"desc": "保证录取"},
                 {"desc": "必中"},
-                {"desc": "保证录取"},  # duplicate
+                {"desc": "保证录取"},  # 重复项
             ]
         }
         passed, issues = check_compliance_report(plan)

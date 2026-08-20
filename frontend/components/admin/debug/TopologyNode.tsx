@@ -17,7 +17,7 @@ const KIND_ACCENT: Record<NodeKind, string> = {
   llm_judge: 'text-purple-600',
 }
 
-// PRD §8.11 status color table (frontend-prd.md)
+// PRD §8.11 状态颜色对照表（frontend-prd.md）
 const STATUS_STYLE: Record<NodeStatus, { border: string; bg: string; extra?: string }> = {
   pending: { border: 'border-slate-200', bg: 'bg-slate-50' },
   running: { border: 'border-blue-600', bg: 'bg-blue-50', extra: 'animate-pulse' },

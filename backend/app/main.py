@@ -13,8 +13,8 @@ from app.database import engine
 from app.logging_config import configure_logging
 from app.prompts import prompt_registry
 
-# LangSmith tracing: must be set before any LangChain/LangGraph import creates a client.
-# LangGraph auto-reads these env vars; no code changes needed in graph.py.
+# LangSmith 追踪：必须在任何 LangChain/LangGraph 导入创建 client 之前设置这些环境变量。
+# LangGraph 会自动读取这些环境变量，graph.py 里不需要额外改代码。
 if settings.langsmith_api_key:
     os.environ["LANGCHAIN_TRACING_V2"] = "true"
     os.environ["LANGCHAIN_API_KEY"] = settings.langsmith_api_key
@@ -43,18 +43,18 @@ app.include_router(v1_router, prefix="/api/v1")
 
 @app.get("/health")
 async def health():
-    """Health check endpoint. Used by load balancer and monitoring."""
+    """健康检查接口，供负载均衡器和监控系统探活使用。"""
     return {"status": "ok", "env": settings.env}
 
 
 @app.on_event("startup")
 async def startup():
     """
-    Application startup:
-    1. Verify DB connectivity (migrations handled by Alembic separately)
-    2. Create ARQ pool and store on app.state for use in route handlers
+    应用启动时执行：
+    1. 校验数据库连通性（迁移由 Alembic 单独处理，这里不做）
+    2. 创建 ARQ 连接池并挂到 app.state 上，供路由处理函数使用
     """
-    # DB connectivity check
+    # 数据库连通性检查
     try:
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
@@ -62,7 +62,7 @@ async def startup():
     except Exception as e:
         logger.warning("db_connection_check_failed", error=str(e))
 
-    # ARQ pool for enqueueing background jobs
+    # 用于投递后台任务的 ARQ 连接池
     try:
         app.state.arq_pool = await create_pool(
             RedisSettings.from_dsn(settings.redis_url)
@@ -75,7 +75,7 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown():
-    """Clean up connections on graceful shutdown."""
+    """优雅关闭时清理各连接。"""
     arq_pool = getattr(app.state, "arq_pool", None)
     if arq_pool:
         await arq_pool.aclose()

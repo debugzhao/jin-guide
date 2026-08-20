@@ -11,9 +11,9 @@ interface Props {
   from: Point
   to: Point
   kind: EdgeKind
-  /** Parallel fan-out/in edges flow while their branch is active */
+  /** 并行扇出/扇入边在其分支处于激活状态时会有流动效果 */
   active?: boolean
-  /** Bump this (e.g. iteration count) to replay the one-shot retry flash */
+  /** 递增这个值（例如迭代次数）可以重放一次性的重试闪烁效果 */
   flashKey?: number | string
 }
 
@@ -30,7 +30,7 @@ export default function TopologyEdge({ from, to, kind, active, flashKey }: Props
   const markerId = kind === 'retry' ? 'wj-arrow-retry' : 'wj-arrow-main'
 
   if (kind === 'retry') {
-    // Bow left from reflection back up to report — a visible retry loop, not a straight overlap.
+    // 从 reflection 向左弯曲回到 report——画成看得见的重试环，而不是直线重叠
     const bowX = Math.min(from.x, to.x) - 70
     const d = `M ${from.x} ${from.y} C ${bowX} ${from.y}, ${bowX} ${to.y}, ${to.x} ${to.y}`
     return (
@@ -63,7 +63,7 @@ export default function TopologyEdge({ from, to, kind, active, flashKey }: Props
   )
 }
 
-/** Shared <defs> arrowheads — render once per <svg> canvas, before any TopologyEdge. */
+/** 共享的 <defs> 箭头——每个 <svg> 画布只需渲染一次，且要在任何 TopologyEdge 之前渲染 */
 export function TopologyEdgeDefs() {
   return (
     <defs>

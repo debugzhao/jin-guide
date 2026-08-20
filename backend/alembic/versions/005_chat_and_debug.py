@@ -1,13 +1,13 @@
-"""Chat conversations + debug summary
+"""聊天会话 + 调试摘要
 
 Revision ID: 005
 Revises: 004
 Create Date: 2026-07-01
 
-Changes:
-1. New table: report_conversations — stores per-report chat history (max 50 messages)
-2. agent_runs: add debug_summary_json JSONB column for post-run debug telemetry
-3. agent_runs: add duration_seconds Float for quick latency queries
+变更：
+1. 新增表：report_conversations —— 存储每份报告的问答历史（最多 50 条消息）
+2. agent_runs：新增 debug_summary_json（JSONB）列，用于存放运行结束后的调试遥测数据
+3. agent_runs：新增 duration_seconds（Float）列，方便快速查询耗时
 """
 
 from typing import Sequence, Union
@@ -39,7 +39,7 @@ def upgrade() -> None:
             sa.ForeignKey("users.id", ondelete="SET NULL"),
             nullable=True,
         ),
-        # JSONB list of {role, content, citations, created_at} — capped at 50 messages in app layer
+        # {role, content, citations, created_at} 组成的 JSONB 列表——应用层负责限制最多 50 条消息
         sa.Column(
             "messages_json", postgresql.JSONB, server_default="[]", nullable=False
         ),
@@ -63,14 +63,14 @@ def upgrade() -> None:
         "ix_report_conversations_user_id", "report_conversations", ["user_id"]
     )
 
-    # ── agent_runs additions ────────────────────────────────────────────────────
+    # ── agent_runs 新增列 ────────────────────────────────────────────────────
     op.add_column(
         "agent_runs",
         sa.Column(
             "debug_summary_json",
             postgresql.JSONB,
             nullable=True,
-            comment="Aggregated debug telemetry written by Worker after run completes",
+            comment="由 Worker 在运行结束后写入的聚合调试遥测数据",
         ),
     )
     op.add_column(
@@ -79,7 +79,7 @@ def upgrade() -> None:
             "duration_seconds",
             sa.Float,
             nullable=True,
-            comment="Wall-clock run duration in seconds",
+            comment="运行的墙钟耗时（秒）",
         ),
     )
 

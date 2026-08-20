@@ -1,17 +1,17 @@
 """
-Reflection Agent node (Day 8).
+Reflection Agent 节点（Day 8）。
 
-Two-layer compliance self-check after report generation:
-  Layer 1: regex forbidden-word detection (deterministic)
-  Layer 2: LLM judge for semantic over-promise detection
+报告生成后的两层合规自检：
+  第一层：正则禁词检测（确定性）
+  第二层：LLM 判定，检测语义层面的过度承诺
 
-Max 3 iterations. Early exit when LLM returns passed=true or
-feedback contains "无需改进".
+最多 3 轮迭代。当 LLM 返回 passed=true，或 feedback 包含
+"无需改进" 时提前结束。
 
-Graph routing (handled by conditional edges in graph.py):
+图路由规则（由 graph.py 中的条件边处理）：
   compliance_passed         → END
-  fail + iterations < 3     → back to report (retry)
-  max iterations exceeded   → END (best-effort delivery with warning)
+  fail + iterations < 3     → 回到 report（重试）
+  max iterations exceeded   → END（带警告的尽力交付）
 
 人工复核（HITL）已在 v1.1 移除，reflection 不再有 human_review 分支。
 """
@@ -37,7 +37,7 @@ _JUDGE_MODEL = _PROMPT.model.alias
 _LLM_TIMEOUT = _PROMPT.model.timeout_seconds
 _MAX_ITERATIONS = 3
 
-# Semantic over-promise patterns for LLM judge prompt guidance
+# 用于引导 LLM 判定 Prompt 的语义过度承诺示例
 _SEMANTIC_RISK_EXAMPLES = [
     "录取概率极高",
     "几乎必然录取",
@@ -65,11 +65,11 @@ async def _llm_judge(
     plan_json: dict, compliance_issues: list[str], *, run_id: str | None = None
 ) -> dict:
     """
-    Layer 2 LLM judge: semantic over-promise detection.
-    Returns {"passed": bool, "feedback": str, "issues": list[str]}.
-    On any exception, returns a failed result so an unavailable reviewer cannot approve a report.
+    第二层 LLM 判定：检测语义层面的过度承诺。
+    返回 {"passed": bool, "feedback": str, "issues": list[str]}。
+    出现任何异常时都返回失败结果，避免一个不可用的审查器"默认通过"报告。
     """
-    # Flatten plan text for LLM review
+    # 把方案文本展平，供 LLM 审查
     plan_text = json.dumps(plan_json, ensure_ascii=False, indent=2)
     if len(plan_text) > 4000:
         plan_text = plan_text[:4000] + "\n...(truncated)"
@@ -103,7 +103,7 @@ async def _llm_judge(
                 resp.raise_for_status()
         content = resp.json()["choices"][0]["message"]["content"].strip()
 
-        # Strip markdown fences
+        # 去掉 markdown 代码块围栏
         if content.startswith("```"):
             lines = content.split("\n")
             content = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
@@ -127,8 +127,8 @@ async def _llm_judge(
 
 async def reflection_agent(state: VolunteerPlanState) -> dict:
     """
-    Reflection Agent: run two-layer compliance check on the generated report.
-    Returns state delta for compliance_passed, compliance_issues, reflection_iterations.
+    Reflection Agent：对生成的报告执行两层合规检查。
+    返回 compliance_passed、compliance_issues、reflection_iterations 的状态增量。
     """
     plan_json = state.get("report_draft") or {}
     iterations = state.get("reflection_iterations", 0) + 1
@@ -136,7 +136,7 @@ async def reflection_agent(state: VolunteerPlanState) -> dict:
 
     logger.info("Reflection Agent iteration %d (run_id=%s)", iterations, run_id)
 
-    # ── Layer 1: regex forbidden-word check ──────────────────────────────────
+    # ── 第一层：正则禁词检查 ──────────────────────────────────
     regex_passed, regex_issues = check_compliance_report(plan_json)
 
     if not regex_passed:
@@ -149,7 +149,7 @@ async def reflection_agent(state: VolunteerPlanState) -> dict:
             "reflection_iterations": iterations,
         }
 
-    # ── Layer 2: LLM judge for semantic over-promise ──────────────────────────
+    # ── 第二层：LLM 判定语义层面的过度承诺 ──────────────────────────
     llm_result = await _llm_judge(plan_json, regex_issues, run_id=run_id)
     llm_passed = llm_result["passed"]
     feedback = llm_result.get("feedback", "")
@@ -164,7 +164,7 @@ async def reflection_agent(state: VolunteerPlanState) -> dict:
             "reflection_iterations": iterations,
         }
 
-    all_issues = list(dict.fromkeys(regex_issues + llm_issues))  # preserve order, dedup
+    all_issues = list(dict.fromkeys(regex_issues + llm_issues))  # 保序去重
     logger.warning(
         "Layer 2 LLM judge found issues (iter=%d): %s", iterations, all_issues
     )

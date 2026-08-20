@@ -1,6 +1,6 @@
 """
-Retrieval Agent node (M2): SQL structured search + vector search → rerank → evidence pack.
-Runs in parallel with policy_rule_agent after data_resolver.
+Retrieval Agent 节点（M2）：SQL 结构化检索 + 向量检索 → rerank → 组装证据包。
+在 data_resolver 之后与 policy_rule_agent 并行运行。
 """
 from __future__ import annotations
 
@@ -78,7 +78,7 @@ async def retrieval_agent(state: VolunteerPlanState) -> dict:
     tool_call_log: list[dict] = []
     retrieved_at = datetime.now(UTC).isoformat()
 
-    # ── 1. SQL search (sync, run in thread) ──────────────────────────────────
+    # ── 1. SQL 检索（同步，跑在线程里） ──────────────────────────────────
     t0 = time.perf_counter()
     sql_records = await asyncio.to_thread(_sql_search_sync, province, batch, subject_type)
     sql_latency_ms = round((time.perf_counter() - t0) * 1000, 1)
@@ -121,7 +121,7 @@ async def retrieval_agent(state: VolunteerPlanState) -> dict:
             "message": f"检索到 {len(evidence_list)} 所院校的历年录取数据",
         })
 
-    # ── 2. Vector search + rerank (graceful degrade) ─────────────────────────
+    # ── 2. 向量检索 + rerank（支持优雅降级） ─────────────────────────
     breaker = get_circuit_breaker()
     try:
         from app.engine.embedding import embed_text

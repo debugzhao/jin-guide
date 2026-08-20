@@ -1,5 +1,5 @@
 """
-ARQ Worker for 问津 Agent.
+问津 Agent 的 ARQ Worker。
 """
 import asyncio
 import json
@@ -35,17 +35,16 @@ prompt_registry.validate_all()
 
 
 def _checkpoint_dsn() -> str:
-    """AsyncPostgresSaver uses psycopg3, not the +asyncpg driver SQLAlchemy needs."""
+    """AsyncPostgresSaver 用的是 psycopg3 驱动，不是 SQLAlchemy 需要的 +asyncpg。"""
     return settings.database_url.replace("postgresql+asyncpg://", "postgresql://")
 
 
 async def on_startup(ctx: dict) -> None:
     """
-    Open one long-lived AsyncPostgresSaver connection pool for the worker
-    process's lifetime and compile the checkpointed graphs once, so every
-    job invocation resumes/persists against the same checkpointer instead of
-    the graph state living only in memory (see docs/memory-architecture.md
-    §六 P1 — a killed/restarted worker used to lose all in-flight state).
+    在 worker 进程的整个生命周期内维持一个长连接的 AsyncPostgresSaver 连接池，
+    并只编译一次带 checkpoint 的图，这样每次任务调用都基于同一个 checkpointer
+    做恢复/持久化，而不是让图状态只存在于内存里（见 docs/memory-architecture.md
+    §六 P1 —— 以前 worker 被杀掉/重启后会丢失所有进行中的状态）。
     """
     checkpointer_cm = AsyncPostgresSaver.from_conn_string(_checkpoint_dsn())
     checkpointer = await checkpointer_cm.__aenter__()
@@ -77,11 +76,10 @@ async def _push_run_sse(run_id: str, event: str, data: dict) -> None:
 
 async def _emit_completed_if_report_exists(run_id: str) -> None:
     """
-    Ensure the frontend receives a terminal event once the graph run finishes.
-    Two outcomes: a report was persisted (normal path), or the run stopped at
-    the PROFILE_CHECK gate (profile_agent branch, see graph.py) — in that case
-    there is no report, and we still need to close out the SSE stream instead
-    of leaving the client waiting forever for a `completed` event that never comes.
+    确保图运行结束后前端一定能收到一个终止事件。有两种结局：报告已落库（正常
+    路径），或者运行在 PROFILE_CHECK 关卡处停下（profile_agent 分支，见
+    graph.py）——这种情况下没有报告产出，但仍要把 SSE 流收尾，而不是让客户端
+    一直等一个永远不会到来的 `completed` 事件。
     """
     async with async_session_maker() as db:
         result = await db.execute(
@@ -107,14 +105,14 @@ async def _stream_graph(
     graph, graph_input, config: dict, run_id: str
 ) -> dict:
     """
-    Drive the given compiled graph via astream(stream_mode="updates") and log one
-    structured line per completed superstep: run_id, node, event, latency_ms.
+    通过 astream(stream_mode="updates") 驱动传入的已编译图，每完成一个
+    superstep 就记一行结构化日志：run_id、node、event、latency_ms。
 
-    `graph` is either the full `agent_graph` (first-time generation) or the
-    smaller `refine_graph` (recommendation → risk → report → reflection only,
-    used by /refine — see run_refine below).
+    `graph` 可能是完整的 `agent_graph`（首次生成），也可能是更小的
+    `refine_graph`（只有 recommendation → risk → report → reflection，
+    供 /refine 使用——见下面的 run_refine）。
 
-    Returns a debug_summary dict for writing to agent_runs.debug_summary_json.
+    返回一个 debug_summary 字典，用于写入 agent_runs.debug_summary_json。
     """
     node_timings: dict[str, float] = {}
     degraded_agents: list[str] = []
@@ -137,17 +135,17 @@ async def _stream_graph(
             if not isinstance(node_state, dict):
                 continue
 
-            # Collect degraded agents from state delta
+            # 从 state 增量里收集本轮降级的 agent
             for agent_name in node_state.get("degraded_agents", []):
                 if agent_name not in degraded_agents:
                     degraded_agents.append(agent_name)
 
-            # Collect per-tool-call log entries (populated by retrieval_agent /
-            # policy_rule_agent) for tool_call_summary aggregation below.
+            # 收集逐次工具调用的日志条目（由 retrieval_agent / policy_rule_agent
+            # 写入），供下面聚合成 tool_call_summary。
             tool_call_entries.extend(node_state.get("tool_call_log", []))
 
-            # Business state_summary fields, read straight off each node's own
-            # output delta (only the node that owns the field ever sets it).
+            # 业务侧 state_summary 字段，直接从各节点自己的输出增量里读
+            # （某个字段只会被拥有它的节点写入）。
             if "evidence_list" in node_state:
                 state_summary["evidence_count"] = len(node_state["evidence_list"])
             if "hard_blocked_items" in node_state:
@@ -157,7 +155,7 @@ async def _stream_graph(
             if "reflection_iterations" in node_state:
                 state_summary["reflection_iterations"] = node_state["reflection_iterations"]
 
-    # Group tool_call_entries by tool name → count/success/error/avg_latency_ms
+    # 按工具名对 tool_call_entries 分组 → count/success/error/avg_latency_ms
     tool_stats: dict[str, dict] = {}
     for entry in tool_call_entries:
         tool = entry.get("tool", "unknown")
@@ -189,8 +187,8 @@ async def _stream_graph(
         "tool_call_summary": tool_call_summary,
         "state_summary": state_summary,
         "degraded_agents": degraded_agents,
-        # HITL was removed in v1.1 (see CLAUDE.md) — there is no code path that can
-        # trigger human review, so this is correctly always False, not a stub.
+        # v1.1 已移除人工复核（HITL，见 CLAUDE.md）——没有任何代码路径会触发
+        # human review，所以这里恒为 False 是正确行为，不是占位符。
         "triggered_human_review": False,
     }
 
@@ -279,8 +277,8 @@ def _build_refine_state(
 
 def _get_langsmith_stats(ls_run_id: uuid.UUID) -> tuple[int, float, str | None]:
     """
-    Read token usage and trace URL from LangSmith after a run completes.
-    Returns (total_tokens, cost_usd, trace_url).
+    运行结束后从 LangSmith 读取 token 用量和 trace URL。
+    返回 (total_tokens, cost_usd, trace_url)。
     """
     if not settings.langsmith_api_key:
         return 0, 0.0, None
@@ -299,10 +297,10 @@ def _get_langsmith_stats(ls_run_id: uuid.UUID) -> tuple[int, float, str | None]:
 
 async def _write_run_summary_to_report(run_id: str, debug_summary: dict) -> None:
     """
-    Best-effort: stash a user-safe subset of debug_summary on the Report this run
-    produced, for the report page's "AI 是如何得出这份方案的" decision replay card
-    (docs/backend-prd-v2.md §6.1 reports.run_summary_json). No PII — same fields
-    already exposed to Admin Debug, just trimmed to what a user-facing replay needs.
+    Best-effort：把 debug_summary 中对用户安全的一部分，存到这次运行产出的
+    Report 上，供报告页"AI 是如何得出这份方案的"决策回放卡片使用
+    （docs/backend-prd-v2.md §6.1 reports.run_summary_json）。不含 PII——
+    和 Admin Debug 暴露的是同一批字段，只是精简到面向用户回放所需的部分。
     """
     summary = {
         "node_timings": debug_summary.get("node_timings", {}),
@@ -327,14 +325,14 @@ async def _run_graph_and_finalize(
     on_success,
 ) -> None:
     """
-    Shared execution + finalization for both first-time generation (run_agent)
-    and local refine (run_refine): drive the graph, write AgentRun status/cost/
-    debug_summary, and call `on_success(run_id, debug_summary)` for the
-    run-type-specific terminal SSE event (their `completed` payload shapes differ).
+    首次生成（run_agent）和局部重新生成（run_refine）共用的执行 + 收尾逻辑：
+    驱动图运行，写入 AgentRun 的 status/cost/debug_summary，并调用
+    `on_success(run_id, debug_summary)` 发送各自类型特有的终止 SSE 事件
+    （两者 `completed` 的 payload 结构不同）。
 
-    `graph_input=None` means "resume from the last checkpoint for this
-    thread_id" (see run_agent's is_resume check) instead of starting a fresh
-    VolunteerPlanState — the checkpointer fills in the rest.
+    `graph_input=None` 表示"从这个 thread_id 的最后一个 checkpoint 恢复"
+    （见 run_agent 里的 is_resume 判断），而不是重新构造一个全新的
+    VolunteerPlanState——剩下的字段由 checkpointer 补全。
     """
     run_id = run.id
     ls_run_id = uuid.uuid4()
@@ -360,7 +358,7 @@ async def _run_graph_and_finalize(
         total_tokens, cost_usd, trace_url = _get_langsmith_stats(ls_run_id)
         duration_seconds = round(time.perf_counter() - run_started_at, 2)
 
-        # Enrich debug summary with cost info
+        # 给 debug summary 补充费用信息
         debug_summary["cost_breakdown"] = {
             "cost_usd": cost_usd,
             "cost_tokens": total_tokens,
@@ -371,10 +369,9 @@ async def _run_graph_and_finalize(
             run2 = result2.scalar_one_or_none()
             if run2:
                 run2.status = "completed"
-                # A resumed run may carry a stale error_msg from the attempt
-                # that got interrupted/timed out before this one — a reader
-                # of agent_runs shouldn't see status=completed next to a
-                # leftover failure message from a previous try.
+                # 被恢复的运行可能残留着上一次被中断/超时的尝试留下的
+                # error_msg——查看 agent_runs 的人不该看到 status=completed
+                # 旁边还挂着上一次失败留下的错误信息。
                 run2.error_msg = None
                 run2.completed_at = datetime.now(UTC)
                 run2.cost_tokens = total_tokens
@@ -398,14 +395,12 @@ async def _run_graph_and_finalize(
         duration_seconds = round(time.perf_counter() - run_started_at, 2)
         latency_ms = round(duration_seconds * 1000, 1)
 
-        # asyncio.CancelledError is ambiguous: arq raises it both when
-        # job_timeout is exceeded AND when the worker process receives
-        # SIGINT/SIGTERM (graceful shutdown/restart) — these used to be
-        # indistinguishable in agent_runs.status (both "failed"), which made
-        # "did this actually time out or did the worker just get restarted"
-        # unanswerable from the DB alone (docs/memory-architecture.md §六 P1).
-        # Elapsed time close to job_timeout implies the former; a much
-        # shorter elapsed time implies external cancellation.
+        # asyncio.CancelledError 含义是模糊的：arq 在 job_timeout 超时和
+        # worker 进程收到 SIGINT/SIGTERM（优雅关闭/重启）这两种情况下都会抛出
+        # 它——以前这两种情况在 agent_runs.status 里无法区分（都是
+        # "failed"），导致光看数据库没法回答"这到底是真超时了，还是 worker
+        # 刚好被重启了"（docs/memory-architecture.md §六 P1）。耗时接近
+        # job_timeout 说明是前者；耗时明显更短说明是外部取消。
         if isinstance(exc, asyncio.CancelledError):
             if duration_seconds >= WorkerSettings.job_timeout - 1:
                 new_status = "timeout"
@@ -447,20 +442,18 @@ async def _run_graph_and_finalize(
 
 async def run_agent(ctx: dict, run_id: str, force_restart: bool = False) -> None:
     """
-    Core ARQ task: load AgentRun from DB, then pick one of three behaviors:
+    核心 ARQ 任务：从数据库加载 AgentRun，然后走三种行为之一：
 
-    - Resume (default, checkpoint exists): a previous attempt got this far
-      and was killed/cancelled before finishing — continue from the last
-      completed node instead of re-running the whole graph.
-    - Fresh run (default, no checkpoint yet): first-ever invocation for this
-      run_id — build the initial state and run from the top.
-    - Retry (`force_restart=True`, set by POST .../retry): explicitly discard
-      any existing checkpoint and start over from a fresh initial state, even
-      if one exists — for when the operator wants a clean re-run rather than
-      continuing from whatever state a failed attempt left behind.
+    - 恢复（默认，存在 checkpoint）：之前的尝试跑到这一步时被杀掉/取消了——
+      从最后完成的节点继续，而不是把整张图重新跑一遍。
+    - 全新运行（默认，尚无 checkpoint）：这个 run_id 的第一次调用——构造
+      初始 state，从头开始跑。
+    - 重试（`force_restart=True`，由 POST .../retry 设置）：即使存在
+      checkpoint，也显式丢弃它，从全新的初始 state 重新开始——用于运营
+      方想要一次干净的重跑，而不是接着上次失败尝试留下的任意状态继续。
 
-    On success: marks run as 'completed', sets completed_at, writes LangSmith stats.
-    On failure: marks run as 'failed'/'timeout'/'interrupted', stores error_msg.
+    成功时：把 run 标记为 'completed'，写 completed_at，记录 LangSmith 统计。
+    失败时：把 run 标记为 'failed'/'timeout'/'interrupted'，存下 error_msg。
     """
     async with async_session_maker() as db:
         result = await db.execute(select(AgentRun).where(AgentRun.id == run_id))
@@ -469,10 +462,9 @@ async def run_agent(ctx: dict, run_id: str, force_restart: bool = False) -> None
             return
 
         if run.status == "completed" and not force_restart:
-            # Idempotency guard: a duplicate enqueue (accidental double-submit,
-            # or an operator retrying an already-finished run) must not
-            # re-execute the graph — report_agent would otherwise mint a
-            # second Report row for the same run_id.
+            # 幂等保护：重复入队（意外的重复提交，或运营方重试一个已经跑完的
+            # run）不能再次执行整张图——否则 report_agent 会给同一个
+            # run_id 多插一行 Report。
             logger.info("agent_run_already_completed_skip", run_id=run_id)
             return
 
@@ -566,7 +558,7 @@ async def run_refine(
 
 
 class WorkerSettings:
-    """ARQ worker configuration. Run: arq app.worker.WorkerSettings"""
+    """ARQ worker 配置。启动方式：arq app.worker.WorkerSettings"""
 
     functions = [run_agent, run_refine]
     on_startup = on_startup

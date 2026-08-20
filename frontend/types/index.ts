@@ -25,7 +25,7 @@ export interface Candidate {
   subjectRequirements: string
   reasons: string[]
   dataSourceUrl?: string
-  evidenceIds?: string[]   // source document IDs for EvidenceDrawer
+  evidenceIds?: string[]   // 源文档 ID 列表，供 EvidenceDrawer 展示引用来源
 }
 
 export interface RiskItem {
@@ -76,7 +76,7 @@ export interface AgentStep {
   status: StepStatus
 }
 
-// ── Chat Panel ──────────────────────────────────────────────────────────────
+// ── 聊天面板 ──────────────────────────────────────────────────────────────
 
 export interface ChatCitation {
   source_id: string
@@ -91,18 +91,18 @@ export interface ChatMessage {
   content: string
   citations: ChatCitation[]
   created_at: string
-  /** Optional, backend-gated model reasoning shown only for the current browser session. */
+  /** 可选，模型推理过程——由后端开关控制是否下发，只在当前浏览器会话内展示，不做持久化。 */
   thinking?: string
-  /** True while the assistant message is still streaming tokens */
+  /** 助手消息仍在流式接收 token 时为 true */
   streaming?: boolean
 }
 
 export interface ChatState {
   isChatPanelOpen: boolean
-  /** The report_id this chat session belongs to */
+  /** 该聊天会话所属的 report_id */
   activeReportId: string | null
   messages: ChatMessage[]
-  /** Tokens accumulating for the current streaming message */
+  /** 当前流式消息累积到的 token 内容 */
   streamingContent: string
   isStreaming: boolean
   dailyLimitReached: boolean
@@ -110,7 +110,7 @@ export interface ChatState {
 
 // ── Admin Debug Console ──────────────────────────────────────────────────────
 
-/** Node visual states — mirrors debug event payloads from the LangGraph run. */
+/** 节点的可视化状态——与 LangGraph run 发出的调试事件负载一一对应。 */
 export type NodeStatus =
   | 'pending'
   | 'running'
@@ -123,13 +123,13 @@ export type NodeStatus =
 export interface DebugNodeState {
   status: NodeStatus
   latencyMs?: number
-  /** Reflection retry counter, e.g. 1/3 */
+  /** Reflection 重试计数，例如 1/3 */
   iteration?: number
 }
 
 export interface DebugEvent {
   id: string
-  /** Event type without the "debug:" prefix, e.g. node_started, tool_called */
+  /** 事件类型，不含 "debug:" 前缀，例如 node_started、tool_called */
   type: string
   ts: number
   node?: string

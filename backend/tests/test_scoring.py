@@ -31,7 +31,7 @@ def db():
         engine, tables=[AdmissionScore.__table__, ProvinceThreshold.__table__]
     )
     with Session(engine) as session:
-        # 3-year data for UNIV_A
+        # UNIV_A 三年历史数据
         for year, min_rank in [(2023, 30000), (2024, 31000), (2025, 32000)]:
             session.add(AdmissionScore(
                 university_id="UNIV_A",
@@ -43,7 +43,7 @@ def db():
                 avg_rank=min_rank + 2000,
                 max_score=600 + (year - 2023) * 5,
             ))
-        # Single-year data for UNIV_B
+        # UNIV_B 只有单年数据
         session.add(AdmissionScore(
             university_id="UNIV_B",
             year=2025,
@@ -96,7 +96,7 @@ class TestComputeAdmissionScore:
         assert tier == "target"
 
     def test_safe_margin(self, db):
-        # student_rank=20000, avg_historical=(30000+31000+32000)/3=31000 → gap=11000 → safe
+        # 考生位次=20000，历史均值=(30000+31000+32000)/3=31000 → gap=11000 → 保底档
         score, gap, tier = compute_admission_score(
             20000, "UNIV_A", "河南", "本科批", "physics", db
         )
@@ -105,7 +105,7 @@ class TestComputeAdmissionScore:
         assert score > 70
 
     def test_risky_student(self, db):
-        # student_rank=40000, avg=31000 → gap=-9000 → high_rush
+        # 考生位次=40000，历史均值=31000 → gap=-9000 → 极限冲刺档
         score, gap, tier = compute_admission_score(
             40000, "UNIV_A", "河南", "本科批", "physics", db
         )
@@ -114,17 +114,17 @@ class TestComputeAdmissionScore:
         assert score < 50
 
     def test_single_year_stability_fallback(self, db):
-        # UNIV_B has only 1 year → stability falls back to 0.8
+        # UNIV_B 只有 1 年数据 → 稳定性系数回落到默认值 0.8
         score, gap, tier = compute_admission_score(
             80000, "UNIV_B", "河南", "本科批", "physics", db
         )
         assert 0.0 <= score <= 100.0
 
     def test_score_bounds(self, db):
-        # Extreme safe scenario — score must be ≤100
+        # 极端安全场景（位次极小）——分数必须 ≤100，不能因公式外推而超界
         score, _, _ = compute_admission_score(1, "UNIV_A", "河南", "本科批", "physics", db)
         assert score <= 100.0
-        # Extreme risky scenario — score must be ≥0
+        # 极端危险场景（位次极大）——分数必须 ≥0，不能因公式外推而为负
         score2, _, _ = compute_admission_score(
             999999, "UNIV_A", "河南", "本科批", "physics", db
         )
@@ -145,8 +145,8 @@ class TestComputeMajorFitScore:
         assert s > 80
 
     def test_rejected_major_penalty(self):
-        # With rejection: rejection_penalty=0, so score = pref*0.5 + subject*0.3 + 0*0.2
-        # Without rejection: rejection_penalty=100
+        # 命中排斥项：rejection_penalty=0，故 score = pref*0.5 + subject*0.3 + 0*0.2
+        # 未命中排斥项：rejection_penalty=100
         s_rejected = compute_major_fit_score(
             preference_majors=[],
             rejected_majors=["临床医学"],
@@ -159,9 +159,9 @@ class TestComputeMajorFitScore:
             major_name="临床医学",
             student_subjects=["物理", "化学", "生物"],
         )
-        # Rejected major must score significantly lower than clean
+        # 命中排斥专业的得分必须显著低于未命中的对照组
         assert s_rejected < s_clean - 10
-        # Rejected major penalty component (0.2 weight) = 0; clean = 100*0.2 = 20 points lower
+        # 排斥项分量（权重 0.2）命中时为 0；未命中时 100*0.2，两者应刚好差 20 分
         assert abs((s_clean - s_rejected) - 20) < 1.0
 
     def test_no_preference_neutral(self):
@@ -181,7 +181,7 @@ class TestComputeMajorFitScore:
             student_subjects=["物理", "化学"],
             required_subjects=["化学"],
         )
-        # subject_match=100 contributes positively
+        # 选科完全匹配（subject_match=100）应带来正向加分
         s2 = compute_major_fit_score(
             preference_majors=[],
             rejected_majors=[],

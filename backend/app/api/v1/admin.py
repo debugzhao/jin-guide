@@ -3,10 +3,10 @@ Admin Debug Console API — 仅 role=admin 可访问，其余请求返回 401/40
 数据本身不含 PII（省份/位次/分数等），仅暴露耗时/费用/工具调用等运维指标。
 
 Endpoints:
-  GET  /admin/runs                   — list recent agent runs with debug summary
-  GET  /admin/runs/{id}              — single run full debug metadata
-  GET  /admin/runs/{id}/debug-events — Admin SSE: full event stream with history replay
-  GET  /admin/metrics/summary        — real-time system metrics snapshot
+  GET  /admin/runs                   — 列出最近的 agent run 及调试摘要
+  GET  /admin/runs/{id}              — 单个 run 的完整调试元数据
+  GET  /admin/runs/{id}/debug-events — Admin SSE：完整事件流 + 历史回放
+  GET  /admin/metrics/summary        — 实时系统指标快照
 """
 from __future__ import annotations
 
@@ -28,10 +28,10 @@ from app.models.agent_run import AgentRun
 
 router = APIRouter(dependencies=[Depends(require_admin_role)])
 
-_METRICS_WINDOW_SECONDS = 300  # 5-minute rolling window for error rate
+_METRICS_WINDOW_SECONDS = 300  # 错误率统计的 5 分钟滚动窗口
 
 
-# ── Schemas ────────────────────────────────────────────────────────────────────
+# ── 数据结构 ────────────────────────────────────────────────────────────────────
 
 class RunSummary(BaseModel):
     id: str
@@ -43,7 +43,7 @@ class RunSummary(BaseModel):
     duration_seconds: Optional[float]
     trace_url: Optional[str]
     error_msg: Optional[str]
-    # Quick debug indicators
+    # 快速调试指标
     degraded_agents: list[str]
     triggered_human_review: bool
     node_count_completed: int
@@ -78,10 +78,10 @@ class MetricsSummary(BaseModel):
     timestamp: float
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
+# ── 辅助函数 ────────────────────────────────────────────────────────────────────
 
 def _extract_debug_summary(run: AgentRun) -> dict:
-    """Return the debug_summary_json or a minimal fallback."""
+    """返回 debug_summary_json，缺失时给一个最小兜底结构。"""
     if run.debug_summary_json:
         return run.debug_summary_json
     return {
@@ -100,17 +100,17 @@ def _get_degraded_agents(run: AgentRun) -> list[str]:
     return summary.get("degraded_agents", [])
 
 
-# ── Endpoints ──────────────────────────────────────────────────────────────────
+# ── 接口 ──────────────────────────────────────────────────────────────────────
 
 @router.get("/runs", response_model=list[RunSummary])
 async def list_admin_runs(
     limit: int = Query(50, ge=1, le=200),
-    status: Optional[str] = Query(None, description="Filter by status"),
+    status: Optional[str] = Query(None, description="按状态过滤"),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Return the most recent agent runs with lightweight debug indicators.
-    No PII — profile data is excluded.
+    返回最近的 agent run 列表，附带轻量调试指标。
+    不含 PII——档案数据不在返回范围内。
     """
     stmt = select(AgentRun).order_by(desc(AgentRun.created_at)).limit(limit)
     if status:
@@ -148,7 +148,7 @@ async def get_admin_run(
     run_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """Return full debug metadata for a single run."""
+    """返回单个 run 的完整调试元数据。"""
     result = await db.execute(select(AgentRun).where(AgentRun.id == run_id))
     run = result.scalar_one_or_none()
     if not run:
@@ -178,12 +178,12 @@ async def stream_debug_events(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Admin Debug SSE endpoint. Replays full event history from Redis Stream start (0-0),
-    then continues live if run is still active.
+    Admin Debug SSE 端点。从 Redis Stream 起点（0-0）回放完整事件历史，
+    若 run 仍在进行中则继续接续实时流。
 
-    Terminates with a stream_end event when the run has completed/failed or client disconnects.
+    run 完成/失败或客户端断开连接时，以 stream_end 事件结束。
     """
-    # Verify run exists
+    # 校验 run 是否存在
     result = await db.execute(select(AgentRun).where(AgentRun.id == run_id))
     run = result.scalar_one_or_none()
     if not run:
@@ -194,7 +194,7 @@ async def stream_debug_events(
     async def event_generator():
         redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
         stream_key = f"sse:{run_id}"
-        last_id = "0"  # Start from the very beginning for history replay
+        last_id = "0"  # 从最开头开始，用于历史回放
 
         try:
             yield f"data: {json.dumps({'event': 'connected', 'run_id': run_id, 'replay': True})}\n\n"
@@ -203,7 +203,7 @@ async def stream_debug_events(
                 if await request.is_disconnected():
                     break
 
-                # Read all events (including debug: prefixed ones)
+                # 读取所有事件（包括 debug: 前缀的）
                 messages = await redis_client.xread(
                     {stream_key: last_id}, block=2000, count=50
                 )
@@ -214,11 +214,11 @@ async def stream_debug_events(
                             last_id = entry_id
                             event_type = fields.get("event", "message")
                             data = fields.get("data", "{}")
-                            # Normalize debug: prefix for frontend
+                            # 把 debug: 前缀规整成前端能识别的格式
                             yield f"event: {event_type}\ndata: {data}\n\n"
 
                 elif is_finished:
-                    # No more events and run is done — send terminal event
+                    # 没有更多事件且 run 已结束——发送终止事件
                     yield f"event: debug:stream_end\ndata: {json.dumps({'run_id': run_id, 'ts': time.time()})}\n\n"
                     break
 
@@ -244,8 +244,8 @@ async def get_metrics_summary(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Return real-time system metrics snapshot.
-    Aggregates from PostgreSQL for 24h counts; active runs from DB.
+    返回实时系统指标快照。
+    24 小时计数从 PostgreSQL 聚合而来；活跃 run 数同样查自 DB。
     """
     from datetime import timedelta
     from datetime import UTC, datetime
@@ -254,13 +254,13 @@ async def get_metrics_summary(
     now = datetime.now(UTC)
     since_24h = now - timedelta(hours=24)
 
-    # Total runs in 24h
+    # 近 24 小时总 run 数
     total_result = await db.execute(
         select(func.count(AgentRun.id)).where(AgentRun.created_at >= since_24h)
     )
     total_runs = total_result.scalar_one() or 0
 
-    # Completed runs in 24h
+    # 近 24 小时已完成的 run 数
     completed_result = await db.execute(
         select(func.count(AgentRun.id)).where(
             AgentRun.created_at >= since_24h,
@@ -269,7 +269,7 @@ async def get_metrics_summary(
     )
     completed_runs = completed_result.scalar_one() or 0
 
-    # Failed runs in 24h
+    # 近 24 小时失败的 run 数
     failed_result = await db.execute(
         select(func.count(AgentRun.id)).where(
             AgentRun.created_at >= since_24h,
@@ -278,7 +278,7 @@ async def get_metrics_summary(
     )
     failed_runs = failed_result.scalar_one() or 0
 
-    # Avg duration for completed runs
+    # 已完成 run 的平均耗时
     avg_result = await db.execute(
         select(func.avg(AgentRun.duration_seconds)).where(
             AgentRun.created_at >= since_24h,
@@ -288,13 +288,13 @@ async def get_metrics_summary(
     )
     avg_duration = avg_result.scalar_one()
 
-    # Total cost
+    # 总费用
     cost_result = await db.execute(
         select(func.sum(AgentRun.cost_usd)).where(AgentRun.created_at >= since_24h)
     )
     total_cost = cost_result.scalar_one() or 0.0
 
-    # Active runs
+    # 活跃 run 数
     active_result = await db.execute(
         select(func.count(AgentRun.id)).where(
             AgentRun.status.in_(["queued", "running"])

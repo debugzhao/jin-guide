@@ -15,7 +15,7 @@ def encode_cursor(created_at: datetime, id_: str) -> str:
 
 
 def decode_cursor(cursor: str) -> tuple[datetime, str]:
-    """Raises ValueError on a malformed/tampered cursor."""
+    """游标格式不合法或被篡改时抛出 ValueError。"""
     try:
         payload = json.loads(base64.urlsafe_b64decode(cursor.encode()).decode())
         return datetime.fromisoformat(payload["created_at"]), payload["id"]

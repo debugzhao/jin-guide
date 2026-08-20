@@ -70,7 +70,7 @@ export default function ChatColumn({ reportId }: Props) {
         }))
         setChatMessages(mapped)
       })
-      .catch(() => {}) // silently ignore — panel still usable
+      .catch(() => {}) // 静默忽略——面板本身仍可用
   }, [reportId, setChatMessages])
 
   useEffect(() => {
@@ -131,7 +131,7 @@ export default function ChatColumn({ reportId }: Props) {
     try {
       await chatApi.clearHistory(reportId)
     } catch {
-      // best-effort — clear local state regardless so the UI doesn't feel stuck
+      // 尽力而为——无论如何都清空本地状态，避免 UI 卡住的感觉
     }
     clearChat()
   }

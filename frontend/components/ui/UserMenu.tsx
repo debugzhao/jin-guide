@@ -29,7 +29,7 @@ export default function UserMenu() {
     try {
       await api.logout()
     } catch {
-      // best-effort — clear local state regardless so the UI doesn't feel stuck
+      // 尽力而为——无论如何都清空本地状态，避免 UI 卡住的感觉
     }
     clearUser()
   }
@@ -45,7 +45,12 @@ export default function UserMenu() {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-2 w-56 rounded-card border border-[#E2E8F0] bg-white shadow-floating z-50 overflow-hidden">
+        // 这个组件目前只用在 SidebarNav 侧栏底部（左下角）——按钮紧贴侧栏左边缘和
+        // 底部，侧栏外层容器又是 overflow-hidden（WorkspaceShell.tsx），如果像
+        // 一般下拉菜单那样向下、右对齐展开（top-full + right-0，对齐的是这个只有
+        // 32px 宽的按钮本身），菜单会同时越过视口底部和侧栏左边缘被裁掉，点击
+        // 按钮时看起来毫无反应。向上、左对齐展开才能完整落在侧栏可见区域内。
+        <div className="absolute left-0 bottom-full mb-2 w-56 rounded-card border border-[#E2E8F0] bg-white shadow-floating z-50 overflow-hidden">
           <div className="px-4 py-3 border-b border-[#E2E8F0]">
             <p className="text-sm text-[#0F172A] truncate">{user.email}</p>
             {user.role === 'admin' && (

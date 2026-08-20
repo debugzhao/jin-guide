@@ -1,7 +1,7 @@
 """
-LangGraph state machine for 问津 Agent.
+问津 Agent 的 LangGraph 状态机。
 
-Graph topology:
+图拓扑结构：
 
     data_resolver
       [PROFILE_CHECK: 档案完整？]
@@ -20,14 +20,14 @@ Graph topology:
                             /    \\
                          END    report (retry when compliance issues)
 
-Conditional routing from data_resolver (PROFILE_CHECK):
-  profile_complete       → [retrieval_agent, policy_rule_agent] (fan-out)
+data_resolver 之后的条件路由（PROFILE_CHECK）：
+  profile_complete       → [retrieval_agent, policy_rule_agent]（并行 fan-out）
   NOT profile_complete   → profile_agent (追问，不生成报告，图在此结束)
 
-Conditional routing from reflection:
+reflection 之后的条件路由：
   compliance_passed                    → END
-  NOT compliance_passed AND iter < 3  → report (retry)
-  max iterations exceeded              → END (best-effort)
+  NOT compliance_passed AND iter < 3  → report（重试）
+  max iterations exceeded              → END（尽力交付）
 """
 import time
 from collections.abc import Callable
@@ -49,27 +49,27 @@ from app.agent.user_events import push_user_event
 
 _MAX_REFLECTION_ITERATIONS = 3
 
-# Nodes that run in parallel after data_resolver（顺序即 SSE agents_parallel_started
+# data_resolver 之后并行运行的节点（顺序即 SSE agents_parallel_started
 # 事件里 "agents" 字段的顺序，对齐 docs/backend-prd-v2.md §5.7 示例）
 _PARALLEL_NODES = ("retrieval_agent", "policy_rule_agent")
-# Node that merges the parallel branches
+# 合并两个并行分支的节点
 _FAN_IN_NODE = "recommendation"
 
 
 def _wrap_with_debug(node_name: str, fn: Callable) -> Callable:
     """
-    Wrap a LangGraph node function to emit debug:node_started /
-    debug:node_completed events around its execution.
+    包装 LangGraph 节点函数，在其执行前后发出 debug:node_started /
+    debug:node_completed 事件。
 
-    Also emits debug:parallel_fan_out when data_resolver completes and
-    debug:parallel_fan_in when the merge node (recommendation) starts.
+    另外在 data_resolver 完成时发出 debug:parallel_fan_out，
+    在合并节点（recommendation）开始时发出 debug:parallel_fan_in。
     """
 
     async def _wrapped(state: VolunteerPlanState) -> Any:
         run_id: str = state.get("run_id", "")
         t0 = time.perf_counter()
 
-        # fan-out marker: fired once from data_resolver's completion
+        # fan-out 标记：仅在 data_resolver 完成时触发一次
         if node_name == "data_resolver":
             await emit_debug_event(
                 run_id,
@@ -141,7 +141,7 @@ def _wrap_with_debug(node_name: str, fn: Callable) -> Callable:
 
         extra: dict = {"node": node_name, "latency_ms": latency_ms, "status": "completed"}
 
-        # Attach reflection result details
+        # 附加 reflection 结果细节
         if node_name == "reflection" and isinstance(result, dict):
             passed = result.get("compliance_passed", True)
             iteration = result.get("reflection_iterations", 0)
@@ -189,9 +189,9 @@ def _route_after_data_resolver(state: VolunteerPlanState) -> list[str]:
 
 def _route_after_reflection(state: VolunteerPlanState) -> str:
     """
-    Conditional routing after Reflection Agent completes.
+    Reflection Agent 完成后的条件路由。
 
-    Returns one of: "end" | "report"
+    返回值二选一："end" | "report"
     """
     compliance_passed = state.get("compliance_passed", False)
     iterations = state.get("reflection_iterations", 0)
@@ -207,16 +207,16 @@ def _route_after_reflection(state: VolunteerPlanState) -> str:
 
 def create_graph(checkpointer=None):
     """
-    Build and compile the LangGraph state machine.
+    构建并编译 LangGraph 状态机。
 
-    `checkpointer` persists state after every superstep so a crashed/killed
-    worker can resume a thread_id from its last completed node instead of
-    re-running the whole graph (see docs/memory-architecture.md §六 P1).
-    Defaults to None for structural tests that only inspect topology.
+    `checkpointer` 在每个 superstep 之后持久化状态，这样崩溃/被杀掉的 worker
+    可以从某个 thread_id 最后完成的节点恢复，而不必重跑整张图
+    （见 docs/memory-architecture.md §六 P1）。
+    默认为 None，供只检查拓扑结构、不需要持久化的结构测试使用。
     """
     graph = StateGraph(VolunteerPlanState)
 
-    # ── Nodes (all wrapped with debug event emission) ──────────────────────
+    # ── 节点（全部包装了 debug 事件发射逻辑） ──────────────────────
     graph.add_node("data_resolver", _wrap_with_debug("data_resolver", data_resolver))
     graph.add_node("profile_agent", _wrap_with_debug("profile_agent", profile_agent))
     graph.add_node("retrieval_agent", _wrap_with_debug("retrieval_agent", retrieval_agent))
@@ -226,10 +226,10 @@ def create_graph(checkpointer=None):
     graph.add_node("report", _wrap_with_debug("report", report_agent))
     graph.add_node("reflection", _wrap_with_debug("reflection", reflection_agent))
 
-    # ── Edges ──────────────────────────────────────────────────────────────
+    # ── 边 ──────────────────────────────────────────────────────────────
     graph.set_entry_point("data_resolver")
 
-    # PROFILE_CHECK: complete → fan-out to both parallel agents; incomplete → profile_agent
+    # PROFILE_CHECK：档案完整 → fan-out 到两个并行 agent；不完整 → profile_agent
     graph.add_conditional_edges(
         "data_resolver",
         _route_after_data_resolver,
@@ -241,7 +241,7 @@ def create_graph(checkpointer=None):
     )
     graph.add_edge("profile_agent", END)
 
-    # Fan-in: both parallel agents → recommendation (LangGraph waits for both)
+    # fan-in：两个并行 agent → recommendation（LangGraph 会等待两者都完成）
     graph.add_edge("retrieval_agent", "recommendation")
     graph.add_edge("policy_rule_agent", "recommendation")
 
@@ -249,7 +249,7 @@ def create_graph(checkpointer=None):
     graph.add_edge("risk", "report")
     graph.add_edge("report", "reflection")
 
-    # Conditional routing from reflection (loop or terminate)
+    # reflection 之后的条件路由（重试循环或终止）
     graph.add_conditional_edges(
         "reflection",
         _route_after_reflection,
@@ -294,10 +294,9 @@ def create_refine_graph(checkpointer=None):
     return graph.compile(checkpointer=checkpointer)
 
 
-# Module-level compiled graphs WITHOUT a checkpointer — kept only for
-# structural tests (test_graph_structure.py) that inspect topology without
-# executing nodes. The worker builds its own checkpointed instances at
-# startup (see worker.py on_startup) since AsyncPostgresSaver requires an
-# async connection pool that can't be set up at import time.
+# 模块级别、不带 checkpointer 的编译图 —— 仅供结构测试
+# （test_graph_structure.py）检查拓扑而不实际执行节点使用。Worker 会在启动时
+# 自行构建带 checkpointer 的实例（见 worker.py on_startup），因为
+# AsyncPostgresSaver 需要异步连接池，无法在 import 时就建好。
 agent_graph = create_graph()
 refine_graph = create_refine_graph()

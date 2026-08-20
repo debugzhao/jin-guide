@@ -1,4 +1,4 @@
-"""Add provenance/status fields to student_profiles and preferences
+"""为 student_profiles 和 preferences 新增来源/状态字段
 
 Revision ID: 017
 Revises: 016

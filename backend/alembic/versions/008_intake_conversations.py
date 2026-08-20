@@ -1,4 +1,4 @@
-"""Intake conversations
+"""建档前聊天会话
 
 Revision ID: 008
 Revises: 007
@@ -26,7 +26,7 @@ def upgrade() -> None:
         "intake_conversations",
         sa.Column("id", sa.String(36), primary_key=True),
         sa.Column("owner_key", sa.String(36), nullable=False, unique=True),
-        # JSONB list of {role, content, created_at} — capped at 50 messages in app layer
+        # {role, content, created_at} 组成的 JSONB 列表——应用层负责限制最多 50 条消息
         sa.Column(
             "messages_json", postgresql.JSONB, server_default="[]", nullable=False
         ),

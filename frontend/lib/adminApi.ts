@@ -1,6 +1,6 @@
 /**
- * Admin Debug Console API — GET /api/v1/admin/*, role=admin only.
- * See backend/app/api/v1/admin.py for the source of truth on response shapes.
+ * Admin Debug Console 的 API 封装——GET /api/v1/admin/*，无鉴权、仅供 admin 场景使用。
+ * 响应结构以 backend/app/api/v1/admin.py 为准。
  */
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -12,7 +12,7 @@ async function adminFetch<T>(path: string): Promise<T> {
       const body = await res.json()
       if (typeof body?.detail === 'string') message = body.detail
     } catch {
-      // ignore parse errors
+      // 忽略解析错误
     }
     throw new Error(message)
   }
@@ -58,7 +58,7 @@ export interface AdminMetricsSummary {
   timestamp: number
 }
 
-// All debug event types the backend may emit (without the "debug:" wire prefix)
+// 后端可能发出的所有调试事件类型（不含线上传输时的 "debug:" 前缀）
 const DEBUG_EVENT_TYPES = [
   'node_started',
   'node_completed',
@@ -86,8 +86,8 @@ export const adminApi = {
   getMetricsSummary: () => adminFetch<AdminMetricsSummary>('/api/v1/admin/metrics/summary'),
 
   /**
-   * Subscribe to the Admin Debug SSE stream for one run (history replay + live).
-   * Returns a cleanup function that closes the connection.
+   * 订阅某次 run 的 Admin Debug SSE 流（先回放历史事件、再接续实时事件）。
+   * 返回一个用于关闭连接的清理函数。
    */
   streamDebugEvents: (
     runId: string,
@@ -102,13 +102,13 @@ export const adminApi = {
       withCredentials: true,
     })
 
-    // Unnamed "connected" event arrives via the default message handler
+    // 未命名的 "connected" 事件走的是默认 message handler
     source.onmessage = (ev) => {
       try {
         const data = JSON.parse(ev.data)
         if (data?.event === 'connected') callbacks.onConnected?.()
       } catch {
-        // ignore
+        // 忽略
       }
     }
 
@@ -118,7 +118,7 @@ export const adminApi = {
           const data = JSON.parse(ev.data)
           callbacks.onEvent(type, data)
         } catch {
-          // ignore malformed payloads — best-effort debug stream
+          // 忽略格式异常的负载——调试流本身是 best-effort，不追求绝对可靠
         }
         if (type === 'stream_end') {
           callbacks.onStreamEnd?.()
@@ -132,7 +132,7 @@ export const adminApi = {
         const data = JSON.parse((ev as MessageEvent).data)
         callbacks.onError(data?.message ?? '未知错误')
       } catch {
-        // Connection-level error (no data payload) — handled by source.onerror below
+        // 连接级错误（没有 data 负载）——交给下面的 source.onerror 处理
       }
     })
 

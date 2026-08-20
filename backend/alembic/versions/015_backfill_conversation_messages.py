@@ -1,4 +1,4 @@
-"""Backfill conversation_messages from legacy messages_json
+"""从旧 messages_json 回填 conversation_messages
 
 Revision ID: 015
 Revises: 014

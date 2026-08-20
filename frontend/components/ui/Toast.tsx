@@ -50,7 +50,7 @@ export default function Toast({ type, message, duration = 3000, onClose }: Toast
   )
 }
 
-// Toast manager hook
+// Toast 管理器 hook
 interface ToastItem {
   id: string
   type: ToastType

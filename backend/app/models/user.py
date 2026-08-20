@@ -23,7 +23,7 @@ class User(Base):
     email_verified: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )
-    # openid reserved for Phase 2 WeChat OAuth
+    # openid 字段为二期微信 OAuth 预留
     openid: Mapped[Optional[str]] = mapped_column(
         String(128), unique=True, nullable=True
     )

@@ -45,14 +45,14 @@ _DEFAULT_CHUNK = (400, 80)
 
 
 def _estimate_tokens(text: str) -> int:
-    """Rough CJK-aware token estimate: ~1.5 chars per token for Chinese."""
+    """粗略的中日韩字符 token 估算：中文约每 1.5 个字符算 1 个 token。"""
     return max(1, len(text) // 2)
 
 
 def _split_text(text: str, max_tokens: int, overlap_tokens: int) -> Iterator[str]:
     """
-    Sliding-window split on sentence boundaries.
-    Falls back to hard character-count split when no boundary found.
+    按句子边界做滑动窗口切分。
+    找不到句子边界时，退化为按字符数硬切分。
     """
     sentences = re.split(r"(?<=[。！？\n])", text)
     buf: list[str] = []
@@ -62,7 +62,7 @@ def _split_text(text: str, max_tokens: int, overlap_tokens: int) -> Iterator[str
         sent_tokens = _estimate_tokens(sent)
         if buf_tokens + sent_tokens > max_tokens and buf:
             yield "".join(buf).strip()
-            # Keep overlap: drop sentences from front until below overlap budget
+            # 保留 overlap：从头部逐句丢弃，直到低于 overlap 预算
             while buf and buf_tokens - _estimate_tokens(buf[0]) >= buf_tokens - overlap_tokens:
                 removed = buf.pop(0)
                 buf_tokens -= _estimate_tokens(removed)
@@ -79,7 +79,7 @@ def chunk_text(
     doc_id: str,
     metadata: dict | None = None,
 ) -> list[dict]:
-    """Return list of chunk dicts ready to insert into chunks table."""
+    """返回一批可直接插入 chunks 表的 chunk 字典。"""
     max_tok, overlap_tok = _CHUNK_PARAMS.get(doc_type, _DEFAULT_CHUNK)
     base_meta = metadata or {}
 
@@ -98,7 +98,7 @@ def chunk_text(
     return chunks
 
 
-# ── DB helpers ────────────────────────────────────────────────────────────────
+# ── DB 辅助函数 ────────────────────────────────────────────────────────────────
 
 def _ensure_asyncpg_url(url: str) -> str:
     if "+asyncpg" not in url:
@@ -107,12 +107,12 @@ def _ensure_asyncpg_url(url: str) -> str:
 
 
 async def process_document(doc: Document, session: AsyncSession) -> int:
-    """Chunk a single document and persist Chunk rows. Returns chunk count."""
+    """对单个 document 做切分并落库 Chunk 记录。返回 chunk 数量。"""
     if not doc.title:
         logger.warning("Document %s has no content title, skipping", doc.id)
         return 0
 
-    # Use title + type as synthetic text for demo; real pipeline would read file content
+    # demo 阶段用 title + type 拼一段占位文本；真正的流水线应从文件内容解析
     text = f"{doc.title}\n\n（此处为文档正文占位，实际从文件解析获取）"
     meta = {
         "province": None,
@@ -163,7 +163,7 @@ async def run(doc_id: str | None, all_docs: bool, embed_only: bool) -> None:
 
         logger.info("Total chunks created: %d", total_chunks)
 
-        # Immediately embed the new chunks
+        # 立即对新增的 chunk 做向量化
         logger.info("Starting embedding pass...")
         embedded = await embed_pending_chunks(session)
         logger.info("Embedded %d chunks", embedded)

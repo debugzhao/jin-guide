@@ -1,4 +1,4 @@
-"""Intake conversation soft delete
+"""建档前聊天会话软删除
 
 Revision ID: 010
 Revises: 009

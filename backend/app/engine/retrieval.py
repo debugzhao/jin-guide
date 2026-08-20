@@ -45,9 +45,9 @@ async def vector_search(
     db: AsyncSession = None,
 ) -> ToolResponse:
     """
-    Cosine similarity search via pgvector HNSW index.
-    Returns top-k chunks deduped by chunk_id.
-    Degrades gracefully: CircuitBreaker protects against repeated pgvector failures.
+    通过 pgvector HNSW 索引做余弦相似度检索。
+    返回按 chunk_id 去重后的 top-k chunks。
+    优雅降级：CircuitBreaker 保护，防止 pgvector 反复故障时持续打挂它。
     """
     if _breaker.is_open("pgvector"):
         return ToolResponse.partial(
@@ -56,7 +56,7 @@ async def vector_search(
         )
 
     try:
-        # Build base query with cosine distance operator
+        # 用余弦距离算子构造基础查询
         distance_expr = Chunk.embedding.cosine_distance(query_vector)
         query = (
             select(
@@ -71,7 +71,7 @@ async def vector_search(
             .limit(top_k)
         )
 
-        # Optional filters via metadata_json
+        # 通过 metadata_json 附加的可选过滤条件
         if province:
             query = query.where(
                 Chunk.metadata_json["province"].as_string() == province
@@ -98,7 +98,7 @@ async def vector_search(
             for r in rows
         ]
 
-        # Dedup by chunk_id, keep highest similarity (already sorted)
+        # 按 chunk_id 去重，保留相似度最高的一条（结果已按相似度排序）
         seen: set[str] = set()
         deduped = []
         for c in chunks:
@@ -131,8 +131,8 @@ def search_admission_sql(
     db: Session = None,
 ) -> ToolResponse:
     """
-    Structured data exact retrieval from AdmissionScore.
-    Returns list of score records ordered by year desc, min_rank asc.
+    从 AdmissionScore 表做结构化数据精确检索。
+    返回按年份降序、最低位次升序排列的分数记录列表。
     """
     stmt = (
         select(
@@ -205,15 +205,15 @@ async def rerank_evidence(
     top_n: int = RERANK_TOP_N,
 ) -> ToolResponse:
     """
-    Rerank chunks using Cohere Rerank API (rerank-multilingual-v3.0).
-    Filters: score < 0.3 discarded; same document_id max 3 chunks.
-    Degrades to vector top-8 if circuit breaker is OPEN or API fails.
+    用 Cohere Rerank API（rerank-multilingual-v3.0）对 chunks 重排序。
+    过滤规则：score < 0.3 的丢弃；同一个 document_id 最多保留 3 个 chunk。
+    熔断器 OPEN 或 API 调用失败时降级为向量相似度 top-8。
     """
     if not chunks:
         return ToolResponse.success("no chunks to rerank", {"chunks": []})
 
     if _breaker.is_open("cohere_rerank"):
-        # Degraded: return first top_n by similarity score
+        # 降级：按相似度分数取前 top_n 个
         degraded = sorted(chunks, key=lambda c: c.get("similarity", 0), reverse=True)[:top_n]
         return ToolResponse.partial(
             text="Cohere rerank circuit breaker OPEN — using vector top-N fallback",
@@ -221,7 +221,7 @@ async def rerank_evidence(
         )
 
     if not settings.cohere_api_key:
-        # No API key configured — graceful degradation
+        # 未配置 API key —— 优雅降级
         degraded = sorted(chunks, key=lambda c: c.get("similarity", 0), reverse=True)[:top_n]
         return ToolResponse.partial(
             text="Cohere API key not configured — using vector top-N fallback",
@@ -249,17 +249,17 @@ async def rerank_evidence(
             resp.raise_for_status()
         results = resp.json()["results"]
 
-        # Attach rerank score to original chunks
+        # 把 rerank 分数附加到原始 chunk 上
         scored = []
         for r in results:
             chunk = dict(chunks[r["index"]])
             chunk["rerank_score"] = r["relevance_score"]
             scored.append(chunk)
 
-        # Filter score < 0.3
+        # 过滤掉 score < 0.3 的结果
         scored = [c for c in scored if c["rerank_score"] >= RERANK_SCORE_FLOOR]
 
-        # Limit 3 chunks per document_id
+        # 限制每个 document_id 最多 3 个 chunk
         doc_counts: dict[str, int] = defaultdict(int)
         filtered: list[dict] = []
         for c in scored:
@@ -280,7 +280,7 @@ async def rerank_evidence(
         err = ToolResponse.error("RERANK_FAILED", str(exc), {})
         _breaker.record_result("cohere_rerank", err)
         logger.exception("rerank_evidence failed")
-        # Degrade to vector similarity top_n
+        # 降级为按向量相似度取 top_n
         degraded = sorted(chunks, key=lambda c: c.get("similarity", 0), reverse=True)[:top_n]
         return ToolResponse.partial(
             text=f"rerank failed ({exc!s}), using vector top-N fallback",

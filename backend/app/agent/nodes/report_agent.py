@@ -1,6 +1,6 @@
 """
-Report Agent node (M2): LLM generates recommendation reasons,
-builds plan_json, compliance check, saves to DB.
+Report Agent 节点（M2）：LLM 生成推荐理由，
+组装 plan_json，做合规检查，落库保存。
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 _PROMPT = prompt_registry.get("report_generation")
 _REPORT_MODEL = _PROMPT.model.alias
-_MAX_CANDIDATES_FOR_LLM = 12  # limit to avoid huge prompts
+_MAX_CANDIDATES_FOR_LLM = 12  # 限制数量，避免 Prompt 过大
 _LLM_TIMEOUT = _PROMPT.model.timeout_seconds
 
 
@@ -47,7 +47,7 @@ async def _push_sse(run_id: str, event: str, data: dict) -> None:
 
 
 async def _call_llm(messages: list[dict], *, run_id: str | None = None) -> str:
-    """Call LiteLLM proxy to generate report text."""
+    """调用 LiteLLM 代理生成报告文本。"""
     async with track_prompt_invocation(_PROMPT, agent_run_id=run_id) as invocation:
         async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as client:
             resp = await client.post(
@@ -63,7 +63,7 @@ async def _call_llm(messages: list[dict], *, run_id: str | None = None) -> str:
 
 
 def _build_llm_prompt(profile: dict, top_candidates: list[dict], has_preferences: bool) -> list[dict]:
-    """Build the LLM prompt for generating recommendation reasons + condition commentary."""
+    """构建用于生成推荐理由 + 条件点评的 LLM Prompt。"""
     province = profile.get("province", "")
     score = profile.get("score", 0)
     rank = profile.get("rank", 0)
@@ -113,9 +113,9 @@ def _build_llm_prompt(profile: dict, top_candidates: list[dict], has_preferences
 
 
 def _parse_llm_reasons(content: str, candidate_count: int) -> tuple[dict[int, list[str]], str]:
-    """Parse LLM response into (per-candidate reasons dict, condition_commentary)."""
+    """把 LLM 的响应解析为 (按候选项索引的理由字典, condition_commentary)。"""
     try:
-        # Strip markdown code fences if present
+        # 去掉可能存在的 markdown 代码块围栏
         text = content.strip()
         if text.startswith("```"):
             lines = text.split("\n")
@@ -145,7 +145,7 @@ def _build_plan_json(
     profile: dict,
     condition_commentary: str = "",
 ) -> dict:
-    """Assemble the final plan_json structure from planner output."""
+    """从 planner 输出组装最终的 plan_json 结构。"""
     risk_level = "low"
     if any(r.get("severity") == "high" for r in risk_items):
         risk_level = "high"
@@ -206,7 +206,7 @@ async def report_agent(state: VolunteerPlanState) -> dict:
 
     await _push_sse(run_id, "node_started", {"node": "report", "message": "正在生成三套方案报告"})
 
-    # ── 1. LLM: generate recommendation reasons + condition commentary ────────
+    # ── 1. LLM：生成推荐理由 + 条件点评 ────────
     top_candidates = scored_candidates[:_MAX_CANDIDATES_FOR_LLM]
     llm_reasons: dict[int, list[str]] = {}
     # version=1 且预算/城市/专业偏好都还没填 → "基础版"，走引导性点评而非张力点评
@@ -223,7 +223,7 @@ async def report_agent(state: VolunteerPlanState) -> dict:
             llm_reasons, condition_commentary = _parse_llm_reasons(llm_content, len(top_candidates))
         except Exception as exc:
             logger.warning("LLM call failed in report_agent: %s", exc)
-            # Fallback: generate basic reasons from data
+            # 兜底方案：从数据直接生成基础理由
             for i, c in enumerate(top_candidates, 1):
                 reasons = []
                 tier = c.get("tier", "target")
@@ -242,7 +242,7 @@ async def report_agent(state: VolunteerPlanState) -> dict:
                 else "目前只有基础建档信息，报告会先覆盖更多候选，避免过早收窄；补充预算/城市/专业偏好后可以进一步收敛方案。"
             )
 
-    # Attach LLM reasons to candidates
+    # 把 LLM 生成的理由附加到候选项上
     enriched_candidates = []
     for i, c in enumerate(scored_candidates, 1):
         c_out = dict(c)
@@ -252,7 +252,7 @@ async def report_agent(state: VolunteerPlanState) -> dict:
             c_out["recommendation_reasons"] = [f"综合评分 {c.get('overall_score', 0)}，{c.get('tier', '')}档位"]
         enriched_candidates.append(c_out)
 
-    # Update plans_raw with enriched candidates (planner uses "volunteers" key)
+    # 用补充完理由的候选项更新 plans_raw（planner 用的是 "volunteers" 这个 key）
     if plans_raw:
         univ_to_candidate = {c["university_id"]: c for c in enriched_candidates if "university_id" in c}
         for plan_type, plan_data in plans_raw.items():
@@ -262,30 +262,29 @@ async def report_agent(state: VolunteerPlanState) -> dict:
                 updated_cands.append(univ_to_candidate.get(uid, c))
             plans_raw[plan_type]["volunteers"] = updated_cands
 
-    # ── 2. Build plan_json ────────────────────────────────────────────────────
+    # ── 2. 组装 plan_json ────────────────────────────────────────────────────
     plan_json = _build_plan_json(
         enriched_candidates, plans_raw, risk_items, profile, condition_commentary
     )
 
-    # ── 3. Compliance check ───────────────────────────────────────────────────
+    # ── 3. 合规检查 ───────────────────────────────────────────────────
     compliance_passed, compliance_issues = check_compliance_report(plan_json)
 
     if not compliance_passed:
         logger.warning("Compliance issues found: %s", compliance_issues)
 
-    # ── 4. Compute risk_score (0–100, lower = safer) ─────────────────────────
+    # ── 4. 计算 risk_score（0–100，数值越低越安全） ─────────────────────────
     risk_penalty = {"high": 70, "medium": 45, "low": 20}
     risk_score = float(risk_penalty.get(overall_risk, 45))
 
-    # ── 5. Persist to DB (idempotent upsert keyed by run_id) ──────────────────
-    # Reflection can route back to this node up to _MAX_REFLECTION_ITERATIONS
-    # times within a single run; a plain uuid4()+INSERT every time used to
-    # leave earlier iterations' rows orphaned in `reports` and fire a
-    # premature "completed" SSE event before the run was actually done (see
-    # docs/memory-architecture.md §六 P1). One run_id now maps to exactly one
-    # Report row — later iterations overwrite it instead of inserting a new
-    # one, and the terminal SSE event is left to the worker's finalize step,
-    # which only fires once the whole graph (including retries) has settled.
+    # ── 5. 落库（以 run_id 为 key 的幂等 upsert） ──────────────────────
+    # Reflection 在同一次 run 内最多可以把流程路由回这个节点
+    # _MAX_REFLECTION_ITERATIONS 次；之前每次都用 uuid4()+INSERT 的写法会导致
+    # 早期迭代产生的行在 `reports` 表里变成孤儿记录，还会在 run 真正结束之前
+    # 提前触发一次 "completed" SSE 事件（见 docs/memory-architecture.md
+    # §六 P1）。现在一个 run_id 精确对应一行 Report —— 之后的迭代是覆盖更新
+    # 而不是插入新行，终态 SSE 事件则交给 worker 的 finalize 步骤负责发送，
+    # 只有整张图（包括重试）都跑完才会触发。
     report_id = str(uuid4())
     db_saved = False
     try:

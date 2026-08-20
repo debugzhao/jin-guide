@@ -15,9 +15,9 @@ interface Props {
 const CITATION_PATTERN = /\[来源:([^\]]+)\]/g
 
 /**
- * Turns `[来源:id]` markers into markdown links so they survive markdown parsing as inline nodes.
- * Uses a `#`-prefixed pseudo-href because react-markdown's default urlTransform strips unknown
- * URI schemes (e.g. `citation:`) as an XSS precaution, but passes through fragment links untouched.
+ * 把 `[来源:id]` 标记转换成 markdown 链接，这样它们能作为内联节点在 markdown 解析中存活下来。
+ * 这里用 `#` 开头的伪 href，是因为 react-markdown 默认的 urlTransform 会出于 XSS 防护
+ * 剥离未知的 URI scheme（例如 `citation:`），但会原样保留片段链接（fragment link）。
  */
 function preprocessCitations(content: string) {
   return content.replace(CITATION_PATTERN, (_match, sourceId) => `[来源:${sourceId}](#citation:${encodeURIComponent(sourceId)})`)
@@ -141,7 +141,7 @@ function ChatMessageBubble({ message, showReasoning = false }: Props) {
 
 export default memo(ChatMessageBubble)
 
-/** Typing indicator shown while AI is streaming */
+/** AI 流式生成回复时显示的打字指示器 */
 export function ChatTypingIndicator() {
   return (
     <div className="flex gap-2 items-start">
@@ -161,19 +161,16 @@ export function ChatTypingIndicator() {
 }
 
 /**
- * `wj-stream-fade-in` is applied to the outer bubble once, on mount (this
- * component only exists for the lifetime of one streaming turn) — smoothness
- * of the growing text itself comes from IntakeChat.tsx's requestAnimationFrame
- * typewriter queue, not from re-triggering a CSS animation on every update
- * (doing that at per-character granularity looks like flicker, not smoothness).
+ * `wj-stream-fade-in` 只在外层气泡挂载时触发一次（这个组件的生命周期就是
+ * 一轮流式输出的时长）——文字增长本身的平滑感来自 IntakeChat.tsx 里基于
+ * requestAnimationFrame 的打字机队列，而不是每次更新都重新触发一次 CSS 动画
+ * （逐字符粒度地重触发动画看起来是闪烁，不是平滑）。
  *
- * `useDeferredValue` on `content` matters once a reply gets long (tables,
- * multi-paragraph answers): re-parsing the *entire* accumulated markdown
- * string on every single-frame tick is real work that scales with length,
- * and a synchronous render that takes longer than one frame is what actually
- * causes visible dropped frames — no amount of CSS animation fixes that.
- * Deferring lets React deprioritize/interrupt this specific re-parse under
- * load instead of blocking the frame, while the cursor still tracks the latest value immediately.
+ * 对 `content` 用 `useDeferredValue` 在回复变长时（表格、多段落回答）才真正
+ * 见效：每一帧都把*目前累积的全部* markdown 字符串重新解析一遍，是随长度线性
+ * 增长的实际开销，而一次同步渲染耗时超过一帧，正是真正造成掉帧的原因——
+ * 靠 CSS 动画是补不回来的。用 deferred 让 React 在负载高时可以降低这次重新
+ * 解析的优先级/打断它，而不是阻塞这一帧，同时光标仍然立刻跟随最新值。
  */
 export function ChatStreamingBubble({
   content,

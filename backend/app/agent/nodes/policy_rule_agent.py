@@ -1,6 +1,6 @@
 """
-Policy Rule Agent node (M2): deterministic rule checks with CircuitBreaker protection.
-Runs in parallel with retrieval_agent after data_resolver.
+Policy Rule Agent 节点（M2）：带 CircuitBreaker 保护的确定性规则校验。
+在 data_resolver 之后与 retrieval_agent 并行运行。
 """
 from __future__ import annotations
 
@@ -35,11 +35,11 @@ async def _push_sse(run_id: str, event: str, data: dict) -> None:
 def _run_rules_sync(
     profile: dict, dataset_version: str
 ) -> tuple[list[dict], list[str], list[dict], list[dict]]:
-    """Run all rule checks synchronously in thread pool.
+    """在线程池中同步运行所有规则校验。
 
-    Returns (rule_results, hard_blocked, tool_calls, breaker_transitions) — the last
-    two feed Admin Debug tool_called/circuit_breaker events (emitted by the async
-    caller, since this function runs in a worker thread and can't await).
+    返回 (rule_results, hard_blocked, tool_calls, breaker_transitions) —— 后两项
+    用于填充 Admin Debug 的 tool_called/circuit_breaker 事件（由外层异步调用方
+    发出，因为这个函数跑在 worker 线程里，不能 await）。
     """
     from datetime import datetime
 
@@ -70,10 +70,10 @@ def _run_rules_sync(
     student_rank = profile.get("rank", 0)
     student_subjects = profile.get("subjects", [])
     family_budget = profile.get("family_budget")
-    year = datetime.now().year - 1  # use most recent complete year
+    year = datetime.now().year - 1  # 用最近一个完整年份的数据
 
     with SyncSessionLocal() as db:
-        # ── 1. Batch eligibility ────────────────────────────────────────────
+        # ── 1. 批次资格校验 ────────────────────────────────────────────
         if not breaker.is_open("rule_batch"):
             state_before = breaker.get_state("rule_batch")
             t0 = time.perf_counter()
@@ -123,7 +123,7 @@ def _run_rules_sync(
                 "data": {},
             })
 
-        # ── 2. Subject requirements for preferred majors ────────────────────
+        # ── 2. 针对意向专业的选科要求校验 ────────────────────
         major_prefs: list[str] = profile.get("major_prefs") or []
         if major_prefs:
             universities = db.execute(select(University).limit(20)).scalars().all()
@@ -133,7 +133,7 @@ def _run_rules_sync(
             subject_calls = 0
             subject_errors = 0
 
-            for major_name in major_prefs[:5]:  # limit to top 5 preferred majors
+            for major_name in major_prefs[:5]:  # 最多取前 5 个意向专业
                 for univ in universities[:10]:
                     combo = (univ.id, major_name)
                     if combo in checked_combos:
@@ -181,7 +181,7 @@ def _run_rules_sync(
                     "count": subject_calls,
                 })
 
-        # ── 3. Budget check for top universities ───────────────────────────
+        # ── 3. 对头部院校进行学费预算校验 ───────────────────────────
         if family_budget and family_budget > 0:
             universities = db.execute(
                 select(University).where(
@@ -259,7 +259,7 @@ async def policy_rule_agent(state: VolunteerPlanState) -> dict:
         }]
         hard_blocked = []
 
-    # Emit SSE for each result
+    # 为每条结果发送 SSE
     for r in rule_results:
         if r["status"] in ("SUCCESS", "ERROR"):
             await _push_sse(run_id, "rule_checked", {

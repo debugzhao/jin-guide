@@ -6,31 +6,30 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-# Import all models so Alembic can detect them via Base.metadata
-from app.models import Base  # noqa: F401 - side-effect import registers all models
+# 导入所有模型，让 Alembic 能通过 Base.metadata 探测到它们
+from app.models import Base  # noqa: F401 —— 仅为副作用导入，用于注册所有模型
 from app.models.base import Base as ModelBase
 from app.config import settings
 
-# this is the Alembic Config object, which provides access to
-# the values within the .ini file in use.
+# 这是 Alembic 的 Config 对象，用于访问当前使用的 .ini 配置文件里的取值
 config = context.config
 
-# Override sqlalchemy.url with the value from app settings (reads DATABASE_URL env var)
+# 用 app 配置里的值覆盖 sqlalchemy.url（读取 DATABASE_URL 环境变量）
 config.set_main_option("sqlalchemy.url", settings.database_url)
 
-# Interpret the config file for Python logging.
-# This line sets up loggers basically.
+# 解析配置文件用于 Python 日志配置。
+# 这一行本质上就是初始化各个 logger。
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# add your model's MetaData object here for 'autogenerate' support
+# 在这里注册模型的 MetaData 对象，供 'autogenerate' 使用
 target_metadata = ModelBase.metadata
 
 
 def run_migrations_offline() -> None:
     """
-    Run migrations in 'offline' mode.
-    This configures the context with just a URL and not an Engine.
+    以 'offline' 模式运行迁移。
+    此模式下只配置一个 URL，不创建 Engine。
     """
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
@@ -52,7 +51,7 @@ def do_run_migrations(connection: Connection) -> None:
 
 
 async def run_async_migrations() -> None:
-    """Run migrations using async engine."""
+    """使用异步引擎运行迁移。"""
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
@@ -66,7 +65,7 @@ async def run_async_migrations() -> None:
 
 
 def run_migrations_online() -> None:
-    """Run migrations in 'online' mode."""
+    """以 'online' 模式运行迁移。"""
     asyncio.run(run_async_migrations())
 
 

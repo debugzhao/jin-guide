@@ -1,4 +1,4 @@
-"""Drop legacy messages_json columns
+"""删除旧的 messages_json 列
 
 Revision ID: 016
 Revises: 015

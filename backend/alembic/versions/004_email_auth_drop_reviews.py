@@ -1,12 +1,12 @@
-"""Email auth + drop human_reviews
+"""邮箱鉴权 + 删除 human_reviews
 
 Revision ID: 004
 Revises: 003
 Create Date: 2026-07-01
 
-Changes:
-1. users: add email (unique), password_hash, email_verified
-2. Drop human_reviews table (HITL feature removed)
+变更：
+1. users：新增 email（唯一）、password_hash、email_verified
+2. 删除 human_reviews 表（人工复核功能已移除）
 """
 from typing import Sequence, Union
 
@@ -20,7 +20,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # ── users: add email auth fields ─────────────────────────────────────────
+    # ── users：新增邮箱鉴权相关字段 ─────────────────────────────────────────
     op.add_column("users", sa.Column("email", sa.String(254), nullable=True))
     op.add_column("users", sa.Column("password_hash", sa.String(256), nullable=True))
     op.add_column(
@@ -34,13 +34,13 @@ def upgrade() -> None:
     )
     op.create_index("ix_users_email", "users", ["email"], unique=True)
 
-    # ── drop human_reviews (HITL removed) ────────────────────────────────────
+    # ── 删除 human_reviews（人工复核功能已移除）────────────────────────────────
     op.drop_index("ix_human_reviews_status_created", table_name="human_reviews")
     op.drop_table("human_reviews")
 
 
 def downgrade() -> None:
-    # Recreate human_reviews
+    # 重新创建 human_reviews
     op.create_table(
         "human_reviews",
         sa.Column("id", sa.String(36), primary_key=True),
@@ -57,7 +57,7 @@ def downgrade() -> None:
     )
     op.create_index("ix_human_reviews_status_created", "human_reviews", ["status", "created_at"])
 
-    # Remove email auth columns
+    # 移除邮箱鉴权相关列
     op.drop_index("ix_users_email", table_name="users")
     op.drop_column("users", "email_verified")
     op.drop_column("users", "password_hash")

@@ -55,7 +55,7 @@ class TestSafetyAdequacy:
 
 class TestGradient:
     def test_compressed_medium(self):
-        # 5 rush schools with rank_gap difference < 2000
+        # 5 所冲刺档院校，彼此间 rank_gap 差值 < 2000（梯度过密）
         candidates = [
             _make("A", "计算机", tier="rush", rank_gap=-2000 - i * 300)
             for i in range(5)
@@ -97,7 +97,7 @@ class TestCrowding:
         for cat in ["计算机", "电子", "机械", "材料", "化工"]:
             cs += [_make(f"{cat}{i}", cat, major_category=cat) for i in range(4)]
         items = check_crowding(cs)
-        # 4/20=20% < threshold → no medium items
+        # 4/20=20% 低于阈值 → 不应出现 medium 级别的风险项
         assert all(i["severity"] != "medium" for i in items)
 
     def test_empty_candidates(self):
@@ -139,7 +139,7 @@ class TestRunAllChecks:
         assert level == "high"
 
     def test_overall_low_clean(self):
-        # Diverse majors to avoid crowding; all safe with wide rank gaps
+        # 专业分散避免拥挤风险；全部为保底档且位次差距拉大
         majors = ["护理", "会计", "土木", "电子", "机械", "材料", "化工", "法学",
                   "英语", "数学", "物理", "历史", "地理", "生物", "金融"]
         cs = [_make(f"保{i}", majors[i], tier="safe", rank_gap=3000 + i * 3000)

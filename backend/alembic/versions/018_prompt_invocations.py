@@ -1,4 +1,4 @@
-"""add prompt invocation audit table
+"""新增 prompt 调用审计表
 
 Revision ID: 018_prompt_invocations
 Revises: 017

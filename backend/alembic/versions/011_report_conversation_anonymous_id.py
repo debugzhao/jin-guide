@@ -1,4 +1,4 @@
-"""Report conversation anonymous_id
+"""报告问答会话 anonymous_id
 
 Revision ID: 011
 Revises: 010

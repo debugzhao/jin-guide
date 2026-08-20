@@ -1,13 +1,13 @@
-"""province_thresholds: add max_volunteers column
+"""province_thresholds：新增 max_volunteers 列
 
 Revision ID: 006
 Revises: 005
 Create Date: 2026-07-09
 
-Changes:
-1. province_thresholds: add max_volunteers Integer column (default 96) so the
-   per-province volunteer table cap (CLAUDE.md「志愿数上限」约束) is driven by
-   this table instead of a hardcoded 96 in app/api/v1/data.py.
+变更：
+1. province_thresholds：新增 max_volunteers 整数列（默认 96），让各省份的志愿表
+   条数上限（CLAUDE.md「志愿数上限」约束）由这张表驱动，而不是硬编码在
+   app/api/v1/data.py 里的 96。
 """
 
 from typing import Sequence, Union

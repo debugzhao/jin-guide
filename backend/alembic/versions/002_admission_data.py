@@ -1,4 +1,4 @@
-"""Add admission data tables: universities, admission_scores, rank_segments, subject_requirements
+"""新增招录数据相关表：universities、admission_scores、rank_segments、subject_requirements
 
 Revision ID: 002
 Revises: 001

@@ -4,12 +4,11 @@ import { useAppStore } from '@/lib/store'
 import TopologyNode, { type NodeMeta } from './TopologyNode'
 import TopologyEdge, { TopologyEdgeDefs } from './TopologyEdge'
 
-// ── Static layout (PRD §8.11 — "不引入 ReactFlow", fixed CSS-grid-like canvas) ──
-// Node set matches the actual compiled LangGraph (backend/app/agent/graph.py), 7
-// nodes. profile_agent/human_review_node/deliver from the PRD's original 10-node
-// design don't exist post-v1.1 HITL removal (see CLAUDE.md) and are intentionally
-// omitted — a node that never receives a debug event would just sit permanently
-// gray, which misleads more than it helps.
+// ── 静态布局（PRD §8.11 —— "不引入 ReactFlow"，固定的类 CSS-grid 画布）──
+// 节点集合对应实际编译出的 LangGraph（backend/app/agent/graph.py），共 7 个
+// 节点。PRD 最初 10 节点设计里的 profile_agent/human_review_node/deliver
+// 在 v1.1 移除 HITL 后已不存在（见 CLAUDE.md），这里特意省略——一个永远收不到
+// 调试事件的节点只会一直灰着，误导性比帮助更大。
 
 const CANVAS_WIDTH = 400
 const CANVAS_HEIGHT = 760
@@ -70,7 +69,7 @@ export default function LangGraphTopology({ selectedNode, onSelectNode }: Props)
   return (
     <div className="relative flex-1 overflow-auto bg-slate-50/50 min-h-[760px]" style={{ minWidth: CANVAS_WIDTH }}>
       <div className="relative mx-auto my-6" style={{ width: CANVAS_WIDTH, height: CANVAS_HEIGHT }}>
-        {/* Parallel-execution grouping box behind retrieval/policy_rule nodes */}
+        {/* retrieval/policy_rule 节点背后的并行执行分组框 */}
         <div
           className="absolute rounded-bubble bg-slate-100/70 border border-dashed border-slate-300"
           style={{ left: 20, top: 118, width: CANVAS_WIDTH - 40, height: NODE_H + 40 }}
@@ -82,7 +81,7 @@ export default function LangGraphTopology({ selectedNode, onSelectNode }: Props)
 
         <svg width={CANVAS_WIDTH} height={CANVAS_HEIGHT} className="absolute inset-0 pointer-events-none">
           <TopologyEdgeDefs />
-          {/* data_resolver → [retrieval_agent, policy_rule_agent] (fan-out) */}
+          {/* data_resolver → [retrieval_agent, policy_rule_agent]（扇出） */}
           <TopologyEdge
             kind="parallel"
             from={center('data_resolver', 'bottom')}
@@ -95,7 +94,7 @@ export default function LangGraphTopology({ selectedNode, onSelectNode }: Props)
             to={center('policy_rule_agent', 'top')}
             active={isRunning('policy_rule_agent')}
           />
-          {/* [retrieval_agent, policy_rule_agent] → recommendation (fan-in) */}
+          {/* [retrieval_agent, policy_rule_agent] → recommendation（扇入） */}
           <TopologyEdge
             kind="parallel"
             from={center('retrieval_agent', 'bottom')}
@@ -111,14 +110,14 @@ export default function LangGraphTopology({ selectedNode, onSelectNode }: Props)
           <TopologyEdge kind="main" from={center('recommendation', 'bottom')} to={center('risk', 'top')} />
           <TopologyEdge kind="main" from={center('risk', 'bottom')} to={center('report', 'top')} />
           <TopologyEdge kind="main" from={center('report', 'bottom')} to={center('reflection', 'top')} />
-          {/* Retry loop: reflection → report (bows left), replays on each reflection_iteration */}
+          {/* 重试环：reflection → report（向左弯曲），每次 reflection_iteration 变化都会重放一次 */}
           <TopologyEdge
             kind="retry"
             from={center('reflection', 'left')}
             to={center('report', 'left')}
             flashKey={reflectionIteration}
           />
-          {/* Conditional terminal edge: reflection → END */}
+          {/* 条件终止边：reflection → END */}
           <TopologyEdge kind="conditional" from={center('reflection', 'bottom')} to={{ x: END_POS.x, y: END_POS.y }} />
         </svg>
 

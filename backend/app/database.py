@@ -17,7 +17,7 @@ async_session_maker = async_sessionmaker(
     expire_on_commit=False,
 )
 
-# Sync engine for deterministic rule engine queries (no async overhead needed)
+# 同步 engine，供确定性规则引擎查询使用（这类查询不需要 async 的开销）
 _sync_url = settings.database_url.replace("+asyncpg", "").replace("+aiosqlite", "")
 sync_engine = create_engine(
     _sync_url,

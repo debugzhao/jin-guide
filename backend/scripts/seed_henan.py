@@ -18,7 +18,7 @@ import uuid
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-# Ensure asyncpg driver is used (add it if missing)
+# 确保使用 asyncpg 驱动（缺少时自动补上）
 _raw_url = os.getenv("DATABASE_URL", "postgresql://wenjin:wenjin@localhost:5432/wenjin")
 if _raw_url.startswith("postgresql://") and "+asyncpg" not in _raw_url:
     DATABASE_URL = _raw_url.replace("postgresql://", "postgresql+asyncpg://", 1)

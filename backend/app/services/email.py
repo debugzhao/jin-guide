@@ -1,4 +1,4 @@
-"""Email delivery via Resend (https://resend.com). Free tier: 100 emails/day."""
+"""通过 Resend（https://resend.com）发送邮件。免费额度：每天 100 封。"""
 import asyncio
 
 import resend
@@ -67,11 +67,11 @@ def _send_sync(to_email: str, code: str, ttl_minutes: int) -> dict:
 
 async def send_verification_code(to_email: str, code: str, ttl_minutes: int = 10) -> bool:
     """
-    Send verification code email via Resend SDK.
+    通过 Resend SDK 发送验证码邮件。
 
-    Returns True if email was sent.
-    Returns False in development when RESEND_API_KEY is not set (code logged instead).
-    Raises RuntimeError when API key is configured but delivery fails.
+    邮件发送成功返回 True。
+    开发环境下若 RESEND_API_KEY 未配置则返回 False（验证码转为日志打印）。
+    API key 已配置但发送失败时抛出 RuntimeError。
     """
     if not settings.resend_api_key:
         if settings.env == "development":
