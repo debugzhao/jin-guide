@@ -268,7 +268,7 @@ else:
 
 `report_agent`/`profile_agent`/`reflection_agent` 三个 LLM 节点统一通过 `app/agent/llm_client.py::call_chat_completion`（`@traceable(run_type="llm")`）调用 LiteLLM 网关，而不是各自手写裸 `httpx` 请求——节点执行时处于 LangGraph 建立的活跃 trace 上下文内，被 `@traceable` 包裹的调用会自动挂成该节点 run 的子 run，且返回原始 completion JSON（含 `usage` 字段），LangSmith 按 OpenAI 兼容格式识别 token 消耗并汇总到父 run，`_get_langsmith_stats` 读到的 `total_tokens`/`cost_usd` 因此是真实值。若某个新节点要调用 LLM，必须走这个 helper，不要再手写 httpx，否则该次调用会脱离 trace 树、token 也不会被统计到。
 
-`conversation_agent.py`/`intake_agent.py`（不在 LangGraph 图内运行，见 §10.2/§10.3）仍是裸 `httpx` 流式调用，未接入这层追踪——它们的可观测性依赖 LiteLLM 网关自身的 `success_callback: langsmith`（`litellm_config.yaml`），会作为独立顶层 run 上报，不挂在任何图 trace 下面。
+`conversation_agent.py`/`intake_agent.py`（不在 LangGraph 图内运行，见 §10.2/§10.3）走 `app/agent/llm_client.py::stream_chat_completion`（`@traceable(run_type="llm", reduce_fn=...)`）而不是各自手写流式 `httpx`：`reduce_fn` 把逐 chunk 的 `delta` 聚合成和非流式一致的 `{choices, usage}` 形状喂给 LangSmith。这条链路依赖 `PromptSpec.request_options()` 在 `model.stream=true` 时自动加的 `stream_options: {"include_usage": true}`（`app/prompts/models.py`）——OpenAI 兼容协议下流式响应默认不带 usage，没有这个参数即使包了 `@traceable` 也统计不到 token。这两个 Agent 本身没有父 LangGraph run 可挂，调用方（`chat.py`/`intake_chat.py`）若想让每轮对话在 LangSmith 里可读，需要自己在最外层包一个 `@traceable(run_type="chain")` 作为父 span（否则 `litellm_chat_completion_stream` 会各自变成独立的顶层 run，靠 `metadata` 里的 `conversation_id`/`report_id` 筛选）；LiteLLM 网关自身的 `success_callback: langsmith`（`litellm_config.yaml`）仍会额外上报一份不相关联的顶层记录，两者不冲突但也不去重。
 
 ---
 

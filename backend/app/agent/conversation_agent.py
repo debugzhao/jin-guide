@@ -24,9 +24,9 @@ from html import escape
 import httpx
 
 from app.agent.context_budget import log_context_budget
+from app.agent.llm_client import stream_chat_completion
 from app.agent.nodes.compliance import _FORBIDDEN, check_compliance, sanitize_text
 from app.agent.output_guard import StreamingOutputGuard
-from app.config import settings
 from app.prompts import prompt_registry
 from app.prompts.tracing import track_prompt_invocation
 
@@ -235,37 +235,19 @@ async def stream_conversation_response(
     output_guard = StreamingOutputGuard(allowed_source_ids=allowed_source_ids)
     try:
         async with track_prompt_invocation(_PROMPT, report_id=report_id) as invocation:
+            request_body = {**invocation.request_options(), "messages": messages}
             async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as client:
-                async with client.stream(
-                "POST",
-                f"{settings.litellm_base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.litellm_master_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    **invocation.request_options(),
-                    "messages": messages,
-                },
-                ) as resp:
-                    resp.raise_for_status()
-                    async for line in resp.aiter_lines():
-                        if not line.startswith("data: "):
-                            continue
-                        raw = line[6:].strip()
-                        if raw == "[DONE]":
-                            break
-                        try:
-                            chunk = json.loads(raw)
-                            delta = chunk["choices"][0]["delta"]
-                            token = delta.get("content") or ""
-                            if token:
-                                safe_token = output_guard.feed(token)
-                                if safe_token:
-                                    full_response += safe_token
-                                    yield {"type": "token", "content": safe_token}
-                        except (json.JSONDecodeError, KeyError, IndexError):
-                            continue
+                async for chunk in stream_chat_completion(client, request_body):
+                    try:
+                        delta = chunk["choices"][0]["delta"]
+                        token = delta.get("content") or ""
+                    except (KeyError, IndexError):
+                        continue
+                    if token:
+                        safe_token = output_guard.feed(token)
+                        if safe_token:
+                            full_response += safe_token
+                            yield {"type": "token", "content": safe_token}
 
     except Exception as exc:
         logger.warning("ConversationAgent LLM call failed: %s", exc)

@@ -91,13 +91,18 @@ class PromptSpec(BaseModel):
 
     def request_options(self, **context: str | None) -> dict[str, Any]:
         """生成所有调用点共用的模型参数和可观测元数据。"""
-        return {
+        options: dict[str, Any] = {
             "model": self.model.alias,
             "max_tokens": self.model.max_tokens,
             "temperature": self.model.temperature,
             "stream": self.model.stream,
             "metadata": self.request_metadata(**context),
         }
+        if self.model.stream:
+            # OpenAI 兼容协议下流式响应默认不带 usage，必须显式要求才会在最后一个
+            # chunk 补发 —— 否则包了 LangSmith 追踪也拿不到真实 token 数。
+            options["stream_options"] = {"include_usage": True}
+        return options
 
 
 def _template_variables(content: str) -> set[str]:

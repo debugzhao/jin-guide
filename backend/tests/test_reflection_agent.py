@@ -173,9 +173,9 @@ class TestReflectionLayer2:
         from app.agent.nodes.reflection_agent import _llm_judge
 
         with patch(
-            "app.agent.nodes.reflection_agent.httpx.AsyncClient"
-        ) as mock_client:
-            mock_client.return_value.__aenter__.side_effect = Exception("connection error")
+            "app.agent.nodes.reflection_agent.call_chat_completion",
+            new=AsyncMock(side_effect=Exception("connection error")),
+        ):
             result = await _llm_judge(CLEAN_PLAN, [])
 
         assert result["passed"] is False

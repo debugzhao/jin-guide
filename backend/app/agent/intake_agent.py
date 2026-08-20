@@ -31,9 +31,9 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from app.agent.context_budget import log_context_budget
+from app.agent.llm_client import stream_chat_completion
 from app.agent.nodes.compliance import _FORBIDDEN, check_compliance, sanitize_text
 from app.agent.output_guard import StreamingOutputGuard
-from app.config import settings
 from app.prompts import prompt_registry
 from app.prompts.tracing import track_prompt_invocation
 
@@ -245,26 +245,8 @@ async def _stream_chat(
             payload["tools"] = _TOOLS
             payload["tool_choice"] = "auto"
 
-        async with client.stream(
-            "POST",
-            f"{settings.litellm_base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {settings.litellm_master_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-        ) as resp:
-            resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                if not line.startswith("data: "):
-                    continue
-                raw = line[6:].strip()
-                if raw == "[DONE]":
-                    break
-                try:
-                    yield json.loads(raw)
-                except json.JSONDecodeError:
-                    continue
+        async for chunk in stream_chat_completion(client, payload):
+            yield chunk
 
 
 def _format_tool_result_text(name: str, args: dict, tool_result: dict) -> str:
