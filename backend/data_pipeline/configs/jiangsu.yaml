@@ -111,3 +111,100 @@ sources:
     parser: policy_document_v1
     update_frequency: yearly
     discovery_title_pattern: 招生工作意见.*(pdf|doc|docx)|江苏省2025年普通高等学校招生工作意见
+
+# 2026 年分省招生计划：省考试院官网只公布汇总数字（详细的院校/专业组/计划数是印刷
+# 专刊，不是网站文件），查询中心是 JS 动态渲染系统，HttpCollector 结构性接不了——
+# 详见 backend/data_pipeline/README.md「已知限制」。这 10 条改用各高校自己官网的
+# "招生计划"页（同样是 JS 动态渲染，用 Playwright 人工辅助采集），collection_method
+# 标记为 manual，与其余 http 自动采集源区分开，不会被 run_jiangsu_pipeline.py --all
+# 误当作可自动重跑的源。
+  - id: nju-admission-plan-2026
+    name: 南京大学2026年江苏招生计划
+    entry_url: https://bkzs.nju.edu.cn/static/front/nju/basic/html_web/zsjh.html
+    data_type: admission_plan
+    year: 2026
+    target_university_code: "10284"
+    collection_method: manual
+    parser: manual_playwright_v1
+    update_frequency: yearly
+  - id: suda-admission-plan-2026
+    name: 苏州大学2026年江苏招生计划
+    entry_url: https://zsb.suda.edu.cn/MorePlan.aspx
+    data_type: admission_plan
+    year: 2026
+    target_university_code: "10285"
+    collection_method: manual
+    parser: manual_playwright_v1
+    update_frequency: yearly
+  - id: seu-admission-plan-2026
+    name: 东南大学2026年江苏招生计划
+    entry_url: https://zsb.seu.edu.cn/jss/list.htm
+    data_type: admission_plan
+    year: 2026
+    target_university_code: "10286"
+    collection_method: manual
+    parser: manual_playwright_ocr_v1
+    update_frequency: yearly
+  - id: nuaa-admission-plan-2026
+    name: 南京航空航天大学2026年江苏招生计划
+    entry_url: https://zs.nuaa.edu.cn/zsjh/list.htm
+    data_type: admission_plan
+    year: 2026
+    target_university_code: "10287"
+    collection_method: manual
+    parser: manual_playwright_v1
+    update_frequency: yearly
+  - id: njust-admission-plan-2026
+    name: 南京理工大学2026年江苏招生计划
+    entry_url: https://zsb.njust.edu.cn/lqjh_fsx
+    data_type: admission_plan
+    year: 2026
+    target_university_code: "10288"
+    collection_method: manual
+    parser: manual_playwright_v1
+    update_frequency: yearly
+  - id: cumt-admission-plan-2026
+    name: 中国矿业大学2026年江苏招生计划
+    entry_url: https://zs.cumt.edu.cn/zsw/zsjh.html
+    data_type: admission_plan
+    year: 2026
+    target_university_code: "10290"
+    collection_method: manual
+    parser: manual_playwright_v1
+    update_frequency: yearly
+  - id: hhu-admission-plan-2026
+    name: 河海大学2026年江苏招生计划
+    entry_url: https://zsw.hhu.edu.cn/zhaoshengjihua.html
+    data_type: admission_plan
+    year: 2026
+    target_university_code: "10294"
+    collection_method: manual
+    parser: manual_playwright_v1
+    update_frequency: yearly
+  - id: jiangnan-admission-plan-2026
+    name: 江南大学2026年江苏招生计划
+    entry_url: http://admission1.jiangnan.edu.cn/pc/recruitstudents/plan
+    data_type: admission_plan
+    year: 2026
+    target_university_code: "10295"
+    collection_method: manual
+    parser: manual_playwright_v1
+    update_frequency: yearly
+  - id: njau-admission-plan-2026
+    name: 南京农业大学2026年江苏招生计划
+    entry_url: https://njauzsb.njau.edu.cn/zsw/zsjh.html
+    data_type: admission_plan
+    year: 2026
+    target_university_code: "10307"
+    collection_method: manual
+    parser: manual_playwright_v1
+    update_frequency: yearly
+  - id: cpu-admission-plan-2026
+    name: 中国药科大学2026年江苏招生计划
+    entry_url: http://zb.cpu.edu.cn/2d/16/c12765a208150/page.htm
+    data_type: admission_plan
+    year: 2026
+    target_university_code: "10316"
+    collection_method: manual
+    parser: manual_playwright_ocr_v1
+    update_frequency: yearly

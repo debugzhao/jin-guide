@@ -79,10 +79,10 @@ data_pipeline/
 | 数据类型 | PRD 范围 | 当前状态 |
 |---|---|---|
 | 2025 江苏投档线（`admission_score`） | 2023-2025 | ✅ 已采集、已关联位次、已发布（`jiangsu_top10_2025_admission_v1`，106 条 valid）、✅ 已同步进 `admission_scores` |
-| 2025 逐分段表（`rank_segment`） | 2023-2025 | ✅ 已采集（OCR，271 条 valid），只用于给投档线关联位次，**没有单独发布**，所以还没进 `rank_segments` |
+| 2025 逐分段表（`rank_segment`） | 2023-2025 | ✅ 已采集（OCR，271 条 valid）、✅ 已发布（`jiangsu_policy_2025_rank_segment_v1`，`scripts/publish_jiangsu_rank_segments.py`）、✅ 已同步进 `rank_segments` |
 | 2025 招生政策（`policy`） | 2025 | ✅ 已采集（6 条解析记录），未发布 |
 | 2023/2024 投档线、逐分段表 | 2023-2025 | ❌ YAML 已登记入口，未真实运行验证 |
-| 招生计划（`admission_plan`） | 2026 当年 | ❌ 解析器已实现，YAML 未登记数据源，无真实样本 |
+| 招生计划（`admission_plan`） | 2026 当年 | ❌ **数据源被证实无法用现有架构采集**，见下方"已知限制"——不是没找 URL，是真的接不了 |
 | 专业录取线、专业/学院主数据、章程/专业介绍/转专业政策 | P0/P1 | ❌ 未开始 |
 
 ## 四、业务表同步（`loaders/business_sync.py`，本次补上的环节）
@@ -97,7 +97,7 @@ data_pipeline/
 
 行为要点：
 
-- 只读 `published_data_records`，不读 `staging_records`——数据必须显式 publish 过才能进业务表，这是分层设计的意义所在。当前只有 `AdmissionScoreRecord` 被真正发布过，所以现在跑这个脚本，`RankSegmentRecord`/`AdmissionPlanRecord` 会显示 `seen: 0`，不是 bug，等对应数据集真正发布后自动就能同步，不需要改代码。
+- 只读 `published_data_records`，不读 `staging_records`——数据必须显式 publish 过才能进业务表，这是分层设计的意义所在。`AdmissionScoreRecord`/`RankSegmentRecord` 已经发布并同步（分别用 `scripts/publish_jiangsu_admission_scores.py`/`scripts/publish_jiangsu_rank_segments.py`），`AdmissionPlanRecord` 还没有任何数据被采集过，所以现在跑这个脚本它会显示 `seen: 0`，不是 bug，等真的采到数据发布后自动就能同步，不需要改代码。
 - 目标 10 校里有 8 所原本不在 `universities` 表（现有 51 条是别的省份的 mock 种子数据），loader 会按 `jiangsu.yaml` 的 code/name 自动建院校记录，985/211/双一流状态按公开事实手动核对填入 `business_sync.py::_UNIVERSITY_META`（这是学校基本信息，不算"招生数据推测"）。
 - `admission_scores.major_category` 填的是 `major_group_name`（如"南京航空航天大学05专业组(化学)"）——`admission_scores` 原有 51 条老数据这个字段全是 NULL（院校整体线），但 `search_admission_sql` 本就允许同一院校下出现多行、`risk_engine.py` 也按 `major_category` 做扎堆检测，所以填专业组粒度是符合现有查询设计的，不是新发明的用法。
 - 幂等：`admission_scores`/`admission_plans` 没有数据库唯一约束防重复插入，loader 在应用层按业务自然键先查后写，可以重复跑不产生重复行（`rank_segments` 本身有唯一约束，行为保持一致）。
@@ -115,6 +115,9 @@ data_pipeline/
 # 串起"采集 2025 投档线+逐分段表 -> 关联位次 -> 发布 dataset_version"完整闭环
 .venv/bin/python scripts/publish_jiangsu_admission_scores.py
 
+# 发布已采集验证过的 2025 逐分段表（★ 本次新增）
+.venv/bin/python scripts/publish_jiangsu_rank_segments.py
+
 # 把已发布数据同步进业务表（★ 本次新增，见 §4）
 .venv/bin/python scripts/sync_published_data_to_business_tables.py
 
@@ -126,6 +129,6 @@ PYTHONPYCACHEPREFIX=/tmp/wenjin-pycache .venv/bin/pytest data_pipeline/tests -q
 ## 六、已知限制
 
 - **OCR**：2025 逐分段表官方发的是长 JPEG 而不是表格文件，`parsers/tabular.py::_read_image` 依赖 `scripts/macos_vision_ocr.swift`（macOS 系统 Vision API）。Linux 生产环境目前**明确报错，不会静默造假数据**，还没接 PaddleOCR 等跨平台方案。
-- **动态页面**：只用 `httpx` 直连，没有接 Playwright；如果某个官方页面改成纯前端渲染，`discover_links()` 会直接找不到附件链接（表现为 `artifacts=1`，只拿到入口页本身）。
+- **动态页面 / 无 Playwright**：只用 `httpx` 直连，没有接 Playwright；如果某个官方页面改成纯前端渲染，`discover_links()` 会直接找不到附件链接（表现为 `artifacts=1`，只拿到入口页本身）。**招生计划（`admission_plan`）就是撞在这个限制上**：实测（2026-08-21）江苏省考试院公告页只公布汇总数字，原文写"《2026招生计划专刊》将送达考生"——详细的院校/专业组/计划人数数据是印刷专刊，不是网站文件；省考试院的"查询中心"（`cxzx.jseea.cn`/`stat.jseea.cn`）和南京大学本科招生网（`bkzs.nju.edu.cn`）抓下来都只有页面外壳，是 JS 动态渲染的查询系统/站点，`HttpCollector` 结构性接不了；全网搜索也没找到任何一份分省分专业招生计划的公开 PDF/Excel（只搜到投档线文件，是另一类数据）。PRD（§4）预留的退路是"高校招生网分省计划 → 官方合作数据文件 → 合法授权数据源 → **人工导入**"——如果要接这块数据，大概率要走人工导入这条路，或者先给 pipeline 加 Playwright 采集能力（且还要验证能不能绕开查询系统的表单交互），这是比"登记一个 URL"大得多的独立工作量，本次没有做。
 - **定时任务默认关闭**：`app/worker.py` 的 `run_jiangsu_data_collection` ARQ 定时任务受 `DATA_PIPELINE_ENABLED`（默认 `false`）控制，生产启用前必须先跑迁移、配置持久化数据卷、跑一轮人工审核。
 - **业务表同步是"重扫全量"**：`business_sync.py` 每次都会重新处理全部 `published_data_records`，不是只处理"上次同步之后新增的"——数据量小（目前 106 条）时无所谓，量级涨上去后如果觉得慢，可以按 `dataset_version_id` 或 `created_at` 加增量游标，现在没做是因为没必要。

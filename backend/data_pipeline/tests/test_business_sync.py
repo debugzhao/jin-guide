@@ -164,6 +164,44 @@ def test_sync_rank_segments_upserts_on_unique_key(session) -> None:
     assert rows[0].cumulative_rank == 730
 
 
+def test_sync_admission_plans_without_official_codes_does_not_collapse_different_majors(session) -> None:
+    """回归测试：真实踩过的坑——没有官方 major_group_code/major_code 时（比如本校招生网
+    自采数据），如果去重 key 只看 university+year+province+batch+major_group+major_code，
+    所有缺代码的专业会撞上同一个 NULL/NULL 组合，互相当成"已存在"覆盖。第一次上线时
+    491 条记录被错误合并成了 17 条。"""
+    version = _dataset_version(session, dataset_type="plan")
+    base = {
+        "province": "江苏", "year": 2026, "batch": "本科批",
+        "university_code": "10284", "university_name": "南京大学",
+        "tuition": None,
+    }
+    _published(session, version, record_type="AdmissionPlanRecord", natural_key="p1", payload={
+        **base, "subject_type": "physics", "major_name": "计算机科学与技术", "quota": 38,
+    })
+    _published(session, version, record_type="AdmissionPlanRecord", natural_key="p2", payload={
+        **base, "subject_type": "physics", "major_name": "软件工程", "quota": 20,
+    })
+    # 同一专业名称在物理类和历史类分别招生、计划数不同（苏州大学"法学"真实案例）
+    _published(session, version, record_type="AdmissionPlanRecord", natural_key="p3", payload={
+        **base, "subject_type": "history", "major_name": "法学", "quota": 73,
+    })
+    _published(session, version, record_type="AdmissionPlanRecord", natural_key="p4", payload={
+        **base, "subject_type": "physics", "major_name": "法学", "quota": 37,
+    })
+
+    result = sync_admission_plans(session)
+
+    assert result.seen == 4
+    assert result.created == 4  # 不是被错误合并成 1 条
+    plans = session.scalars(select(AdmissionPlan)).all()
+    assert len(plans) == 4
+    by_key = {(p.subject_type, p.major_name): p.quota for p in plans}
+    assert by_key[("physics", "计算机科学与技术")] == 38
+    assert by_key[("physics", "软件工程")] == 20
+    assert by_key[("history", "法学")] == 73
+    assert by_key[("physics", "法学")] == 37
+
+
 def test_sync_admission_plans_maps_selection_requirement_to_subjects(session) -> None:
     version = _dataset_version(session, dataset_type="plan")
     payload = {

@@ -185,6 +185,8 @@ def sync_admission_plans(session: Session) -> SyncResult:
 
         major_group = payload.get("major_group_code")
         major_code = payload.get("major_code")
+        major_name = payload.get("major_name")
+        subject_type = payload.get("subject_type")
         selection = payload.get("selection_requirement")
         existing = session.scalar(
             select(AdmissionPlan).where(
@@ -192,8 +194,10 @@ def sync_admission_plans(session: Session) -> SyncResult:
                 AdmissionPlan.year == payload["year"],
                 AdmissionPlan.province == payload["province"],
                 AdmissionPlan.batch == payload["batch"],
+                AdmissionPlan.subject_type == subject_type,
                 AdmissionPlan.major_group == major_group,
                 AdmissionPlan.major_code == major_code,
+                AdmissionPlan.major_name == major_name,
             )
         )
         values = dict(
@@ -211,6 +215,8 @@ def sync_admission_plans(session: Session) -> SyncResult:
                     batch=payload["batch"],
                     major_group=major_group,
                     major_code=major_code,
+                    major_name=major_name,
+                    subject_type=subject_type,
                     **values,
                 )
             )

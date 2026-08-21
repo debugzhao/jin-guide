@@ -61,8 +61,11 @@ class AdmissionPlanRecord(BaseModel):
     university_code: str
     university_name: str
     provincial_university_code: str | None = None
-    major_group_code: str
-    major_code: str
+    # 官方专业组/专业代码只有省考试院发布的正式招生计划文件才带；本校招生网自己的
+    # "招生计划"页面通常只列"专业名称+计划数"，不重复展示考试院分配的编号——留空
+    # 而不是编造假代码，缺失数据必须明确标记（PRD 硬性要求）。
+    major_group_code: str | None = None
+    major_code: str | None = None
     major_name: str
     quota: int = Field(gt=0, le=100_000)
     tuition: int | None = Field(default=None, ge=0, le=1_000_000)

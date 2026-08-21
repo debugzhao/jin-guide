@@ -636,3 +636,15 @@ erDiagram
 5. **两套数据溯源机制并存**：招生规则类数据走 `rule_requirements.source_id → documents.id`（RAG 文档体系）；采集流水线产出的正式数据走 `published_data_records.provenance_json`（不建 FK，字符串化溯源）。两者不是互相替代关系，分别服务于"人工审核规则配置"和"批量采集自动发布"两条不同的数据流入路径。
 
 6. **`documents.source_document_id` 是可空的 1:1**：只有经数据采集流水线产出的文档才会关联到 `source_documents`；人工上传的政策/简章文档没有这一步，该字段为空是正常状态，不代表数据缺失。
+
+7. **`staging_records` → `published_data_records` → 业务表（如 `admission_plans`）是同一批数据的三个信任阶段，不是三份重复数据**：
+
+   | 表 | 阶段 | 数据形态 | 能不能改/删 |
+   | --- | --- | --- | --- |
+   | `staging_records` | 刚解析出来，还没审核 | `payload_json` 一个大 JSON 字段，什么 `record_type` 都塞在一起，带 `review_status`（valid/needs_review/rejected） | 可以，审核/人工修正就是改这张表 |
+   | `published_data_records` | 审核通过，正式发布 | 同样是 JSON，但只包含已确认全部 valid 的记录，按 `dataset_version` 分批，版本一旦发布不可变（想改只能发新版本） | 不可变，只能追加新版本 |
+   | 业务表（`admission_plans`/`admission_scores`/`rank_segments`） | 消费者实际查询 | 真正的结构化列，不是 JSON | 可以按业务需要更新 |
+
+   分层原因：采集/解析这一步天然不可靠（官网页面结构变化、OCR 识别错误），把"发现问题"和"污染业务数据"分开——出问题时能挑出坏记录单独处理，不会因为一条脏数据拖垮整批发布；发布版本不可变则保证任何时候都能追溯"业务表这份数据来自哪次发布"，必要时整版本回滚，而不是像直接写业务表那样完全没有版本痕迹。
+
+   **踩坑实例**：`sync_admission_plans`（发布区 → 业务表这一步）曾经因为去重 key 漏了 `major_name`/`subject_type`（`admission_plans` 原本连这两个字段都没有，迁移 `020` 才补上），把江苏 2026 年招生计划 491 条记录错误合并成 17 条——但因为 `staging_records`/`published_data_records` 两层全程没受影响，修复 bug 后直接从 `published_data_records` 重新同步一次就恢复了全部 491 条，完全不需要重新采集。这正是分层设计的价值：业务表同步逻辑写错了，不会丢失或污染发布区的原始数据。

@@ -124,6 +124,11 @@ class AdmissionPlan(Base):
     )
     major_group: Mapped[str | None] = mapped_column(String(100), nullable=True)
     major_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # major_group/major_code 只有省考试院正式招生计划文件才带；major_code/major_group
+    # 都缺失时（比如本校招生网自采数据）靠 major_name+subject_type 区分同校同批次下
+    # 的不同专业——同一专业名称完全可能物理类/历史类各招一次、计划数不同。
+    major_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    subject_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
     quota: Mapped[int | None] = mapped_column(Integer, nullable=True)
     subjects: Mapped[list | None] = mapped_column(JSON, nullable=True)
     tuition: Mapped[int | None] = mapped_column(Integer, nullable=True)

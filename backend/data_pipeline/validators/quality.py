@@ -52,6 +52,9 @@ def natural_key(record: Record) -> str:
             record.line_type,
         ]
     else:
+        # major_group_code/major_code 允许为空（见 records.py::AdmissionPlanRecord 注释），
+        # 加 major_name 兜底去重——否则同一学校同批次下所有缺代码的专业会撞成同一个
+        # natural_key，被后面的重复校验错误地拒绝。
         parts = [
             record.province,
             record.year,
@@ -60,6 +63,7 @@ def natural_key(record: Record) -> str:
             record.university_code,
             record.major_group_code,
             record.major_code,
+            record.major_name,
             record.admission_type,
         ]
     raw = "|".join(str(part) for part in parts)
