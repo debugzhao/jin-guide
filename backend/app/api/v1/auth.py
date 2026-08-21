@@ -165,6 +165,7 @@ class RegisterIn(BaseModel):
     email: EmailStr
     code: str
     password: str
+    invite_code: str
 
     @field_validator("code")
     @classmethod
@@ -172,6 +173,14 @@ class RegisterIn(BaseModel):
         normalized = v.strip()
         if not _CODE_PATTERN.match(normalized):
             raise ValueError("验证码应为 6 位数字")
+        return normalized
+
+    @field_validator("invite_code")
+    @classmethod
+    def validate_invite_code_format(cls, v: str) -> str:
+        normalized = v.strip()
+        if not normalized:
+            raise ValueError("请输入邀请码")
         return normalized
 
 
@@ -229,7 +238,10 @@ async def register(
     db: AsyncSession = Depends(get_db),
     session_token: str | None = Cookie(default=None),
 ):
-    """用邮箱 + 验证码 + 密码注册新用户。"""
+    """用邮箱 + 验证码 + 密码注册新用户，需额外提交固定邀请码。"""
+    if not hmac.compare_digest(body.invite_code, settings.register_invite_code):
+        raise HTTPException(status_code=400, detail="邀请码不正确")
+
     email = _normalize_email(body.email)
     await _verify_code(email, body.code)
     await _delete_code(email)

@@ -244,7 +244,7 @@ sequenceDiagram
 | 方法   | 路径                                    | 说明                                                          |
 | ------ | --------------------------------------- | -------------------------------------------------------------- |
 | POST   | `/api/v1/auth/send-code`                | 发送注册邮箱验证码（Resend，Redis TTL 10min）                  |
-| POST   | `/api/v1/auth/register`                 | 邮箱 + 验证码 + 密码注册，Set-Cookie                            |
+| POST   | `/api/v1/auth/register`                 | 邮箱 + 验证码 + 密码 + 邀请码注册，Set-Cookie                   |
 | POST   | `/api/v1/auth/login`                    | 邮箱 + 密码登录，Set-Cookie                                     |
 | POST   | `/api/v1/auth/logout`                   | 清除 session cookie                                             |
 | GET    | `/api/v1/auth/me`                       | 当前登录用户信息                                                |

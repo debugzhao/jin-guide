@@ -21,6 +21,7 @@ export default function LoginSheet({ isOpen, onClose, onSuccess }: LoginSheetPro
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [code, setCode] = useState('')
+  const [inviteCode, setInviteCode] = useState('')
   const [codeSent, setCodeSent] = useState(false)
   const [countdown, setCountdown] = useState(0)
   const [loading, setLoading] = useState(false)
@@ -32,6 +33,7 @@ export default function LoginSheet({ isOpen, onClose, onSuccess }: LoginSheetPro
     setEmail('')
     setPassword('')
     setCode('')
+    setInviteCode('')
     setCodeSent(false)
     setCountdown(0)
     setShowPassword(false)
@@ -92,7 +94,7 @@ export default function LoginSheet({ isOpen, onClose, onSuccess }: LoginSheetPro
   }
 
   const handleRegister = async () => {
-    if (!email || !code || !password) {
+    if (!email || !inviteCode || !code || !password) {
       setError('请填写所有字段')
       return
     }
@@ -111,7 +113,7 @@ export default function LoginSheet({ isOpen, onClose, onSuccess }: LoginSheetPro
     setError('')
     setLoading(true)
     try {
-      await api.register({ email, code, password })
+      await api.register({ email, code, password, invite_code: inviteCode })
       const me = await api.me()
       setUser(me)
       useAppStore.getState().bumpConversationListVersion()
@@ -140,6 +142,20 @@ export default function LoginSheet({ isOpen, onClose, onSuccess }: LoginSheetPro
             className={inputCls}
           />
         </div>
+
+        {/* 注册时显示：邀请码 */}
+        {mode === 'register' && (
+          <div>
+            <label className="mb-2 block text-sm font-medium text-[#0F172A]">邀请码</label>
+            <input
+              type="text"
+              value={inviteCode}
+              onChange={e => setInviteCode(e.target.value)}
+              placeholder="请输入邀请码"
+              className={inputCls}
+            />
+          </div>
+        )}
 
         {/* 注册时显示：验证码 */}
         {mode === 'register' && (

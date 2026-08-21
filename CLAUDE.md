@@ -11,6 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### 鉴权（当前实现）
 
 - **邮箱 + 密码**登录/注册，验证码经 **Resend** 发送（`RESEND_API_KEY`、`EMAIL_FROM=onboarding@resend.dev`）
+- 注册需额外提交固定**邀请码**（`RegisterIn.invite_code`，校验在验证码校验之前），配置项 `register_invite_code`/环境变量 `REGISTER_INVITE_CODE`，默认值写死在 `backend/app/config.py`
 - API：`POST /auth/send-code`、`/auth/register`、`/auth/login`、`/auth/logout`、`GET /auth/me`
 - Session 存 `sessions` 表，ORM 类名 **`AuthSession`**（勿与 SQLAlchemy `Session` 混淆）
 - 验证码存 Redis（`auth:code:{email}`，TTL 10 分钟）

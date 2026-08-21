@@ -69,7 +69,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ email }),
     }),
-  register: (data: { email: string; code: string; password: string }) =>
+  register: (data: { email: string; code: string; password: string; invite_code: string }) =>
     apiFetch<{ user_id: string; email: string; session_id: string }>('/api/v1/auth/register', {
       method: 'POST',
       body: JSON.stringify(data),

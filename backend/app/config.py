@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     # Resend —— 免费额度每天 100 封邮件：https://resend.com
     resend_api_key: str = ""
     email_from: str = "问津 <onboarding@resend.dev>"
+    # 邮箱注册邀请码，固定 8 位，生产环境可用 REGISTER_INVITE_CODE 覆盖
+    register_invite_code: str = "CFVD6EGQ"
 
     # Intake chat 匿名限流 + 重复/相似问题去重（docs/backend-prd-v2.md §11.4）
     intake_anon_daily_limit: int = 4
