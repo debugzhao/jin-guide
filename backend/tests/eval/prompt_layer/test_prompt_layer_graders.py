@@ -1,23 +1,18 @@
 """
 提示词层的确定性评测（deterministic / rule-based grader）。
 
-对应 backend/docs/Agent评测体系调研.md「三、1. 提示词层」的指标表，覆盖大厂做 Agent
-评测时常说的这几类 rule-based grader：
+对应 backend/docs/Agent评测体系调研.md「三、1. 提示词层」的指标表：模板契约正确性、
+结构化输出契约（各 Prompt 定义里的 output_schema）、调用预算（PromptModelConfig 里
+的 max_tokens/timeout_seconds/stream）——这三者都是直接写在 Prompt YAML 定义本身
+里的契约，因此归在这一层，而不是"工具与行动层"或"知识检索层"。
 
   1. Prompt 模板变量能否正常渲染          -> TestPromptTemplateRendering
   2. 模型输出是否满足 JSON Schema         -> TestStructuredOutputSchema
-  3. 工具名称和参数是否正确               -> TestToolArgumentCorrectness
-  4. 是否发生越权工具调用                 -> TestToolAuthorizationBoundary
   9. 调用次数、token、延迟是否超过限制    -> TestPromptCallBudget
 
-不在本文件覆盖、原因写在对应位置：
-  - 「引用 ID 是否真实存在」已经在 test_prompt_security.py 里用
-    sanitize_citations/StreamingOutputGuard 覆盖，不重复。
-  - 「RAG 是否检索到标准文档」「模拟超时后是否正确降级」放在 test_resilience_graders.py，
-    因为它们测的是 CircuitBreaker/rerank 这类弹性组件，和提示词本身无关。
-  - 「数据库最终状态是否符合预期」放在 test_school_lookup_db_state.py，需要独立的
-    sqlite fixture，不适合和纯 Prompt 断言混在一起。
-  - 「Agent 修改的代码能否通过测试」不适用：问津不是代码生成/自动修复类 Agent。
+工具参数校验/越权工具调用属于"工具与行动层"，放在
+tests/eval/tool_and_action_layer/test_tool_argument_and_authorization.py，
+不在本文件重复。
 """
 from __future__ import annotations
 
@@ -257,152 +252,6 @@ class TestStructuredOutputSchema:
         assert commentary == ""
 
 
-# ── 3. 工具名称和参数是否正确 ────────────────────────────────────────────────────
-
-class TestToolArgumentCorrectness:
-    """
-    intake_chat 的三个查询工具全部要走 Pydantic 白名单校验（extra='forbid' +
-    字段级 Field 范围约束），这里补齐此前只覆盖了 lookup_university_score/
-    compare_universities 负例、却没覆盖 lookup_subject_requirement 正例的空白，
-    并额外验证“默认值/None 字段被正确剔除”这条容易被忽略的行为。
-    """
-
-    def test_lookup_university_score_accepts_valid_arguments_and_fills_default_batch(self):
-        from app.agent.intake_agent import _validate_tool_arguments
-
-        args, error = _validate_tool_arguments(
-            "lookup_university_score",
-            json.dumps({"university_name": "郑州大学", "province": "河南"}),
-        )
-
-        assert error is None
-        assert args == {"university_name": "郑州大学", "province": "河南", "batch": "本科批"}
-
-    def test_lookup_subject_requirement_accepts_valid_arguments_without_major(self):
-        """此前只测过这个工具的“未知工具”负例，从未测过它自己的正常参数路径。"""
-        from app.agent.intake_agent import _validate_tool_arguments
-
-        args, error = _validate_tool_arguments(
-            "lookup_subject_requirement",
-            json.dumps({"university_name": "浙江大学"}),
-        )
-
-        assert error is None
-        assert args == {"university_name": "浙江大学"}
-
-    def test_lookup_subject_requirement_accepts_optional_major_name(self):
-        from app.agent.intake_agent import _validate_tool_arguments
-
-        args, error = _validate_tool_arguments(
-            "lookup_subject_requirement",
-            json.dumps({"university_name": "浙江大学", "major_name": "计算机科学与技术"}),
-        )
-
-        assert error is None
-        assert args == {"university_name": "浙江大学", "major_name": "计算机科学与技术"}
-
-    def test_compare_universities_accepts_valid_two_way_comparison(self):
-        from app.agent.intake_agent import _validate_tool_arguments
-
-        args, error = _validate_tool_arguments(
-            "compare_universities",
-            json.dumps({"university_names": ["郑州大学", "河南大学"], "province": "河南"}),
-        )
-
-        assert error is None
-        assert args["university_names"] == ["郑州大学", "河南大学"]
-        assert args["batch"] == "本科批"
-
-    def test_lookup_university_score_rejects_empty_university_name(self):
-        from app.agent.intake_agent import _validate_tool_arguments
-
-        args, error = _validate_tool_arguments(
-            "lookup_university_score",
-            json.dumps({"university_name": "", "province": "河南"}),
-        )
-
-        assert args is None
-        assert error == "工具参数不合法或超出允许范围"
-
-    def test_lookup_subject_requirement_rejects_unknown_field(self):
-        from app.agent.intake_agent import _validate_tool_arguments
-
-        args, error = _validate_tool_arguments(
-            "lookup_subject_requirement",
-            json.dumps({"university_name": "浙江大学", "unexpected_field": True}),
-        )
-
-        assert args is None
-        assert error == "工具参数不合法或超出允许范围"
-
-    def test_tool_arguments_reject_malformed_json(self):
-        from app.agent.intake_agent import _validate_tool_arguments
-
-        args, error = _validate_tool_arguments("lookup_university_score", "{不是合法 JSON")
-
-        assert args is None
-        assert error == "工具参数解析失败"
-
-    def test_tool_arguments_reject_non_object_json(self):
-        from app.agent.intake_agent import _validate_tool_arguments
-
-        args, error = _validate_tool_arguments("lookup_university_score", "[1, 2, 3]")
-
-        assert args is None
-        assert error == "工具参数必须是 JSON 对象"
-
-
-# ── 4. 是否发生越权工具调用 ──────────────────────────────────────────────────────
-
-class TestToolAuthorizationBoundary:
-    """
-    intake_agent 暴露给模型的工具集合必须和代码里实际能执行的工具集合完全一致——
-    多一个（泄露了未实现的能力）或少一个（校验模型和实现模型不同步）都是缺陷。
-    """
-
-    def test_exposed_tool_names_match_intended_surface_exactly(self):
-        from app.agent.intake_agent import _TOOL_NAMES
-
-        assert _TOOL_NAMES == {
-            "lookup_university_score",
-            "lookup_subject_requirement",
-            "compare_universities",
-            "start_profile_capture",
-        }
-
-    def test_every_exposed_tool_has_a_json_schema_with_required_fields(self):
-        """暴露给模型的每个工具定义都要有 parameters.required，防止漏写导致模型乱填参数。"""
-        from app.agent.intake_agent import _TOOLS
-
-        for tool in _TOOLS:
-            fn = tool["function"]
-            assert fn["name"], "工具必须有名称"
-            assert "parameters" in fn
-            # start_profile_capture 是无参信号工具，其余三个都必须声明 required
-            if fn["name"] != "start_profile_capture":
-                assert fn["parameters"].get("required"), (
-                    f"{fn['name']} 缺少 required 声明，模型可能会在必填信息缺失时仍然调用"
-                )
-
-    @pytest.mark.asyncio
-    async def test_signal_only_tool_cannot_be_executed_as_a_query_tool(self):
-        """start_profile_capture 只是触发前端表单的信号，不能被当作数据查询工具真正执行。"""
-        from app.agent.intake_agent import _execute_tool_call
-
-        result = await _execute_tool_call("start_profile_capture", "{}")
-
-        assert result["status"] == "ERROR"
-
-    @pytest.mark.asyncio
-    async def test_unknown_tool_name_is_rejected_before_execution(self):
-        from app.agent.intake_agent import _execute_tool_call
-
-        result = await _execute_tool_call("drop_all_tables", "{}")
-
-        assert result["status"] == "ERROR"
-        assert "未知工具" in result["text"]
-
-
 # ── 9. 调用次数、token、延迟是否超过限制 ─────────────────────────────────────────
 
 class TestPromptCallBudget:
@@ -455,7 +304,8 @@ class TestPromptCallBudget:
 class TestPromptInvocationAuditIsBestEffort:
     """
     tracing.py 目前没有任何测试覆盖。它的核心承诺是“审计表故障不能影响用户主链路”，
-    这条承诺本身就应该被测试锁定，否则未来重构时很容易被悄悄破坏。
+    这条承诺本身就应该被测试锁定，否则未来重构时很容易被悄悄破坏。放在提示词层，
+    因为它包装的正是每一次 Prompt 调用本身（prompt_name/version/hash 都来自 PromptSpec）。
     """
 
     @pytest.mark.asyncio

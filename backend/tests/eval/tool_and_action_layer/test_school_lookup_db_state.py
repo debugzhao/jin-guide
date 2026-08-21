@@ -1,7 +1,10 @@
 """
-「数据库最终状态是否符合预期」这一类 state-checker grader，针对
+工具与行动层的「数据库最终状态是否符合预期」这一类 state-checker grader，针对
 app/engine/school_lookup.py 的三个确定性 SQL 工具（intake_chat 的事实性查询
 全部要经过它们，禁止让 LLM 凭记忆回答分数/选科要求）。
+
+和同目录下 test_tool_argument_and_authorization.py 的分工：那边测参数校验和
+授权边界（工具会不会被错误调用），这里测工具真正执行后返回的数据/状态对不对。
 
 用内存 sqlite 而不是真实 Postgres：University/AdmissionScore/SubjectRequirement
 三张表只用到了跨方言通用的列类型（String/Integer/Boolean/JSON），换成 sqlite
