@@ -40,15 +40,15 @@ def session():
         yield db
 
 
-def _artifact(tmp_path) -> StoredArtifact:
-    content_path = tmp_path / "file.pdf"
-    metadata_path = tmp_path / "file.metadata.json"
+def _artifact(tmp_path, *, name: str = "file", checksum: str = "a" * 64) -> StoredArtifact:
+    content_path = tmp_path / f"{name}.pdf"
+    metadata_path = tmp_path / f"{name}.metadata.json"
     content_path.write_bytes(b"official")
     metadata_path.write_text("{}", encoding="utf-8")
     return StoredArtifact(
         source_id="jseea-admission-score-2025",
-        source_url="https://www.jseea.cn/file.pdf",
-        checksum="a" * 64,
+        source_url=f"https://www.jseea.cn/{name}.pdf",
+        checksum=checksum,
         content_path=content_path,
         metadata_path=metadata_path,
         collected_at=datetime.now(UTC).isoformat(),
@@ -124,4 +124,32 @@ def test_repository_blocks_unreviewed_records(session, tmp_path) -> None:
     with pytest.raises(PublicationError, match="require review"):
         repository.publish(
             dataset_type="admission", province="江苏", year=2025, staging_records=staged
+        )
+
+
+def test_repository_rejects_duplicate_natural_key_across_documents(session, tmp_path) -> None:
+    """同一业务记录被两份不同 checksum 的文档各自 staging 为 valid 时，
+    publish 必须拒绝而不是让 IntegrityError 直接崩溃出来。"""
+    config = load_pipeline_config("data_pipeline/configs/jiangsu.yaml")
+    source = next(item for item in config.sources if item.id == "jseea-admission-score-2025")
+    repository = PipelineRepository(session)
+    repository.sync_sources(config)
+    run = repository.start_run(source.id)
+
+    document_a, _ = repository.register_document(
+        run=run, source=source, artifact=_artifact(tmp_path, name="a", checksum="a" * 64), title="投档线-a"
+    )
+    document_b, _ = repository.register_document(
+        run=run, source=source, artifact=_artifact(tmp_path, name="b", checksum="b" * 64), title="投档线-b"
+    )
+    validated = validate_records([_score()], config)
+    staged_a = repository.stage_records(run=run, document=document_a, records=validated)
+    staged_b = repository.stage_records(run=run, document=document_b, records=validated)
+
+    with pytest.raises(PublicationError, match="natural key"):
+        repository.publish(
+            dataset_type="admission",
+            province="江苏",
+            year=2025,
+            staging_records=[*staged_a, *staged_b],
         )

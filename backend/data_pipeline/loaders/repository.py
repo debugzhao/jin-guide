@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Iterable
@@ -152,6 +153,23 @@ class PipelineRepository:
         record_types = {record.record_type for record in records}
         if len(record_types) != 1:
             raise PublicationError("one dataset version may contain only one record type")
+
+        # 同一来源被重新采集后（哪怕只是页面渲染字节差异导致 checksum 变化），
+        # 可能产生 source_document_id 不同但业务自然键相同的两条 "valid" staging
+        # 记录——按文档级别去重的校验（validate_records）和 uq_staging_document_
+        # natural_key 唯一约束都不会拦住它们。这里只对 AdmissionScoreRecord 之外
+        # 的记录类型兜底（AdmissionScoreRecord 已由 enrichment 的跨文档重新校验
+        # 覆盖），避免它们在插入 published_data_records 时撞上
+        # uq_published_dataset_natural_key 唯一约束、以未处理的 IntegrityError 崩溃。
+        duplicate_keys = {
+            key for key, count in Counter(record.natural_key for record in records).items()
+            if count > 1
+        }
+        if duplicate_keys:
+            raise PublicationError(
+                f"cannot publish: {len(duplicate_keys)} natural key(s) appear in more than "
+                "one valid staging record; resolve the duplicate source documents before publishing"
+            )
 
         previous = self.session.scalar(
             select(func.max(DatasetVersion.version)).where(

@@ -258,6 +258,11 @@ _GROUP_PATTERN = re.compile(
     r"^(?P<name>.+?)(?P<group>[A-Z]?\d{2,3})专业组(?:\((?P<requirement>[^)]+)\))?(?P<tail>.*)$"
 )
 
+# 专业组名称后可能出现第二个括注（如 "…专业组(化学)(中外合作办学)"），标注的是招生
+# 类型而不是校区。这里用于把这类标签从 tail 中过滤掉，避免它们被误当成校区写入
+# campus 字段。
+_ADMISSION_TYPE_LABELS = ("中外合作办学", "高校专项", "地方专项", "联合培养")
+
 
 def parse_admission_score_rows(
     document: TabularDocument,
@@ -294,10 +299,11 @@ def parse_admission_score_rows(
         university_name = group_match.group("name")
         tail = (group_match.group("tail") or "").strip("()")
         admission_type = "普通"
-        for label in ("中外合作办学", "高校专项", "地方专项", "联合培养"):
+        for label in _ADMISSION_TYPE_LABELS:
             if label in joined:
                 admission_type = label
                 break
+        campus = tail if tail and tail not in _ADMISSION_TYPE_LABELS else None
         target = by_name[university_name]
         provincial_code = next(
             (value for value in row if re.fullmatch(r"\d{4}", value.strip())), None
@@ -314,7 +320,7 @@ def parse_admission_score_rows(
                 major_group_name=group_cell,
                 selection_requirement=group_match.group("requirement"),
                 admission_type=admission_type,
-                campus=tail or None,
+                campus=campus,
                 line_type=line_type,
                 min_score=min_score,
                 provenance=_row_number(
@@ -377,10 +383,13 @@ def parse_admission_plan_rows(
         row = document.rows[row_number]
         name_value = value(row, "院校名称")
         matched_name = next((name for name in by_name if name in name_value), None)
-        if matched_name:
+        if name_value:
+            # 院校名称列非空代表新院校区块开始（无论是否在白名单内），必须清空
+            # 上一个院校残留的专业组/院校代号，否则会把非白名单院校或前一所
+            # 院校的专业组代号错误地挂到本院校后续行上。
+            current_group = None
+            current_provincial_code = None
             current_name = matched_name
-        elif name_value:
-            current_name = None
         code_value = value(row, "院校代码")
         if code_value:
             current_provincial_code = code_value
@@ -400,7 +409,7 @@ def parse_admission_plan_rows(
         remarks = value(row, "备注")
         admission_type = "普通"
         combined = " ".join(row)
-        for label in ("中外合作办学", "高校专项", "地方专项", "联合培养"):
+        for label in _ADMISSION_TYPE_LABELS:
             if label in combined:
                 admission_type = label
                 break

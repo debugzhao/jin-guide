@@ -22,7 +22,7 @@ import re
 from typing import Iterator
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.config import settings
@@ -63,8 +63,9 @@ def _split_text(text: str, max_tokens: int, overlap_tokens: int) -> Iterator[str
         sent_tokens = _estimate_tokens(sent)
         if buf_tokens + sent_tokens > max_tokens and buf:
             yield "".join(buf).strip()
-            # 保留 overlap：从头部逐句丢弃，直到低于 overlap 预算
-            while buf and buf_tokens - _estimate_tokens(buf[0]) >= buf_tokens - overlap_tokens:
+            # 保留 overlap：从头部逐句丢弃，直到剩余 token 数逼近 overlap 预算
+            # （丢弃后仍 >= overlap_tokens 才继续丢，否则会把整个 buf 丢空）
+            while buf and buf_tokens - _estimate_tokens(buf[0]) >= overlap_tokens:
                 removed = buf.pop(0)
                 buf_tokens -= _estimate_tokens(removed)
         buf.append(sent)
@@ -129,6 +130,9 @@ async def process_document(doc: Document, session: AsyncSession) -> int:
     }
 
     chunks_data = chunk_text(text, doc.type, doc.id, meta)
+    # 重跑同一 document（--doc-id 显式重切或 --all 命中已处理过的文档）时先清掉
+    # 旧 chunk，否则会不断累加重复记录并重复消耗 embedding 调用。
+    await session.execute(delete(Chunk).where(Chunk.document_id == doc.id))
     for cd in chunks_data:
         session.add(Chunk(**cd))
 

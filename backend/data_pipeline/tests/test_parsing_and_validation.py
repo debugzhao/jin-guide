@@ -63,6 +63,8 @@ def test_parses_whitelisted_admission_scores_and_attaches_exact_rank() -> None:
     assert scores[0].major_group_code == "07"
     assert scores[0].min_score == 661
     assert scores[1].admission_type == "中外合作办学"
+    # 专业组名称后第二个括注是招生类型说明，不是校区，不能污染 campus 字段
+    assert scores[1].campus is None
 
     rank_doc = TabularDocument(
         rows=[["分数", "人数", "累计人数"], ["661", "20", "1000"], ["660", "30", "1030"]],
@@ -129,3 +131,30 @@ def test_parses_admission_plan_with_forward_filled_university_and_group() -> Non
     assert records[0].university_code == "10284"
     assert records[1].major_group_code == "07"
     assert records[1].major_name == "软件工程"
+
+
+def test_admission_plan_does_not_leak_group_across_university_blocks() -> None:
+    """非白名单院校（或前一所院校）残留的专业组代号不能被下一所白名单院校继承。"""
+    config = load_pipeline_config("data_pipeline/configs/jiangsu.yaml")
+    document = TabularDocument(
+        rows=[
+            ["院校名称", "院校代号", "院校专业组", "专业代号", "专业名称", "计划人数", "学费", "学制", "备注"],
+            ["非白名单大学", "9999", "09", "01", "示例专业", "10", "5000", "4", ""],
+            # 苏州大学紧跟在一所非白名单院校之后出现，且首行未重复专业组列
+            # （常见于合并单元格排版）；专业组应等到该院校自己的数据行给出，
+            # 不能沿用上面"非白名单大学"的 09。
+            ["苏州大学", "1102", "", "01", "计算机科学与技术", "10", "6500", "4", ""],
+            ["", "", "40", "02", "软件工程(中外合作办学)", "8", "18000", "4", ""],
+        ],
+        page_or_sheet=[1, 1, 1, 1],
+    )
+    records = parse_admission_plan_rows(
+        document,
+        subject_type="physics",
+        provenance=_provenance("plan"),
+        config=config,
+    )
+    assert len(records) == 1
+    assert records[0].university_code == "10285"
+    assert records[0].major_group_code == "40"
+    assert records[0].major_name == "软件工程(中外合作办学)"
