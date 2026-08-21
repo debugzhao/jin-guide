@@ -1,17 +1,25 @@
 """
-Admin Debug Console API — 仅 role=admin 可访问，其余请求返回 401/403。
-数据本身不含 PII（省份/位次/分数等），仅暴露耗时/费用/工具调用等运维指标。
+Admin Debug Console API — 无鉴权，对所有访客开放（数据本身不含 PII，
+仅暴露耗时/费用/工具调用等运维指标）。
+
+Data Pipeline 审核 API — 仅 role=admin 可访问，其余请求返回 401/403
+（涉及真实发布决策，与调试控制台的鉴权模型不同）。
 
 Endpoints:
-  GET  /admin/runs                   — 列出最近的 agent run 及调试摘要
-  GET  /admin/runs/{id}              — 单个 run 的完整调试元数据
-  GET  /admin/runs/{id}/debug-events — Admin SSE：完整事件流 + 历史回放
-  GET  /admin/metrics/summary        — 实时系统指标快照
+  GET  /admin/runs                          — 列出最近的 agent run 及调试摘要
+  GET  /admin/runs/{id}                     — 单个 run 的完整调试元数据
+  GET  /admin/runs/{id}/debug-events        — Admin SSE：完整事件流 + 历史回放
+  GET  /admin/metrics/summary               — 实时系统指标快照
+  GET  /admin/data-pipeline/runs            — [需 admin] 数据采集运行列表
+  GET  /admin/data-pipeline/review          — [需 admin] 人工审核队列
+  POST /admin/data-pipeline/review/{id}     — [需 admin] 审核决定
+  GET  /admin/data-pipeline/datasets        — [需 admin] 已发布数据集列表
 """
 from __future__ import annotations
 
 import json
 import time
+from datetime import UTC, datetime
 from typing import Optional
 
 import redis.asyncio as aioredis
@@ -25,8 +33,10 @@ from app.api.dependencies import require_admin_role
 from app.config import settings
 from app.database import get_db
 from app.models.agent_run import AgentRun
+from app.models.data_pipeline import CollectionRun, DatasetVersion, StagingRecord
 
-router = APIRouter(dependencies=[Depends(require_admin_role)])
+router = APIRouter()
+pipeline_router = APIRouter(dependencies=[Depends(require_admin_role)])
 
 _METRICS_WINDOW_SECONDS = 300  # 错误率统计的 5 分钟滚动窗口
 
@@ -78,6 +88,11 @@ class MetricsSummary(BaseModel):
     timestamp: float
 
 
+class ReviewDecision(BaseModel):
+    decision: str
+    reviewer: str
+
+
 # ── 辅助函数 ────────────────────────────────────────────────────────────────────
 
 def _extract_debug_summary(run: AgentRun) -> dict:
@@ -98,6 +113,100 @@ def _extract_debug_summary(run: AgentRun) -> dict:
 def _get_degraded_agents(run: AgentRun) -> list[str]:
     summary = run.debug_summary_json or {}
     return summary.get("degraded_agents", [])
+
+
+@pipeline_router.get("/data-pipeline/runs")
+async def list_data_pipeline_runs(
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(CollectionRun).order_by(desc(CollectionRun.started_at)).limit(limit)
+    )
+    return [
+        {
+            "id": run.id,
+            "source_id": run.source_id,
+            "status": run.status,
+            "started_at": run.started_at.isoformat(),
+            "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+            "artifact_count": run.artifact_count,
+            "parsed_count": run.parsed_count,
+            "valid_count": run.valid_count,
+            "review_count": run.review_count,
+            "rejected_count": run.rejected_count,
+            "error_message": run.error_message,
+        }
+        for run in result.scalars()
+    ]
+
+
+@pipeline_router.get("/data-pipeline/review")
+async def list_data_pipeline_review_queue(
+    status: str = Query("needs_review"),
+    limit: int = Query(100, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(StagingRecord)
+        .where(StagingRecord.review_status == status)
+        .order_by(StagingRecord.created_at)
+        .limit(limit)
+    )
+    return [
+        {
+            "id": record.id,
+            "record_type": record.record_type,
+            "natural_key": record.natural_key,
+            "status": record.review_status,
+            "payload": record.payload_json,
+            "issues": record.issues_json or [],
+            "created_at": record.created_at.isoformat(),
+        }
+        for record in result.scalars()
+    ]
+
+
+@pipeline_router.post("/data-pipeline/review/{record_id}")
+async def decide_data_pipeline_review(
+    record_id: str,
+    body: ReviewDecision,
+    db: AsyncSession = Depends(get_db),
+):
+    if body.decision not in {"approved", "rejected"}:
+        raise HTTPException(status_code=422, detail="decision must be approved or rejected")
+    record = await db.get(StagingRecord, record_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="staging record not found")
+    record.review_status = "valid" if body.decision == "approved" else "rejected"
+    record.reviewed_by = body.reviewer
+    record.reviewed_at = datetime.now(UTC)
+    await db.commit()
+    return {"id": record.id, "status": record.review_status}
+
+
+@pipeline_router.get("/data-pipeline/datasets")
+async def list_data_pipeline_datasets(
+    limit: int = Query(100, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(DatasetVersion).order_by(desc(DatasetVersion.created_at)).limit(limit)
+    )
+    return [
+        {
+            "id": dataset.id,
+            "name": dataset.name,
+            "dataset_type": dataset.dataset_type,
+            "province": dataset.province,
+            "year": dataset.year,
+            "version": dataset.version,
+            "status": dataset.status,
+            "record_count": dataset.record_count,
+            "published_at": dataset.published_at.isoformat() if dataset.published_at else None,
+        }
+        for dataset in result.scalars()
+    ]
 
 
 # ── 接口 ──────────────────────────────────────────────────────────────────────
@@ -314,3 +423,6 @@ async def get_metrics_summary(
         active_runs=active_runs,
         timestamp=time.time(),
     )
+
+
+router.include_router(pipeline_router)

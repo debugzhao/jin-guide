@@ -11,18 +11,21 @@ from datetime import UTC, datetime
 import redis.asyncio as aioredis
 import structlog
 from arq.connections import RedisSettings
+from arq.cron import cron
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from sqlalchemy import select
 
 from app.agent.graph import create_graph, create_refine_graph
 from app.agent.state import VolunteerPlanState
 from app.config import settings
-from app.database import async_session_maker
+from app.database import SyncSessionLocal, async_session_maker
 from app.logging_config import configure_logging
 from app.models.agent_run import AgentRun
 from app.models.profile import Preference, StudentProfile
 from app.models.report import Report
 from app.prompts import prompt_registry
+from data_pipeline.config import load_pipeline_config
+from data_pipeline.jobs import PipelineJob
 
 if settings.langsmith_api_key:
     os.environ["LANGCHAIN_TRACING_V2"] = "true"
@@ -557,10 +560,35 @@ async def run_refine(
     )
 
 
+async def run_jiangsu_data_collection(ctx: dict) -> None:
+    if not settings.data_pipeline_enabled:
+        logger.info("data_pipeline_disabled")
+        return
+    db = SyncSessionLocal()
+    try:
+        config = load_pipeline_config("data_pipeline/configs/jiangsu.yaml")
+        job = PipelineJob(
+            config=config,
+            raw_root=settings.data_pipeline_raw_root,
+            report_root=settings.data_pipeline_report_root,
+            session=db,
+        )
+        reports = await job.run_all()
+        failed = [report.source_id for report in reports if report.status == "failed"]
+        logger.info(
+            "jiangsu_data_collection_completed",
+            source_count=len(reports),
+            failed_sources=failed,
+        )
+    finally:
+        db.close()
+
+
 class WorkerSettings:
     """ARQ worker 配置。启动方式：arq app.worker.WorkerSettings"""
 
-    functions = [run_agent, run_refine]
+    functions = [run_agent, run_refine, run_jiangsu_data_collection]
+    cron_jobs = [cron(run_jiangsu_data_collection, weekday=1, hour=3, minute=15)]
     on_startup = on_startup
     on_shutdown = on_shutdown
     redis_settings = RedisSettings.from_dsn(settings.redis_url)

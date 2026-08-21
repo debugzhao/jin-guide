@@ -19,6 +19,9 @@ langsmith==0.1.147
 python-jose[cryptography]==3.3.0
 python-multipart==0.0.12
 httpx==0.28.1
+openpyxl==3.1.5
+pdfplumber==0.11.7
+xlrd==2.0.1
 pgvector==0.3.6
 structlog==24.4.0
 resend==2.4.0

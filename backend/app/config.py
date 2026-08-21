@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     # 邮箱注册邀请码，固定 8 位，生产环境可用 REGISTER_INVITE_CODE 覆盖
     register_invite_code: str = "CFVD6EGQ"
 
+    data_pipeline_enabled: bool = False
+    data_pipeline_raw_root: str = "data/raw"
+    data_pipeline_report_root: str = "data/reports"
+
     # Intake chat 匿名限流 + 重复/相似问题去重（docs/backend-prd-v2.md §11.4）
     intake_anon_daily_limit: int = 4
     intake_anon_ip_daily_limit: int = 20

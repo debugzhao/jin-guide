@@ -29,6 +29,7 @@ from app.config import settings
 from app.engine.embedding import embed_pending_chunks, EMBEDDING_MODEL
 from app.models.base import Base
 from app.models.document import Chunk, Document
+from data_pipeline.parsers.document import extract_document_text
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -108,12 +109,17 @@ def _ensure_asyncpg_url(url: str) -> str:
 
 async def process_document(doc: Document, session: AsyncSession) -> int:
     """对单个 document 做切分并落库 Chunk 记录。返回 chunk 数量。"""
-    if not doc.title:
-        logger.warning("Document %s has no content title, skipping", doc.id)
+    if not doc.raw_storage_path:
+        logger.warning("Document %s has no raw storage path, skipping", doc.id)
         return 0
-
-    # demo 阶段用 title + type 拼一段占位文本；真正的流水线应从文件内容解析
-    text = f"{doc.title}\n\n（此处为文档正文占位，实际从文件解析获取）"
+    try:
+        text = extract_document_text(doc.raw_storage_path)
+    except Exception:
+        logger.exception("Failed to extract real content for document %s", doc.id)
+        return 0
+    if not text.strip():
+        logger.warning("Document %s contains no extractable text", doc.id)
+        return 0
     meta = {
         "province": None,
         "university_id": None,

@@ -1,0 +1,113 @@
+province: 江苏
+target_universities:
+  - university_code: "10284"
+    name: 南京大学
+    city: 南京
+    ownership: central
+    admissions_url: https://bkzs.nju.edu.cn/
+  - university_code: "10285"
+    name: 苏州大学
+    city: 苏州
+    ownership: provincial
+    admissions_url: https://zsb.suda.edu.cn/
+  - university_code: "10286"
+    name: 东南大学
+    city: 南京
+    ownership: central
+    admissions_url: https://zsb.seu.edu.cn/
+  - university_code: "10287"
+    name: 南京航空航天大学
+    city: 南京
+    ownership: central
+    admissions_url: https://zs.nuaa.edu.cn/
+  - university_code: "10288"
+    name: 南京理工大学
+    city: 南京
+    ownership: central
+    admissions_url: https://zsb.njust.edu.cn/
+  - university_code: "10290"
+    name: 中国矿业大学
+    city: 徐州
+    ownership: central
+    admissions_url: https://zs.cumt.edu.cn/
+  - university_code: "10294"
+    name: 河海大学
+    city: 南京
+    ownership: central
+    admissions_url: https://zsw.hhu.edu.cn/
+  - university_code: "10295"
+    name: 江南大学
+    city: 无锡
+    ownership: central
+    admissions_url: https://admission.jiangnan.edu.cn/
+  - university_code: "10307"
+    name: 南京农业大学
+    city: 南京
+    ownership: central
+    admissions_url: https://zsxx.njau.edu.cn/
+  - university_code: "10316"
+    name: 中国药科大学
+    city: 南京
+    ownership: central
+    admissions_url: https://zb.cpu.edu.cn/
+
+# Only audited official entry pages are registered. Attachment discovery happens
+# after collection, so annual filename changes do not require hard-coded file URLs.
+sources:
+  - id: jseea-rank-segment-2025
+    name: 江苏省2025年普通高考第一阶段逐分段统计表
+    entry_url: https://www.jseea.cn/webfile/index/index_zkxx/2025-06-24/7343234265133355008.html
+    data_type: rank_segment
+    year: 2025
+    parser: jseea_rank_segment_v1
+    update_frequency: yearly
+    discovery_title_pattern: 普通类.*(物理|历史)|逐分段统计表.*(xlsx|xls|pdf|rar)
+  - id: jseea-rank-segment-2024
+    name: 江苏省2024年普通高考逐分段统计表（第一阶段）
+    entry_url: https://www.jseea.cn/webfile/index/index_zkxx/2024-06-24/7210960924591525888.html
+    data_type: rank_segment
+    year: 2024
+    parser: jseea_rank_segment_v1
+    update_frequency: yearly
+    discovery_title_pattern: 普通类.*(物理|历史)|逐分段统计表.*(xlsx|xls|pdf|rar)
+  - id: jseea-rank-segment-2023
+    name: 江苏省2023年普通高考逐分段统计表
+    entry_url: https://www.jseea.cn/webfile/index/index_zkxx/2023-06-24/7078350479809318912.html
+    data_type: rank_segment
+    year: 2023
+    parser: jseea_rank_segment_v1
+    update_frequency: yearly
+    discovery_title_pattern: 普通类.*(物理|历史)|逐分段统计表.*(xlsx|xls|pdf|rar)
+  - id: jseea-admission-score-2025
+    name: 江苏省2025年普通类本科批次平行志愿投档线
+    entry_url: https://www.jseea.cn/webfile/index/index_zkxx/index_12.html
+    data_type: admission_score
+    year: 2025
+    parser: jseea_admission_score_v1
+    update_frequency: yearly
+    discovery_title_pattern: 2025年普通高校招生普通类本科批次平行志愿投档线|本科批次.*(物理|历史).*(pdf|xls|xlsx)
+    discovery_depth: 2
+  - id: jseea-admission-score-2024
+    name: 江苏省2024年普通类本科批次平行志愿投档线
+    entry_url: https://www.jseea.cn/webfile/index/index_zkxx/2024-07-18/7219509116052443136.html
+    data_type: admission_score
+    year: 2024
+    parser: jseea_admission_score_v1
+    update_frequency: yearly
+    discovery_title_pattern: 本科批次.*(物理|历史).*(pdf|xls|xlsx)|普通类本科批次平行志愿投档线
+  - id: jseea-admission-score-2023
+    name: 江苏省2023年普通类本科批次平行志愿投档线
+    entry_url: https://www.jseea.cn/webfile/index/index_zkxx/2023-07-18/7086888854866628608.html
+    data_type: admission_score
+    year: 2023
+    parser: jseea_admission_score_v1
+    update_frequency: yearly
+    discovery_title_pattern: 本科批次.*(物理|历史).*(pdf|xls|xlsx)|普通类本科批次平行志愿投档线
+  - id: jseea-policy-2025
+    name: 江苏省2025年普通高等学校招生工作意见
+    entry_url: https://www.jseea.cn/webfile/index/index_zcwj/2025-03-28/7311371955653840896.html
+    data_type: policy
+    year: 2025
+    parser: policy_document_v1
+    update_frequency: yearly
+    discovery_title_pattern: 招生工作意见.*(pdf|doc|docx)|江苏省2025年普通高等学校招生工作意见

@@ -22,6 +22,14 @@ from app.models.admission import (
 )
 from app.models.notification import Notification
 from app.models.prompt_invocation import PromptInvocation
+from app.models.data_pipeline import (
+    CollectionRun,
+    DataSource,
+    DatasetVersion,
+    PublishedDataRecord,
+    SourceDocument,
+    StagingRecord,
+)
 
 __all__ = [
     "Base",
@@ -47,4 +55,10 @@ __all__ = [
     "RuleRequirement",
     "Notification",
     "PromptInvocation",
+    "DataSource",
+    "CollectionRun",
+    "SourceDocument",
+    "StagingRecord",
+    "DatasetVersion",
+    "PublishedDataRecord",
 ]

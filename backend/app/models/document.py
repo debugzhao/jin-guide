@@ -26,6 +26,10 @@ class Document(Base):
     authority_level: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
     # 文件内容的 SHA256 校验和，用于去重
     checksum: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    source_document_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("source_documents.id"), nullable=True, unique=True
+    )
+    raw_storage_path: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     # raw / parsed / verified / published / deprecated
     status: Mapped[str] = mapped_column(String(20), default="raw")
     created_at: Mapped[datetime] = mapped_column(

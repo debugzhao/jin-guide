@@ -22,6 +22,8 @@ build/
 htmlcov/
 .coverage
 backend/eval_reports/
+backend/data/raw/
+backend/data/reports/
 
 # Node.js / Next.js
 node_modules/
