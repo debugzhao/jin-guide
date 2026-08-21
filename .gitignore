@@ -21,6 +21,7 @@ build/
 .ruff_cache/
 htmlcov/
 .coverage
+backend/eval_reports/
 
 # Node.js / Next.js
 node_modules/
