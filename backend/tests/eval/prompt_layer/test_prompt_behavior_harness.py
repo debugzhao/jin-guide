@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from evals.prompt_behavior.graders import grade_reflection_output
+from evals.prompt_behavior.comparison import build_comparison_markdown, compare_versions
 from evals.prompt_behavior.models import PromptBehaviorTask, TrialResult
 from evals.prompt_behavior.runner import (
     DEFAULT_DATASET,
@@ -160,6 +161,7 @@ def test_summary_reports_trial_and_stable_task_rates_separately():
 
     assert metrics["trial_pass_rate"] == pytest.approx(2 / 3)
     assert metrics["stable_task_pass_rate"] == pytest.approx(1 / 2)
+    assert metrics["safe_acceptance_rate"] == 1
     assert metrics["usage_totals"]["total_tokens"] == 45
 
 
@@ -183,3 +185,84 @@ def test_markdown_report_contains_metrics_and_failure_details():
     assert "用例稳定通过率" in report
     assert "### failed-task / trial 1" in report
     assert "测试构造的失败" in report
+
+
+def _comparison_metrics(**overrides):
+    metrics = {
+        "unsafe_recall": 0.8,
+        "safe_acceptance_rate": 0.9,
+        "schema_valid_rate": 1.0,
+        "injection_success_rate": 0.0,
+        "stable_task_pass_rate": 0.8,
+    }
+    metrics.update(overrides)
+    return metrics
+
+
+def test_version_comparison_marks_candidate_better_without_regression():
+    baseline_results = [_result("task-1", passed=False)]
+    candidate_results = [_result("task-1", passed=True)]
+
+    comparison = compare_versions(
+        baseline_metrics=_comparison_metrics(),
+        candidate_metrics=_comparison_metrics(unsafe_recall=0.9, stable_task_pass_rate=0.9),
+        baseline_results=baseline_results,
+        candidate_results=candidate_results,
+    )
+
+    assert comparison["verdict"] == "better"
+    assert comparison["regressions"] == []
+    assert comparison["paired_counts"]["candidate_only"] == 1
+
+
+def test_version_comparison_marks_any_core_regression_as_worse():
+    results = [_result("task-1", passed=True)]
+
+    comparison = compare_versions(
+        baseline_metrics=_comparison_metrics(),
+        candidate_metrics=_comparison_metrics(
+            unsafe_recall=0.95,
+            injection_success_rate=0.1,
+        ),
+        baseline_results=results,
+        candidate_results=results,
+    )
+
+    assert comparison["verdict"] == "worse"
+    assert comparison["improvements"] == ["unsafe_recall"]
+    assert comparison["regressions"] == ["injection_success_rate"]
+
+
+def test_version_comparison_rejects_unpaired_trials():
+    with pytest.raises(ValueError, match="Trial 不一致"):
+        compare_versions(
+            baseline_metrics=_comparison_metrics(),
+            candidate_metrics=_comparison_metrics(),
+            baseline_results=[_result("baseline-only", passed=True)],
+            candidate_results=[_result("candidate-only", passed=True)],
+        )
+
+
+def test_comparison_markdown_contains_verdict_and_six_metrics():
+    results = [_result("task-1", passed=True)]
+    comparison = compare_versions(
+        baseline_metrics=_comparison_metrics(),
+        candidate_metrics=_comparison_metrics(),
+        baseline_results=results,
+        candidate_results=results,
+    )
+    metadata = {
+        "created_at": "2026-08-21T00:00:00+00:00",
+        "prompt_name": "reflection_review",
+        "baseline_version": "v1",
+        "candidate_version": "v2",
+        "model": "report-agent",
+        "trials_per_task": 3,
+    }
+
+    report = build_comparison_markdown(metadata=metadata, comparison=comparison)
+
+    assert "## 结论：两版相当" in report
+    assert "风险内容召回率" in report
+    assert "正常内容放行率" in report
+    assert "注入攻击成功率" in report

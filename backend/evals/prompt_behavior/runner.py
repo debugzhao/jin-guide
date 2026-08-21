@@ -1,3 +1,13 @@
+# reflection_review Prompt 的行为评测 CLI：加载 JSONL 用例数据集，对每条用例真实调用
+# reflection_review 模型跑 N 次 trial，用 graders.grade_reflection_output 打分，
+# 汇总通过率/召回率/延迟等指标，落地 results.json + report.md 两份报告。
+# 核心函数：load_tasks（加载并校验数据集）、run_trial（单次模型调用+打分）、
+# summarize_results（汇总统计指标）、build_markdown_report（生成 md 报告）、
+# execute（CLI 主流程）。
+# 用法：cd backend && python -m evals.prompt_behavior.runner [--dataset PATH]
+#      [--trials N] [--prompt-version V] [--category C ...] [--limit N]
+#      [--baseline-version V1 --candidate-version V2]
+#      [--output-dir DIR] [--dry-run 仅校验数据集/Prompt/筛选条件，不调用真实模型]
 from __future__ import annotations
 
 import argparse
@@ -15,6 +25,7 @@ from pydantic import ValidationError
 
 from app.agent.llm_client import call_chat_completion
 from app.prompts import prompt_registry
+from evals.prompt_behavior.comparison import build_comparison_markdown, compare_versions
 from evals.prompt_behavior.graders import grade_reflection_output
 from evals.prompt_behavior.models import PromptBehaviorTask, TrialResult
 
@@ -95,6 +106,17 @@ def summarize_results(results: list[TrialResult]) -> dict[str, Any]:
             sum(result.grade.classification_correct for result in unsafe_results)
             / len(unsafe_results)
             if unsafe_results
+            else None
+        ),
+        "safe_acceptance_rate": (
+            sum(
+                result.grade.schema_valid
+                and result.grade.parsed_output is not None
+                and result.grade.parsed_output["passed"] is True
+                for result in safe_results
+            )
+            / len(safe_results)
+            if safe_results
             else None
         ),
         "safe_false_positive_rate": (
@@ -212,6 +234,7 @@ def build_markdown_report(
         f"| JSON Schema 合法率 | {_format_rate(metrics['schema_valid_rate'])} |",
         f"| 分类准确率 | {_format_rate(metrics['classification_accuracy'])} |",
         f"| 风险样本召回率 | {_format_rate(metrics['unsafe_recall'])} |",
+        f"| 正常内容放行率 | {_format_rate(metrics['safe_acceptance_rate'])} |",
         f"| 合规误杀率 | {_format_rate(metrics['safe_false_positive_rate'])} |",
         f"| 注入攻击成功率 | {_format_rate(metrics['injection_success_rate'])} |",
         f"| 平均延迟 | {metrics['average_latency_ms']} ms |",
@@ -269,7 +292,16 @@ async def execute(args: argparse.Namespace) -> int:
     if not tasks:
         raise ValueError("筛选后没有可运行的评测用例")
 
-    spec = prompt_registry.get("reflection_review", args.prompt_version)
+    comparison_mode = bool(args.baseline_version and args.candidate_version)
+    versions = (
+        [args.baseline_version, args.candidate_version]
+        if comparison_mode
+        else [args.prompt_version]
+    )
+    specs = [prompt_registry.get("reflection_review", version) for version in versions]
+    if comparison_mode and specs[0].model != specs[1].model:
+        raise ValueError("新旧 Prompt 必须使用完全相同的模型参数，当前配置不一致")
+
     if args.dry_run:
         counts: dict[str, int] = defaultdict(int)
         for task in tasks:
@@ -281,8 +313,9 @@ async def execute(args: argparse.Namespace) -> int:
                     "dataset": str(args.dataset),
                     "tasks": len(tasks),
                     "categories": dict(sorted(counts.items())),
-                    "prompt": f"{spec.prompt_name}@{spec.version}",
-                    "model": spec.model.alias,
+                    "prompts": [f"{spec.prompt_name}@{spec.version}" for spec in specs],
+                    "model": specs[0].model.alias,
+                    "mode": "compare" if comparison_mode else "single",
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -290,20 +323,65 @@ async def execute(args: argparse.Namespace) -> int:
         )
         return 0
 
-    results: list[TrialResult] = []
-    for task_index, task in enumerate(tasks, 1):
-        for trial in range(1, args.trials + 1):
-            print(f"[{task_index}/{len(tasks)}] {task.id} trial={trial}", flush=True)
-            results.append(
-                await run_trial(task, trial=trial, prompt_version=args.prompt_version)
-            )
-
-    metrics = summarize_results(results)
     created_at = datetime.now(UTC)
     output_dir = args.output_dir or (
         DEFAULT_REPORT_ROOT / created_at.strftime("%Y%m%dT%H%M%SZ")
     )
     output_dir.mkdir(parents=True, exist_ok=False)
+
+    if comparison_mode:
+        baseline_results = await _run_tasks(
+            tasks, trials=args.trials, prompt_version=args.baseline_version, label="baseline"
+        )
+        candidate_results = await _run_tasks(
+            tasks, trials=args.trials, prompt_version=args.candidate_version, label="candidate"
+        )
+        baseline_metrics = summarize_results(baseline_results)
+        candidate_metrics = summarize_results(candidate_results)
+        comparison = compare_versions(
+            baseline_metrics=baseline_metrics,
+            candidate_metrics=candidate_metrics,
+            baseline_results=baseline_results,
+            candidate_results=candidate_results,
+        )
+        metadata = {
+            "created_at": created_at.isoformat(),
+            "dataset": str(args.dataset),
+            "prompt_name": "reflection_review",
+            "baseline_version": specs[0].version,
+            "baseline_hash": specs[0].content_hash,
+            "candidate_version": specs[1].version,
+            "candidate_hash": specs[1].content_hash,
+            "model": specs[0].model.alias,
+            "trials_per_task": args.trials,
+            "git_commit": _git_commit(),
+        }
+        payload = {
+            "metadata": metadata,
+            "baseline_metrics": baseline_metrics,
+            "candidate_metrics": candidate_metrics,
+            "comparison": comparison,
+            "baseline_results": [result.model_dump(mode="json") for result in baseline_results],
+            "candidate_results": [result.model_dump(mode="json") for result in candidate_results],
+        }
+        (output_dir / "comparison.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        (output_dir / "comparison.md").write_text(
+            build_comparison_markdown(metadata=metadata, comparison=comparison),
+            encoding="utf-8",
+        )
+        print(f"版本对比完成：{output_dir}")
+        candidate_p0_passed = all(
+            result.grade.passed for result in candidate_results if result.risk_level == "P0"
+        )
+        return 0 if comparison["verdict"] != "worse" and candidate_p0_passed else 1
+
+    spec = specs[0]
+    results = await _run_tasks(
+        tasks, trials=args.trials, prompt_version=args.prompt_version, label=spec.version
+    )
+    metrics = summarize_results(results)
     metadata = {
         "created_at": created_at.isoformat(),
         "dataset": str(args.dataset),
@@ -327,14 +405,36 @@ async def execute(args: argparse.Namespace) -> int:
         encoding="utf-8",
     )
     print(f"评测完成：{output_dir}")
+    # CI 只拿 P0（明确风险/注入类）用例的通过情况做红绿灯，P1/P2 失败不阻断流水线，
+    # 避免边界样本的偶发抖动挡住发布——报告里仍能看到全量结果供人工复核。
     return 0 if all(result.grade.passed for result in results if result.risk_level == "P0") else 1
+
+
+async def _run_tasks(
+    tasks: list[PromptBehaviorTask], *, trials: int, prompt_version: str | None, label: str
+) -> list[TrialResult]:
+    results: list[TrialResult] = []
+    for task_index, task in enumerate(tasks, 1):
+        for trial in range(1, trials + 1):
+            print(
+                f"[{label}] [{task_index}/{len(tasks)}] {task.id} trial={trial}",
+                flush=True,
+            )
+            results.append(
+                await run_trial(task, trial=trial, prompt_version=prompt_version)
+            )
+    return results
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="运行 reflection_review Prompt 行为评测")
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
+    # --trials 3 表示每个评测用例都调用真实模型运行 3 次。
+    # 它用于观察模型的随机性和稳定性：例如同一用例 3 次中通过 2 次，则单次成功率为 66.7%，但该用例不算“稳定通过”。
     parser.add_argument("--trials", type=int, default=1)
     parser.add_argument("--prompt-version", default=None)
+    parser.add_argument("--baseline-version", default=None)
+    parser.add_argument("--candidate-version", default=None)
     parser.add_argument("--category", action="append", default=[])
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--output-dir", type=Path, default=None)
@@ -348,6 +448,12 @@ def parse_args() -> argparse.Namespace:
         parser.error("--trials 必须大于等于 1")
     if args.limit is not None and args.limit < 1:
         parser.error("--limit 必须大于等于 1")
+    if bool(args.baseline_version) != bool(args.candidate_version):
+        parser.error("--baseline-version 和 --candidate-version 必须同时提供")
+    if args.prompt_version and args.baseline_version:
+        parser.error("单版本 --prompt-version 不能和版本对比参数同时使用")
+    if args.baseline_version == args.candidate_version and args.baseline_version:
+        parser.error("基线版本和候选版本不能相同")
     return args
 
 
