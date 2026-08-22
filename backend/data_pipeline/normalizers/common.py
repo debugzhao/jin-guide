@@ -11,6 +11,9 @@ def normalize_subject_type(value: str) -> SubjectType:
         return "physics"
     if normalized in {"history", "历史", "历史类", "历史等科目类"}:
         return "history"
+    # 别名待Discover阶段核实浙江官方文件实际用词后补充，此处先只收窄到明确无歧义的写法
+    if normalized in {"unified", "不分文理"}:
+        return "unified"
     raise ValueError(f"unsupported subject type: {value!r}")
 
 

@@ -7,7 +7,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlparse
 
 from data_pipeline.config import SourceConfig
 
@@ -98,10 +98,23 @@ class RawArtifactStore:
 
     @staticmethod
     def _safe_suffix(url: str, content_type: str | None) -> str:
-        suffix = Path(urlparse(url).path).suffix.lower()
-        allowed = {".html", ".htm", ".xlsx", ".xls", ".csv", ".pdf", ".json", ".xml"}
+        allowed = {
+            ".html", ".htm", ".xlsx", ".xls", ".csv", ".pdf", ".json", ".xml",
+            ".docx", ".doc", ".jpg", ".jpeg", ".png",
+        }
+        parsed = urlparse(url)
+        suffix = Path(parsed.path).suffix.lower()
         if suffix in allowed:
             return suffix
+        # 部分官网用下载代理端点分发附件（如浙江省教育考试院的
+        # /module/download/downfile.jsp?...&filename=xxx.docx），真实扩展名藏在
+        # query参数值里而不是URL路径；这类老旧CMS的Content-Type还经常被错误标成
+        # text/html（已用真实线上URL验证过），query参数比Content-Type更可信，
+        # 必须先查它，否则docx会被错误存成.html再被当成HTML解析出乱码
+        for _, value in parse_qsl(parsed.query):
+            candidate = Path(value).suffix.lower()
+            if candidate in allowed:
+                return candidate
         mime_suffixes = {
             "text/html": ".html",
             "text/csv": ".csv",
@@ -109,6 +122,8 @@ class RawArtifactStore:
             "application/json": ".json",
             "application/vnd.ms-excel": ".xls",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+            "application/msword": ".doc",
             "image/jpeg": ".jpg",
             "image/png": ".png",
         }

@@ -1,0 +1,200 @@
+province: 浙江
+# 白名单口径：艾瑞深校友会网《2025校友会中国大学排名》（2025-01-10发布）浙江省内
+# 普通本科高校子榜单前10（不含独立学院/高职/民办附属学院）。与江苏不同，浙江省内
+# 除浙江大学外基本没有教育部直属985/211高校，其余均为省属/省市共建，属性判定见下方
+# 各校注释。此白名单为开发期间冻结的v1，需产品最终确认，不是动态排名结果（同江苏
+# jiangsu.yaml的约定）。
+target_universities:
+  - university_code: "10335"
+    name: 浙江大学
+    city: 杭州
+    ownership: central
+    admissions_url: https://zdzsc.zju.edu.cn/
+  - university_code: "11646"
+    name: 宁波大学
+    city: 宁波
+    ownership: provincial
+    admissions_url: https://zsb.nbu.edu.cn/
+  - university_code: "10337"
+    name: 浙江工业大学
+    city: 杭州
+    ownership: provincial
+    admissions_url: https://zs.zjut.edu.cn/html/index.html
+  - university_code: "10345"
+    name: 浙江师范大学
+    city: 金华
+    ownership: provincial
+    admissions_url: https://zs.zjnu.edu.cn/
+  # 西湖大学：教育部批复定性为"社会力量举办、国家重点支持的非营利新型高等学校"，
+  # 阳光高考等第三方平台标注办学性质为"民办"——不是本配置ownership字段现有的
+  # central/provincial二值之一，此处留空而不是编造，采集/发布时需单独处理（详见
+  # backend/data_pipeline/docs/10_zhejiang_top10_data_collection_status.md）。
+  - university_code: "14626"
+    name: 西湖大学
+    city: 杭州
+    ownership: null
+    admissions_url: https://zh-ugadmissions.westlake.edu.cn/
+  - university_code: "10338"
+    name: 浙江理工大学
+    city: 杭州
+    ownership: provincial
+    admissions_url: https://zs.zstu.edu.cn/
+  - university_code: "10353"
+    name: 浙江工商大学
+    city: 杭州
+    ownership: provincial
+    admissions_url: https://zhaoban.zjgsu.edu.cn/
+  - university_code: "10336"
+    name: 杭州电子科技大学
+    city: 杭州
+    ownership: provincial
+    admissions_url: https://zhaosheng.hdu.edu.cn/
+  # 杭州师范大学：举办方为杭州市人民政府（"省市共建、以杭州市管理为主"），严格意义
+  # 上更接近市属，但行业内通常仍归为省属高校序列，暂标provincial，详见状态看板。
+  - university_code: "10346"
+    name: 杭州师范大学
+    city: 杭州
+    ownership: provincial
+    admissions_url: http://undergrad.hznu.edu.cn/
+  - university_code: "10343"
+    name: 温州医科大学
+    city: 温州
+    ownership: provincial
+    admissions_url: https://zhaosheng.wmu.edu.cn/
+
+# 浙江省教育考试院官网为 www.zjzs.net（已核实，非江苏 jseea.cn）。浙江不分文理，
+# 官方文件用"总分分数段表"对应江苏的"逐分段表"；投档线按"第一段/第二段"两次划线
+# 各发一篇，不是江苏按物理/历史两科类各发一篇——subject_type在这些source上应产出
+# "unified"（§3已支持），"第一段/第二段"暂计划落进AdmissionScoreRecord.batch字段
+# （如"第一段"/"第二段"），实际映射方式留给Implement阶段用真实数据验证，此处只登记
+# 入口不预判解析细节。
+sources:
+  - id: zjzs-policy-2026
+    name: 中共浙江省委教育工作领导小组秘书组关于做好2026年普通高校招生工作的通知
+    entry_url: https://www.zjzs.net/art/2026/5/20/art_45_12293.html
+    data_type: policy
+    year: 2026
+    parser: policy_document_v1
+    update_frequency: yearly
+    discovery_title_pattern: 普通高校招生工作实施方案.*(docx|doc|pdf)
+    discovery_depth: 1
+  - id: zjzs-policy-2025
+    name: 中共浙江省委教育工作领导小组秘书组关于做好2025年普通高校招生工作的通知
+    entry_url: https://www.zjzs.net/art/2025/5/7/art_156_11112.html
+    data_type: policy
+    year: 2025
+    parser: policy_document_v1
+    update_frequency: yearly
+    discovery_title_pattern: 普通高校招生工作实施方案.*(docx|doc|pdf)
+    discovery_depth: 1
+  - id: zjzs-rank-segment-2026
+    name: 浙江省2026年普通高校招生成绩分数段表（总分）
+    entry_url: https://www.zjzs.net/art/2026/6/26/art_45_12452.html
+    data_type: rank_segment
+    year: 2026
+    parser: zjzs_rank_segment_v1
+    update_frequency: yearly
+    discovery_title_pattern: 分数段表.*(总分)?.*(pdf|xls|xlsx)
+    discovery_depth: 1
+  - id: zjzs-rank-segment-2025
+    name: 浙江省2025年普通高校招生成绩分数段表（总分）
+    entry_url: https://www.zjzs.net/art/2025/6/25/art_45_11373.html
+    data_type: rank_segment
+    year: 2025
+    parser: zjzs_rank_segment_v1
+    update_frequency: yearly
+    discovery_title_pattern: 分数段表.*(总分)?.*(pdf|xls|xlsx)
+    discovery_depth: 1
+  - id: zjzs-admission-score-2026-stage1
+    name: 浙江省2026年普通高校招生普通类第一段平行投档分数线
+    entry_url: https://www.zjzs.net/art/2026/7/21/art_45_12550.html
+    data_type: admission_score
+    year: 2026
+    parser: zjzs_admission_score_v1
+    update_frequency: yearly
+    discovery_title_pattern: 第一段平行投档分数线.*(xls|xlsx|pdf)
+    discovery_depth: 1
+  - id: zjzs-admission-score-2026-stage2
+    name: 浙江省2026年普通高校招生普通类第二段平行投档分数线
+    entry_url: https://www.zjzs.net/art/2026/7/30/art_45_12588.html
+    data_type: admission_score
+    year: 2026
+    parser: zjzs_admission_score_v1
+    update_frequency: yearly
+    discovery_title_pattern: 第二段平行投档分数线.*(xls|xlsx|pdf)
+    discovery_depth: 1
+  - id: zjzs-admission-score-2025-stage1
+    name: 浙江省2025年普通高校招生普通类第一段平行投档分数线表
+    entry_url: https://www.zjzs.net/art/2025/7/21/art_45_11467.html
+    data_type: admission_score
+    year: 2025
+    parser: zjzs_admission_score_v1
+    update_frequency: yearly
+    discovery_title_pattern: 第一段平行投档分数线.*(xls|xlsx|pdf)
+    discovery_depth: 1
+  - id: zjzs-admission-score-2025-stage2
+    name: 浙江省2025年普通高校招生普通类第二段平行投档分数线
+    entry_url: https://www.zjzs.net/art/2025/7/30/art_45_11488.html
+    data_type: admission_score
+    year: 2025
+    parser: zjzs_admission_score_v1
+    update_frequency: yearly
+    discovery_title_pattern: 第二段平行投档分数线.*(xls|xlsx|pdf)
+    discovery_depth: 1
+
+  # 10校2026年招生计划：只登记确认过"页面本身承载真实数据/入口"的5校，其余5校
+  # （浙大/西湖大学无官网承载页、杭电/浙师大未定位到2026年具体条目、温州医科大学
+  # 数据实际发布在微信公众号文章）暂不登记，避免塞入未核实URL，详见状态看板§4。
+  - id: nbu-admission-plan-2026
+    name: 宁波大学2026年浙江省招生计划
+    entry_url: https://zsb.nbu.edu.cn/info/1012/4176.htm
+    data_type: admission_plan
+    year: 2026
+    target_university_code: "11646"
+    collection_method: http
+    parser: tabular_html_v1
+    update_frequency: yearly
+  - id: zjut-admission-plan-2026
+    name: 浙江工业大学2026年招生计划（分省分专业）
+    entry_url: https://zs.zjut.edu.cn/html/w26_1.html
+    data_type: admission_plan
+    year: 2026
+    target_university_code: "10337"
+    collection_method: http
+    parser: manual_playwright_v1
+    update_frequency: yearly
+    discovery_title_pattern: 2026.*浙江.*(pdf|xls|xlsx)
+    discovery_depth: 1
+  - id: zstu-admission-plan-2026
+    name: 浙江理工大学2026年招生计划（分省）
+    entry_url: https://zs.zstu.edu.cn/zsjh.htm
+    data_type: admission_plan
+    year: 2026
+    target_university_code: "10338"
+    collection_method: http
+    parser: manual_playwright_v1
+    update_frequency: yearly
+    discovery_title_pattern: 浙江
+    discovery_depth: 1
+  - id: hznu-admission-plan-2026
+    name: 杭州师范大学2026年省级招生计划
+    entry_url: https://undergrad.hznu.edu.cn/zsjh_2.html
+    data_type: admission_plan
+    year: 2026
+    target_university_code: "10346"
+    collection_method: http
+    parser: manual_playwright_v1
+    update_frequency: yearly
+    discovery_title_pattern: 浙江
+    discovery_depth: 1
+  # 浙江工商大学：招生计划查询页确认为JS动态渲染（筛选控件+"正在加载数据"占位），
+  # 与江苏苏州大学MorePlan.aspx同类，标记manual走Playwright人工辅助路径。
+  - id: zjgsu-admission-plan-2026
+    name: 浙江工商大学2026年招生计划查询
+    entry_url: http://zhaoban.zjgsu.edu.cn/?zsjh.html
+    data_type: admission_plan
+    year: 2026
+    target_university_code: "10353"
+    collection_method: manual
+    parser: manual_playwright_v1
+    update_frequency: yearly

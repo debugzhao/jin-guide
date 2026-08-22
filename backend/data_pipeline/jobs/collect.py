@@ -19,6 +19,7 @@ from data_pipeline.parsers import (
     parse_admission_score_rows,
     parse_admission_plan_rows,
     parse_rank_segment_rows,
+    parse_zhejiang_admission_score_rows,
     read_tabular_document,
 )
 from data_pipeline.raw_store import RawArtifactStore, StoredArtifact
@@ -187,38 +188,64 @@ class PipelineJob:
         records = []
         try:
             if source.data_type in {"policy", "charter", "major_intro", "transfer_policy"}:
-                if suffix not in {".html", ".htm", ".pdf"}:
+                if suffix not in {".html", ".htm", ".pdf", ".docx"}:
                     return []
                 text = extract_document_text(node.artifact.content_path)
                 records = chunk_document(
                     text,
                     document_type=source.data_type,
                     provenance=provenance,
+                    province=self.config.province,
                     university_code=source.target_university_code,
                 )
                 if source.data_type == "policy":
-                    records.append(extract_policy_rule(text, provenance=provenance))
+                    records.append(
+                        extract_policy_rule(
+                            text, provenance=provenance, province=self.config.province
+                        )
+                    )
             elif source.data_type in {"rank_segment", "admission_score", "admission_plan"}:
                 if suffix not in {".csv", ".xlsx", ".xls", ".pdf", ".jpg", ".jpeg", ".png"}:
                     return []
                 subject_type = self._infer_subject(node.title, node.artifact.source_url)
                 if subject_type is None:
                     report.messages.append(
-                        f"manual review: cannot infer physics/history for {node.artifact.source_url}"
+                        f"manual review: cannot infer subject type for {node.artifact.source_url}"
                     )
                     return []
                 document = read_tabular_document(node.artifact.content_path)
                 if source.data_type == "rank_segment":
                     records = parse_rank_segment_rows(
-                        document, subject_type=subject_type, provenance=provenance
-                    )
-                elif source.data_type == "admission_score":
-                    records = parse_admission_score_rows(
                         document,
                         subject_type=subject_type,
                         provenance=provenance,
                         config=self.config,
                     )
+                elif source.data_type == "admission_score":
+                    if self.config.province in self._UNIFIED_SUBJECT_PROVINCES:
+                        # 浙江投档线是扁平表（学校/专业逐行铺开，自带位次），跟江苏
+                        # "院校专业组"合并单元格格式完全不同，需要专用解析函数；
+                        # "第一段/第二段"从标题里判断，判断不出来时明确进人工复核，
+                        # 不能瞎猜成某一段导致数据张冠李戴
+                        stage_batch = self._infer_zhejiang_stage(node.title)
+                        if stage_batch is None:
+                            report.messages.append(
+                                f"manual review: cannot infer 第一段/第二段 for {node.artifact.source_url}"
+                            )
+                            return []
+                        records = parse_zhejiang_admission_score_rows(
+                            document,
+                            provenance=provenance,
+                            config=self.config,
+                            batch=stage_batch,
+                        )
+                    else:
+                        records = parse_admission_score_rows(
+                            document,
+                            subject_type=subject_type,
+                            provenance=provenance,
+                            config=self.config,
+                        )
                 else:
                     records = parse_admission_plan_rows(
                         document,
@@ -243,13 +270,26 @@ class PipelineJob:
         report.rejected_records += sum(item.status == "rejected" for item in validated)
         return validated
 
-    @staticmethod
-    def _infer_subject(title: str, url: str) -> str | None:
+    # 省份不分文理（如浙江"3+3"不分科类），标题/URL里不会出现"物理/历史"关键词，
+    # 必须先按省份短路判断，否则会被下面的关键词匹配漏判成需要人工复核
+    _UNIFIED_SUBJECT_PROVINCES = {"浙江"}
+
+    def _infer_subject(self, title: str, url: str) -> str | None:
+        if self.config.province in self._UNIFIED_SUBJECT_PROVINCES:
+            return "unified"
         value = f"{title} {url}".lower()
         if "物理" in value or "physics" in value:
             return "physics"
         if "历史" in value or "history" in value:
             return "history"
+        return None
+
+    @staticmethod
+    def _infer_zhejiang_stage(title: str) -> str | None:
+        if "第一段" in title:
+            return "第一段"
+        if "第二段" in title:
+            return "第二段"
         return None
 
     def _write_report(self, report: SourceRunReport) -> None:

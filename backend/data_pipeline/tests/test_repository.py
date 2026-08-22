@@ -59,6 +59,7 @@ def _artifact(tmp_path, *, name: str = "file", checksum: str = "a" * 64) -> Stor
 
 def _score() -> AdmissionScoreRecord:
     return AdmissionScoreRecord(
+        province="江苏",
         year=2025,
         batch="本科批",
         subject_type="physics",

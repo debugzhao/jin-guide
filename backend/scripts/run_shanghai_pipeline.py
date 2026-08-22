@@ -1,13 +1,8 @@
-"""Run the official-data collection pipeline for a province config.
-
-名字仍叫 run_jiangsu_pipeline 是历史遗留（脚本本身跟省份无关，靠 --config 选择配置
-文件），未重命名以避免破坏已有文档里记录的命令；--config 默认仍指向 jiangsu.yaml
-保持向后兼容。
+"""Run the Shanghai official-data collection pipeline.
 
 Examples:
-    python scripts/run_jiangsu_pipeline.py --source jseea-policy-2025
-    python scripts/run_jiangsu_pipeline.py --all --persist
-    python scripts/run_jiangsu_pipeline.py --config data_pipeline/configs/zhejiang.yaml --source zjzs-policy-2026
+    python scripts/run_shanghai_pipeline.py --source shmeea-policy-2025
+    python scripts/run_shanghai_pipeline.py --all --persist
 """
 
 from __future__ import annotations
@@ -34,11 +29,6 @@ def parse_args() -> argparse.Namespace:
     target.add_argument("--all", action="store_true")
     parser.add_argument("--persist", action="store_true")
     parser.add_argument(
-        "--config",
-        type=Path,
-        default=BACKEND_ROOT / "data_pipeline" / "configs" / "jiangsu.yaml",
-    )
-    parser.add_argument(
         "--raw-root", type=Path, default=BACKEND_ROOT / "data" / "raw"
     )
     parser.add_argument(
@@ -48,7 +38,7 @@ def parse_args() -> argparse.Namespace:
 
 
 async def run(args: argparse.Namespace) -> list[dict]:
-    config = load_pipeline_config(args.config)
+    config = load_pipeline_config(BACKEND_ROOT / "data_pipeline" / "configs" / "shanghai.yaml")
     if args.persist:
         from app.database import SyncSessionLocal
 

@@ -3,12 +3,12 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from html.parser import HTMLParser
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qsl, urljoin, urlparse
 
 
 SUPPORTED_SUFFIXES = {
     ".html", ".htm", ".xlsx", ".xls", ".csv", ".pdf", ".json", ".xml",
-    ".rar", ".jpg", ".jpeg", ".png",
+    ".rar", ".jpg", ".jpeg", ".png", ".docx", ".doc",
 }
 
 
@@ -63,6 +63,15 @@ def discover_links(
             continue
         suffix = parsed.path.lower()
         supported = any(suffix.endswith(item) for item in SUPPORTED_SUFFIXES)
+        if not supported:
+            # 浙江省教育考试院(zjzs.net)的附件不是直链，是下载代理端点
+            # （如 /module/download/downfile.jsp?...&filename=xxx.docx），真实扩展名
+            # 藏在查询参数值里而不是URL路径——江苏jseea.cn的附件是直链所以原逻辑够用，
+            # 浙江这种代理端点必须额外检查query参数值才能识别出真实文件类型
+            query_values = [value.lower() for _, value in parse_qsl(parsed.query)]
+            supported = any(
+                value.endswith(item) for value in query_values for item in SUPPORTED_SUFFIXES
+            )
         if not supported and not include_pages:
             continue
         searchable = f"{title} {absolute}"

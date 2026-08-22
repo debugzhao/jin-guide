@@ -225,6 +225,7 @@ def parse_rank_segment_rows(
     *,
     subject_type: SubjectType,
     provenance: Provenance,
+    config: PipelineConfig,
 ) -> list[RankSegmentRecord]:
     records: list[RankSegmentRecord] = []
     for row_number, row in enumerate(document.rows, start=1):
@@ -242,6 +243,7 @@ def parse_rank_segment_rows(
                 continue
             records.append(
                 RankSegmentRecord(
+                    province=config.province,
                     year=provenance.year,
                     subject_type=subject_type,
                     score=score,
@@ -310,6 +312,7 @@ def parse_admission_score_rows(
         )
         records.append(
             AdmissionScoreRecord(
+                province=config.province,
                 year=provenance.year,
                 batch=batch,
                 subject_type=subject_type,
@@ -323,6 +326,85 @@ def parse_admission_score_rows(
                 campus=campus,
                 line_type=line_type,
                 min_score=min_score,
+                provenance=_row_number(
+                    provenance, row_number, document.page_or_sheet[row_number - 1]
+                ),
+            )
+        )
+    return records
+
+
+def parse_zhejiang_admission_score_rows(
+    document: TabularDocument,
+    *,
+    provenance: Provenance,
+    config: PipelineConfig,
+    batch: str,
+) -> list[AdmissionScoreRecord]:
+    """浙江省教育考试院投档线是扁平表（学校代号/学校名称/专业代号/专业名称/计划数/
+    分数线/位次），每行本身就带位次，不需要像江苏那样另外关联逐分段表做enrichment；
+    每个专业本身就是志愿单位，没有"院校专业组"这层概念，这里复用
+    major_group_code/major_group_name 字段存专业代号/专业名称（浙江语义下"1个专业
+    (类)"就相当于江苏语义下的"1个院校专业组"，都是最小志愿单位，字段含义对得上，不是
+    乱塞）。用真实2026年浙江投档线xls验证过表头结构，见
+    docs/10_zhejiang_top10_data_collection_status.md。
+    """
+    aliases = {
+        "学校代号": {"学校代号", "学校代码", "院校代号", "院校代码"},
+        "学校名称": {"学校名称", "院校名称"},
+        "专业代号": {"专业代号", "专业代码"},
+        "专业名称": {"专业名称"},
+        "分数线": {"分数线", "投档线", "最低分"},
+        "位次": {"位次", "最低位次"},
+    }
+    header_index = None
+    columns: dict[str, int] = {}
+    for index, row in enumerate(document.rows):
+        compact = [re.sub(r"\s+", "", value) for value in row]
+        found: dict[str, int] = {}
+        for canonical, options in aliases.items():
+            for cell_index, value in enumerate(compact):
+                if value in options:
+                    found[canonical] = cell_index
+                    break
+        if {"学校名称", "专业名称", "分数线"}.issubset(found):
+            header_index = index
+            columns = found
+            break
+    if header_index is None:
+        return []
+
+    by_name = {target.name: target for target in config.target_universities}
+
+    def value(row: Sequence[str], key: str) -> str:
+        position = columns.get(key)
+        return row[position].strip() if position is not None and position < len(row) else ""
+
+    records: list[AdmissionScoreRecord] = []
+    for row_number in range(header_index + 1, len(document.rows)):
+        row = document.rows[row_number]
+        university_name = value(row, "学校名称")
+        target = by_name.get(university_name)
+        if target is None:
+            continue
+        major_code = value(row, "专业代号")
+        major_name = value(row, "专业名称")
+        min_score = _integer(value(row, "分数线"))
+        if not major_code or not major_name or min_score is None:
+            continue
+        records.append(
+            AdmissionScoreRecord(
+                province=config.province,
+                year=provenance.year,
+                batch=batch,
+                subject_type="unified",
+                university_code=target.university_code,
+                university_name=university_name,
+                provincial_university_code=value(row, "学校代号") or None,
+                major_group_code=major_code,
+                major_group_name=major_name,
+                min_score=min_score,
+                min_rank=_integer(value(row, "位次")),
                 provenance=_row_number(
                     provenance, row_number, document.page_or_sheet[row_number - 1]
                 ),
@@ -416,6 +498,7 @@ def parse_admission_plan_rows(
         target = by_name[current_name]
         records.append(
             AdmissionPlanRecord(
+                province=config.province,
                 year=provenance.year,
                 batch=batch,
                 subject_type=subject_type,

@@ -26,6 +26,25 @@ class PublicationError(RuntimeError):
     pass
 
 
+# dataset_version.name 前缀——曾经硬编码成"jiangsu_"，导致任何省份发布都被打上
+# "jiangsu_"名字。新省份必须先在这里显式注册slug，未注册时直接报错而不是猜一个
+# 拼音写法，避免命名出错却没人发现。
+_PROVINCE_SLUGS = {
+    "江苏": "jiangsu",
+    "浙江": "zhejiang",
+}
+
+
+def _province_slug(province: str) -> str:
+    try:
+        return _PROVINCE_SLUGS[province]
+    except KeyError:
+        raise PublicationError(
+            f"no dataset-name slug registered for province {province!r}; "
+            "add it to PipelineRepository._PROVINCE_SLUGS before publishing"
+        ) from None
+
+
 class PipelineRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
@@ -180,7 +199,7 @@ class PipelineRepository:
         )
         version_number = (previous or 0) + 1
         scope = "top10" if dataset_type in {"admission", "plan"} else "policy"
-        name = f"jiangsu_{scope}_{year}_{dataset_type}_v{version_number}"
+        name = f"{_province_slug(province)}_{scope}_{year}_{dataset_type}_v{version_number}"
         dataset = DatasetVersion(
             name=name,
             dataset_type=dataset_type,

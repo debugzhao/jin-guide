@@ -5,7 +5,8 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-SubjectType = Literal["physics", "history"]
+# "unified" 用于浙江等"3+3不分文理"省份——考生不区分物理类/历史类，志愿也不按科类分批次
+SubjectType = Literal["physics", "history", "unified"]
 ReviewStatus = Literal["valid", "needs_review", "rejected"]
 
 
@@ -23,7 +24,7 @@ class Provenance(BaseModel):
 
 
 class RankSegmentRecord(BaseModel):
-    province: str = "江苏"
+    province: str  # 必须显式传入，不设默认值（历史"江苏"默认值曾致解析器静默写错省份）
     year: int
     subject_type: SubjectType
     score: int = Field(ge=0, le=750)
@@ -32,7 +33,7 @@ class RankSegmentRecord(BaseModel):
 
 
 class AdmissionScoreRecord(BaseModel):
-    province: str = "江苏"
+    province: str  # 必须显式传入，不设默认值（历史"江苏"默认值曾致解析器静默写错省份）
     year: int
     batch: str
     subject_type: SubjectType
@@ -54,7 +55,7 @@ class AdmissionScoreRecord(BaseModel):
 
 
 class AdmissionPlanRecord(BaseModel):
-    province: str = "江苏"
+    province: str  # 必须显式传入，不设默认值（历史"江苏"默认值曾致解析器静默写错省份）
     year: int
     batch: str
     subject_type: SubjectType
@@ -78,7 +79,7 @@ class AdmissionPlanRecord(BaseModel):
 
 
 class DocumentChunkRecord(BaseModel):
-    province: str = "江苏"
+    province: str  # 必须显式传入，不设默认值（历史"江苏"默认值曾致解析器静默写错省份）
     year: int
     document_type: Literal["policy", "charter", "major_intro", "transfer_policy"]
     university_code: str | None = None
@@ -89,7 +90,7 @@ class DocumentChunkRecord(BaseModel):
 
 
 class PolicyRuleRecord(BaseModel):
-    province: str = "江苏"
+    province: str  # 必须显式传入，不设默认值（历史"江苏"默认值曾致解析器静默写错省份）
     year: int
     batch: str = "普通类本科批"
     subject_type: SubjectType | None = None

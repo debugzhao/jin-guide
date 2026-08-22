@@ -61,6 +61,28 @@ def extract_document_text(path: str | Path) -> str:
             raise RuntimeError("pdfplumber is required to extract PDF text") from exc
         with pdfplumber.open(file_path) as document:
             text = "\n".join(page.extract_text() or "" for page in document.pages)
+    elif file_path.suffix.lower() == ".docx":
+        # 浙江省招生政策通知附件是 .docx（江苏是 .pdf），官方 word 排版里正文段落和
+        # 表格是分开的两种元素，逐段读 paragraphs 会漏掉表格里的内容（例如某些年份
+        # 把批次控制线放在表格里），所以两者都读，按文档内出现顺序拼接。
+        import docx
+
+        document = docx.Document(str(file_path))
+        parts: list[str] = []
+        for element in document.element.body:
+            tag = element.tag.rsplit("}", 1)[-1]
+            if tag == "p":
+                paragraph = next(
+                    (p for p in document.paragraphs if p._element is element), None
+                )
+                if paragraph is not None and paragraph.text.strip():
+                    parts.append(paragraph.text)
+            elif tag == "tbl":
+                table = next((t for t in document.tables if t._element is element), None)
+                if table is not None:
+                    for row in table.rows:
+                        parts.append(" ".join(cell.text.strip() for cell in row.cells))
+        text = "\n".join(parts)
     else:
         raise ValueError(f"unsupported document format: {file_path.suffix}")
     lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
@@ -72,6 +94,7 @@ def chunk_document(
     *,
     document_type: str,
     provenance: Provenance,
+    province: str,
     university_code: str | None = None,
     max_chars: int = 1200,
 ) -> list[DocumentChunkRecord]:
@@ -94,6 +117,7 @@ def chunk_document(
         chunks.append(current)
     return [
         DocumentChunkRecord(
+            province=province,
             year=provenance.year,
             document_type=document_type,
             university_code=university_code,
@@ -105,10 +129,17 @@ def chunk_document(
     ]
 
 
-def extract_policy_rule(text: str, *, provenance: Provenance) -> PolicyRuleRecord:
+def extract_policy_rule(text: str, *, provenance: Provenance, province: str) -> PolicyRuleRecord:
     compact = re.sub(r"\s+", "", text)
     mode = "parallel" if "平行志愿" in compact else "unknown"
     max_match = re.search(r"(?:设置|填报|可填报)(\d{1,3})个院校专业组志愿", compact)
+    if max_match is None:
+        # 浙江真实政策原文（2026年实施方案已验证）用"专业平行志愿"，数字和"志愿"之间
+        # 没有"院校/专业"这类单位名（"考生每次可填报不超过80个志愿"），跟江苏"设置N个
+        # 院校专业组志愿"结构不同。必须锁定"不超过N个志愿"且"个"后直接接"志愿"二字，
+        # 否则会误命中同一段里"1个志愿单位"（志愿单位说明句，不是数量上限）或"不超过
+        # 6个专业志愿"（提前录取院校志愿的专业数子上限，不是本志愿单位的总数上限）
+        max_match = re.search(r"不超过(\d{1,3})个志愿(?!单位|专业|院校)", compact)
     adjustment_allowed = None
     if "服从专业调剂" in compact or "专业调剂" in compact:
         adjustment_allowed = True
@@ -118,6 +149,7 @@ def extract_policy_rule(text: str, *, provenance: Provenance) -> PolicyRuleRecor
     tie_match = re.search(r"([^。]{0,80}(?:同分|投档分相同)[^。]{0,180}。)", text)
     filing_match = re.search(r"([^。]{0,80}(?:投档原则|投档规则)[^。]{0,220}。)", text)
     return PolicyRuleRecord(
+        province=province,
         year=provenance.year,
         volunteer_mode=mode,
         max_volunteers=int(max_match.group(1)) if max_match else None,

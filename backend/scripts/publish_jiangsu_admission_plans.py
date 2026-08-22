@@ -87,6 +87,7 @@ def run() -> dict:
             )
             records = [
                 AdmissionPlanRecord(
+                    province=config.province,
                     year=YEAR,
                     batch=BATCH,
                     subject_type=row["subject_type"],

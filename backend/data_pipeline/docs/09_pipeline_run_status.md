@@ -21,7 +21,8 @@
 | 8 | 2024 逐分段表 | ⚠️ | staging仅3条valid | 同#6 |
 | 9 | 10校专业录取线 | ❌ | 0 | 未登记数据源，PRD要求官方未公开则明确标记缺失，不可推算 |
 | 10 | 院校/学院/专业主数据 | ❌ | 院校层：`enrollment_data_universities`已有大部分字段；学院/专业层：0（无表） | 院校层缺`admissions_url`一列（加列即可）；学院/专业层无实体表，`major_name`只是交易表里的自由文本列，不能当主数据用 |
-| 11 | 10校章程/专业介绍/转专业政策（RAG） | 🛑 | `rag_documents`仅1条（policy），`rag_chunks`仅4条，全部`embedding IS NULL` | **阻塞在外部账户权限，不是代码问题**：`scripts/chunk_documents.py --embed-only`现成可用，但LiteLLM转发到`openai/moonshot-v1-emb-small`时返回`403 The API you are accessing is not open`——Moonshot账户没开通embedding模型权限。需要业务决策：找Moonshot开通，或换litellm_config.yaml里其他可用的embedding模型（后者与CLAUDE.md"后端是Moonshot Kimi"的约定冲突，需确认） |
+| 11-embed | 补现有4条chunk的embedding | ✅ | 4/4条已补embedding（DashScope qwen3.7-text-embedding，1024维），检索抽样验证通过（"平行志愿是怎么投档的？"命中最相关chunk相似度0.809，排序符合预期） | 无。见下方"#11-embed 执行记录（2026-08-22 完结）" |
+| 11-collect | 10校章程/专业介绍/转专业政策新数据源 | ❌ | `rag_documents`仍只有1条（policy），10校新文档还没采 | 未登记数据源，embedding管线已打通，采集完直接能用 |
 | 12 | 教育部院校/专业标准目录 | ❌ | 0 | 未登记数据源 |
 | 13 | 业务表同步 loader | ✅ | `sync_published_data_to_business_tables.py` 已跑，#1#2#3全部同步 | 每次全量重扫，数据量涨上去后可加增量游标（当前不必要） |
 
@@ -34,7 +35,7 @@
 ```
 ①#6/#8 逐分段表修复 ──▶ ②#5/#7 投档线转valid+发布
 ③#4 policy发布（独立，最快能关掉）                                      ✅ 已完成 2026-08-22
-④#11-embed 补现有4条chunk的embedding（独立bug修复，工作量S，建议插队提前）    🛑 阻塞在Moonshot账户权限，2026-08-22
+④#11-embed 补现有4条chunk的embedding（独立bug修复，工作量S，建议插队提前）    ✅ 已完成 2026-08-22（切到DashScope后跑通）
 ⑤#9 专业录取线（10校适配，可与⑥并行）
 ⑥#10 主数据建表 + #11剩余（10校3类文档采集，两者共享同一批页面调研，建议合并执行）
 ⑦#12 教育部标准目录（弱依赖⑥，采集本身可提前做）
@@ -82,15 +83,18 @@
 - **Collect**：10校"学院设置"+"专业介绍"页面采集，大概率复用#3的manual playwright路径——**建议和#11合并采集动作**，同一批页面能同时产出主数据字段和RAG chunk
 - 工作量：L（新表设计 + 10校采集）
 
-### #11-embed　补现有chunk的embedding —— 🛑 阻塞在外部账户权限（2026-08-22）
+### #11-embed　补现有chunk的embedding —— ✅ 已完成（2026-08-22）
 
 - **DoD**：现有4条chunk补齐embedding，抽样检索验证能命中
-- **Discover结果（结论被上一版文档写错了）**：不需要新写脚本——`scripts/chunk_documents.py --embed-only`本来就存在，内部调的是`app/engine/embedding.py::embed_pending_chunks()`，逻辑（扫`embedding IS NULL` → 批量调`embed_batch` → 写回`chunk.embedding`/`embedding_model`）本来就是完整的
-- **实际执行**：`docker compose exec backend python -m scripts.chunk_documents --embed-only` 跑起来后，LiteLLM转发到`openai/moonshot-v1-emb-small`时返回 `403 - {"message": "The API you are accessing is not open"}`（litellm容器日志确认，重试2次后fallback也失败）。根因是**当前Moonshot API Key没有开通embedding模型（`moonshot-v1-emb-small`）的访问权限**，是账户/套餐层面的限制，不是代码bug，脚本本身工作正常
-- **需要人决策，不是代码能解决的**：
-  1. 找Moonshot开通该模型权限（改动最小，维持"embedding也走Moonshot"的现有架构约定）
-  2. 换`litellm_config.yaml`里其他已开通权限的embedding模型（会跟CLAUDE.md"模型网关实际后端是Moonshot Kimi"的既有约定冲突，需要明确决定是否接受）
-- 工作量：一旦权限打通，实际执行是S（跑一条现成命令）；卡点在决策/协调，不在工程
+- **决策**：Moonshot embedding权限问题（403）没等到开通，改用调研阶段验证过的DashScope `qwen3.7-text-embedding`（1024维），配置来自用户在`.env`加的`embedding_*`变量组
+- **改动清单**：
+  1. `docker-compose.yml`：litellm服务新增`DASHSCOPE_API_KEY`/`DASHSCOPE_EMBEDDING_BASE_URL`（映射自`.env`的`embedding_apiKey`/`embedding_openAiCompatible_url`）
+  2. `litellm_config.yaml`：`text-embedding-3-small`虚拟模型的映射从`openai/moonshot-v1-emb-small`换成`openai/qwen3.7-text-embedding`
+  3. `app/engine/embedding.py`、`app/models/document.py`：`EMBEDDING_DIMS` 1536→1024
+  4. 新增迁移`alembic/versions/023_chunks_embedding_dim_1024.py`：`rag_chunks.embedding`列 drop+recreate 为`vector(1024)`，HNSW索引重建（原索引名`rag_chunks_embedding_hnsw`，之前文档误写成`chunks_embedding_hnsw`，表名早已被021号迁移改成`rag_chunks`）
+  5. 跑`docker compose exec backend python -m scripts.chunk_documents --embed-only` → `Embedded 4/4 chunks`
+- **验证**：用`Chunk.embedding.cosine_distance()`查"平行志愿是怎么投档的？"，命中"平行志愿具体投档办法"chunk，相似度0.809，排序符合预期，RAG检索链路端到端打通
+- **意外发现并修复的独立bug（不是本任务范围，但直接挡路，顺手修了）**：`.env`里`LITELLM_MASTER_KEY=sk-wenjin-dev# ...`一行`#`前面没空格，导致docker-compose把行内注释文本也解析进了变量值。`backend`/`worker`容器因为很久没重建，一直缓存着历史上干净的值，没发现问题；本次重建`litellm`容器后该问题暴露，**所有走LiteLLM的LLM调用（不只是embedding）全部返回`400 No connected db.`**（litellm用错的master key去做虚拟key鉴权，触发了它内部一条误导性的DB连接检查分支）。已在`.env`里给`#`前面补了空格修好，重建容器后chat/embedding都恢复200
 
 ### #11-collect　新增10校章程/专业介绍/转专业政策数据源
 
@@ -127,7 +131,11 @@
 2026-08-22 执行#4后更新：
   PolicyRuleRecord: valid=1（发布）+ rejected=1（空壳重复，之前那1条needs_review的去向）
   pipeline_published_data_records 新增：PolicyRuleRecord 1条 → dataset_version jiangsu_policy_2025_policy_v1
-  DocumentChunkRecord 4条仍是 embedding IS NULL（#11-embed执行失败，见任务看板#11）
+
+2026-08-22 执行#11-embed后更新：
+  rag_chunks 4条：embedding全部补齐（DashScope qwen3.7-text-embedding, 1024维），embedding_model='text-embedding-3-small'（虚拟模型名不变）
+  rag_chunks.embedding 列类型：vector(1536) → vector(1024)（migration 023）
+  检索抽样验证：query="平行志愿是怎么投档的？" 命中chunk相似度0.809，排序正确
 
 enrollment_data_admission_scores/rank_segments/admission_plans 里的"河南"数据是历史mock种子，与江苏真实数据不冲突。
 ```
@@ -150,8 +158,11 @@ enrollment_data_admission_scores/rank_segments/admission_plans 里的"河南"数
 # policy发布（已执行过，幂等重跑安全）
 .venv/bin/python scripts/publish_jiangsu_policy.py
 
-# 补chunk embedding（当前会因Moonshot账户权限403失败，权限打通后直接跑这条即可，不用改代码）
+# 补chunk embedding（已切到DashScope，正常工作；--all 会先对raw/parsed文档重新切分再顺带补embedding）
 docker compose exec backend python -m scripts.chunk_documents --embed-only
+
+# DashScope embedding连通性单独验证（不走litellm，直连DashScope，排查是否是litellm这一层的问题）
+cd backend && .venv/bin/python -m scripts.verify_dashscope_embedding
 ```
 
 容器内执行注意：本项目backend容器`WORKDIR`是`/app`，要用`python -m scripts.xxx`（模块方式）而不是`python scripts/xxx.py`，否则`from app.xxx import ...`会报`ModuleNotFoundError: No module named 'app'`。
@@ -161,4 +172,7 @@ docker compose exec backend python -m scripts.chunk_documents --embed-only
 - OCR 依赖 macOS Vision（`scripts/macos_vision_ocr.swift`），Linux 上会明确报错，不接受静默造数据
 - 2023/2024 逐分段表解析效果差是真实现象，不是环境问题，需要人工核对原图（参考2025年"累计人数列错位"根因分析，见 `08_jiangsu_data_pipeline_handoff.md` §3.5）
 - 招生计划类数据源官网多为JS动态渲染，`HttpCollector`结构性接不了，只能走`collection_method: manual`的Playwright人工辅助路径（已验证可行，见任务#3）
-- RAG chunk入库和embedding生成是两步分开的：`stage_records()`只负责把chunk正文写进`rag_chunks`，不会自动调embedding——但补embedding的脚本（`scripts/chunk_documents.py --embed-only`）本来就有，不用新写。真正的坑是**Moonshot账户没开通`moonshot-v1-emb-small`的调用权限**（LiteLLM返回403 `The API you are accessing is not open`），这是账户层面的外部阻塞，遇到同样403要先怀疑账户权限，不要以为是代码或脚本缺失
+- RAG chunk入库和embedding生成是两步分开的：`stage_records()`只负责把chunk正文写进`rag_chunks`，不会自动调embedding——但补embedding的脚本（`scripts/chunk_documents.py --embed-only`）本来就有，不用新写
+- Embedding供应商已从Moonshot换成DashScope（qwen3.7-text-embedding，1024维），配置在`.env`的`embedding_*`变量组，通过`docker-compose.yml`的`DASHSCOPE_API_KEY`/`DASHSCOPE_EMBEDDING_BASE_URL`传进litellm容器。`app/engine/embedding.py`/`app/models/document.py`的`EMBEDDING_DIMS`和`rag_chunks.embedding`列宽必须保持一致（现在是1024），改供应商/维度记得三处一起改，否则pgvector会直接报错
+- **`.env`里的行内注释一定要在`#`前面留空格**，否则整行注释文本会被解析成变量值的一部分。这次`LITELLM_MASTER_KEY=sk-wenjin-dev# 备注`就因为缺空格，导致重建litellm容器后**所有LLM调用（不只是embedding）**都报`400 No connected db.`——现象看起来像"数据库连不上"，实际根因是master key鉴权失败触发的litellm内部误导性报错，跟数据库毫无关系。改`.env`后记得检查其他行是不是也有同样问题
+- 只重建了`litellm`一个容器的env就会和`backend`/`worker`（很久没重建，缓存着旧env）出现不一致——排查env相关问题时，同一个变量在不同容器里的实际值要逐个`docker compose exec <service> sh -c 'echo $VAR'`核实，不能只看`.env`文件本身，文件改了不代表运行中的容器已经生效

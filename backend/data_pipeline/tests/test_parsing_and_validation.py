@@ -4,6 +4,7 @@ from data_pipeline.config import load_pipeline_config
 from data_pipeline.discovery import discover_links
 from data_pipeline.parsers import (
     TabularDocument,
+    extract_policy_rule,
     parse_admission_score_rows,
     parse_admission_plan_rows,
     parse_rank_segment_rows,
@@ -71,7 +72,7 @@ def test_parses_whitelisted_admission_scores_and_attaches_exact_rank() -> None:
         page_or_sheet=[1, 1, 1],
     )
     ranks = parse_rank_segment_rows(
-        rank_doc, subject_type="physics", provenance=_provenance("rank")
+        rank_doc, subject_type="physics", provenance=_provenance("rank"), config=config
     )
     enriched = attach_min_ranks(scores, ranks)
     assert enriched[0].min_rank == 1000
@@ -88,7 +89,7 @@ def test_rank_validation_rejects_duplicates_and_non_monotonic_rows() -> None:
         page_or_sheet=[1, 1, 1],
     )
     ranks = parse_rank_segment_rows(
-        document, subject_type="physics", provenance=_provenance("rank")
+        document, subject_type="physics", provenance=_provenance("rank"), config=config
     )
     results = validate_records(ranks, config)
     assert results[0].status == "valid"
@@ -97,12 +98,13 @@ def test_rank_validation_rejects_duplicates_and_non_monotonic_rows() -> None:
 
 
 def test_rank_parser_handles_two_three_column_tables_side_by_side() -> None:
+    config = load_pipeline_config("data_pipeline/configs/jiangsu.yaml")
     document = TabularDocument(
         rows=[["682", "144", "7121", "642", "389", "33069"]],
         page_or_sheet=[1],
     )
     records = parse_rank_segment_rows(
-        document, subject_type="physics", provenance=_provenance("rank")
+        document, subject_type="physics", provenance=_provenance("rank"), config=config
     )
     assert [(item.score, item.cumulative_rank) for item in records] == [
         (682, 7121),
@@ -158,3 +160,25 @@ def test_admission_plan_does_not_leak_group_across_university_blocks() -> None:
     assert records[0].university_code == "10285"
     assert records[0].major_group_code == "40"
     assert records[0].major_name == "软件工程(中外合作办学)"
+
+
+def test_extract_policy_rule_matches_jiangsu_institution_major_group_wording() -> None:
+    text = "考生可填报45个院校专业组志愿，实行平行志愿。"
+    rule = extract_policy_rule(text, provenance=_provenance("policy"), province="江苏")
+    assert rule.volunteer_mode == "parallel"
+    assert rule.max_volunteers == 45
+
+
+def test_extract_policy_rule_matches_zhejiang_major_parallel_wording() -> None:
+    # 江苏"设置N个院校专业组志愿"把数字和单位名连在一起；浙江"专业平行志愿"的数字
+    # 单独出现在"不超过N个志愿"里，前面还有一句无关的"1个志愿单位"说明和"不超过6个
+    # 专业志愿"（提前录取院校志愿下的专业数子上限）——曾经把这两个误当成总数上限，
+    # 这条用真实2026年浙江政策原文验证过的片段做回归测试。
+    text = (
+        "实行专业平行志愿。以1所学校的1个专业（类）作为1个志愿单位。"
+        "考生每次可填报不超过80个志愿。"
+        "另有提前录取实行传统志愿，每个院校志愿可填报不超过6个专业志愿。"
+    )
+    rule = extract_policy_rule(text, provenance=_provenance("policy"), province="浙江")
+    assert rule.volunteer_mode == "parallel"
+    assert rule.max_volunteers == 80

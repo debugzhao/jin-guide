@@ -89,6 +89,7 @@ def test_enrichment_fills_min_rank_from_matching_rank_segment(session, tmp_path)
     run = repository.start_run("jseea-admission-score-2025")
 
     score = AdmissionScoreRecord(
+        province="江苏",
         year=2025,
         batch="本科批",
         subject_type="physics",
@@ -99,7 +100,7 @@ def test_enrichment_fills_min_rank_from_matching_rank_segment(session, tmp_path)
         min_rank=None,
         provenance=_provenance("投档线"),
     )
-    rank = RankSegmentRecord(year=2025, subject_type="physics", score=661, cumulative_rank=728, provenance=_provenance("逐分段表"))
+    rank = RankSegmentRecord(province="江苏", year=2025, subject_type="physics", score=661, cumulative_rank=728, provenance=_provenance("逐分段表"))
     _stage(session, repository, run, tmp_path, "score", [score], config)
     _stage(session, repository, run, tmp_path, "rank", [rank], config)
 
@@ -119,6 +120,7 @@ def test_enrichment_applies_manual_override_and_stamps_reviewer(session, tmp_pat
     run = repository.start_run("jseea-admission-score-2025")
 
     score = AdmissionScoreRecord(
+        province="江苏",
         year=2025,
         batch="本科批",
         subject_type="physics",
@@ -155,6 +157,7 @@ def test_enrichment_leaves_unmatched_score_as_needs_review(session, tmp_path) ->
     run = repository.start_run("jseea-admission-score-2025")
 
     score = AdmissionScoreRecord(
+        province="江苏",
         year=2025,
         batch="本科批",
         subject_type="physics",

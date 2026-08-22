@@ -1,0 +1,206 @@
+province: 上海
+target_universities:
+  - university_code: "10246"
+    name: 复旦大学
+    city: 上海
+    ownership: central
+    admissions_url: https://ao.fudan.edu.cn/
+  - university_code: "10248"
+    name: 上海交通大学
+    city: 上海
+    ownership: central
+    admissions_url: https://admissions.sjtu.edu.cn/
+  - university_code: "10247"
+    name: 同济大学
+    city: 上海
+    ownership: central
+    admissions_url: https://bkzs.tongji.edu.cn/
+  - university_code: "10269"
+    name: 华东师范大学
+    city: 上海
+    ownership: central
+    admissions_url: https://zsb.ecnu.edu.cn/
+  - university_code: "10272"
+    name: 上海财经大学
+    city: 上海
+    ownership: central
+    admissions_url: https://zs.sufe.edu.cn/
+  - university_code: "10271"
+    name: 上海外国语大学
+    city: 上海
+    ownership: central
+    admissions_url: https://admissions.shisu.edu.cn/
+  - university_code: "10251"
+    name: 华东理工大学
+    city: 上海
+    ownership: central
+    admissions_url: https://zsb.ecust.edu.cn/
+  - university_code: "10255"
+    name: 东华大学
+    city: 上海
+    ownership: central
+    admissions_url: https://zs.dhu.edu.cn/
+  - university_code: "10280"
+    name: 上海大学
+    city: 上海
+    ownership: provincial
+    admissions_url: https://bkzsw.shu.edu.cn/
+  - university_code: "10252"
+    name: 上海理工大学
+    city: 上海
+    ownership: provincial
+    admissions_url: http://zhaoban.usst.edu.cn/
+
+# 数据源审计结论（2026-08-22，WebSearch/WebFetch实测确认，未编造URL）：
+# 上海市教育考试院（www.shmeea.edu.cn，即"上海招考热线"）的数据结构与江苏考试院（jseea.cn）不同：
+#   - 逐分段表：上海不发布江苏式的"逐分"明细表，而是按分数段区间发布《考生成绩分布表》，
+#     PDF格式，需要新写解析器（不能直接复用 jseea_rank_segment_v1），parser 名先占位为
+#     shmeea_score_distribution_v1，字段结构待正式实现时对照官方PDF设计。
+#   - 投档线：上海本科普通批次实行"院校专业组"平行志愿（不分物理类/历史类），580分及以上
+#     考生分数线官方不公开（仅公示580分以下部分）——发布时必须如实标记该部分缺失，不能推算。
+#     只找到PDF直链，未找到承载下载链接的公告HTML母页，因此entry_url直接指向PDF文件
+#     （HttpCollector对非.html后缀不会走discover_links，可直接下载解析）。parser 占位为
+#     shmeea_admission_score_v1，需要重新实现（不能直接复用 jseea_admission_score_v1，
+#     因为不含物理/历史 subject_type 维度）。
+#   - 招生政策：页面本身即为政策全文HTML（不像江苏是入口页+附件PDF），可复用
+#     policy_document_v1。
+sources:
+  - id: shmeea-score-distribution-2025
+    name: 上海市2025年普通高校招生本科阶段考生各类别成绩分布表
+    entry_url: https://www.shmeea.edu.cn/page/09000/20250623/19549.html
+    data_type: rank_segment
+    year: 2025
+    parser: shmeea_score_distribution_v1
+    update_frequency: yearly
+    discovery_title_pattern: 本科录取控制分数线上考生高考成绩分布表|.*类.*专业统考.*成绩分布表
+    discovery_depth: 1
+  - id: shmeea-admission-score-2025-general
+    name: 上海市2025年普通高校招生本科普通批次平行志愿院校专业组投档分数线
+    entry_url: https://www.shmeea.edu.cn/download/20250719/186.pdf
+    data_type: admission_score
+    year: 2025
+    parser: shmeea_admission_score_v1
+    update_frequency: yearly
+    discovery_depth: 0
+  - id: shmeea-admission-score-2025-cooperative
+    name: 上海市2025年普通高校招生本科批次Q组（中外合作办学）院校专业组投档分数线
+    entry_url: https://www.shmeea.edu.cn/download/20250719/185.pdf
+    data_type: admission_score
+    year: 2025
+    parser: shmeea_admission_score_v1
+    update_frequency: yearly
+    discovery_depth: 0
+  - id: shmeea-policy-2025
+    name: 上海市2025年普通高等学校招生志愿填报与投档录取实施办法
+    entry_url: https://www.shmeea.edu.cn/page/06300/20250425/19280.html
+    data_type: policy
+    year: 2025
+    parser: policy_document_v1
+    update_frequency: yearly
+    discovery_title_pattern: 志愿表.*(pdf)|样表.*(pdf)|投档分数折算公式.*(pdf)
+    discovery_depth: 1
+
+# 10校2026年招生计划：与江苏一致，官网查询系统均为JS动态渲染/无法结构化抓取，
+# 全部标记 collection_method: manual，走 Playwright 人工辅助采集
+# （不会被 run_shanghai_pipeline.py --all 误当作可自动重跑的源）。
+# 逐校特殊情况（Discover阶段WebFetch实测确认）：
+#   - 复旦：非JS问题，但计划数据以PNG图片嵌入正文，需要OCR，parser用
+#     manual_playwright_ocr_v1；且列表页最新只找到2024年公告，2025/2026年条目
+#     未定位到，采集前需人工重新确认入口。
+#   - 上海财经大学：查询系统带图片验证码（4位数字），比其余学校多一道人工/OCR障碍，
+#     采集耗时预期显著更高。
+#   - 东华大学：官网公告明确写明"计划数据仅在微信小程序内查询"，网页端没有任何
+#     查询系统或PDF附件——Playwright也无法处理小程序，属于🛑架构性阻塞，需产品侧
+#     决策（改用第三方权威汇总源，或人工从小程序截图录入）。entry_url先登记该
+#     公告页作为溯源起点，collection_method 暂标 manual 但不代表可直接走通。
+  - id: fudan-admission-plan-2026
+    name: 复旦大学2026年上海招生计划
+    entry_url: https://ao.fudan.edu.cn/36332/list.htm
+    data_type: admission_plan
+    year: 2026
+    target_university_code: "10246"
+    collection_method: manual
+    parser: manual_playwright_ocr_v1
+    update_frequency: yearly
+  - id: sjtu-admission-plan-2026
+    name: 上海交通大学2026年上海招生计划
+    entry_url: https://admissions.sjtu.edu.cn/newDetails?contentsID=3810000004311
+    data_type: admission_plan
+    year: 2026
+    target_university_code: "10248"
+    collection_method: manual
+    parser: manual_playwright_v1
+    update_frequency: yearly
+  - id: tongji-admission-plan-2026
+    name: 同济大学2026年上海招生计划
+    entry_url: https://bkzs.tongji.edu.cn/plan/index
+    data_type: admission_plan
+    year: 2026
+    target_university_code: "10247"
+    collection_method: manual
+    parser: manual_playwright_v1
+    update_frequency: yearly
+  - id: ecnu-admission-plan-2026
+    name: 华东师范大学2026年上海招生计划
+    entry_url: https://zsbcx.ecnu.edu.cn/static/front/ecnu/basic/html_web/zsjh.html
+    data_type: admission_plan
+    year: 2026
+    target_university_code: "10269"
+    collection_method: manual
+    parser: manual_playwright_v1
+    update_frequency: yearly
+  - id: sufe-admission-plan-2026
+    name: 上海财经大学2026年上海招生计划
+    entry_url: https://zs.sufe.edu.cn/
+    data_type: admission_plan
+    year: 2026
+    target_university_code: "10272"
+    collection_method: manual
+    parser: manual_playwright_v1
+    update_frequency: yearly
+  - id: shisu-admission-plan-2026
+    name: 上海外国语大学2026年上海招生计划
+    entry_url: https://aopress.shisu.edu.cn/zsw/zsjh.html
+    data_type: admission_plan
+    year: 2026
+    target_university_code: "10271"
+    collection_method: manual
+    parser: manual_playwright_v1
+    update_frequency: yearly
+  - id: ecust-admission-plan-2026
+    name: 华东理工大学2026年上海招生计划
+    entry_url: https://bkzsdata.ecust.edu.cn/zsdata/lqxx/
+    data_type: admission_plan
+    year: 2026
+    target_university_code: "10251"
+    collection_method: manual
+    parser: manual_playwright_v1
+    update_frequency: yearly
+  - id: dhu-admission-plan-2026
+    name: 东华大学2026年上海招生计划
+    entry_url: https://zs.dhu.edu.cn/2026/0618/c22353a377593/page.htm
+    data_type: admission_plan
+    year: 2026
+    target_university_code: "10255"
+    collection_method: manual
+    parser: manual_playwright_v1
+    update_frequency: yearly
+    enabled: false
+  - id: shu-admission-plan-2026
+    name: 上海大学2026年上海招生计划
+    entry_url: http://bks.shu.edu.cn/pub/plans.aspx
+    data_type: admission_plan
+    year: 2026
+    target_university_code: "10280"
+    collection_method: manual
+    parser: manual_playwright_v1
+    update_frequency: yearly
+  - id: usst-admission-plan-2026
+    name: 上海理工大学2026年上海招生计划
+    entry_url: http://chaxun.usst.edu.cn/zsfx/webrecruit/newWebsitePlanQueryusst.do
+    data_type: admission_plan
+    year: 2026
+    target_university_code: "10252"
+    collection_method: manual
+    parser: manual_playwright_v1
+    update_frequency: yearly
