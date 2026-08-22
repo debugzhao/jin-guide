@@ -5,6 +5,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 from data_pipeline.records import DocumentChunkRecord, PolicyRuleRecord, Provenance
+from data_pipeline.text_encoding import decode_html_bytes
 
 
 KEY_SECTION_TERMS = (
@@ -52,7 +53,7 @@ def extract_document_text(path: str | Path) -> str:
     file_path = Path(path)
     if file_path.suffix.lower() in {".html", ".htm"}:
         parser = _TextExtractor()
-        parser.feed(file_path.read_text(encoding="utf-8", errors="replace"))
+        parser.feed(decode_html_bytes(file_path.read_bytes()))
         text = "".join(parser.parts)
     elif file_path.suffix.lower() == ".pdf":
         try:

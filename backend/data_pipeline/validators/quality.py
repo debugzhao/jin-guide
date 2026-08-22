@@ -54,7 +54,10 @@ def natural_key(record: Record) -> str:
     else:
         # major_group_code/major_code 允许为空（见 records.py::AdmissionPlanRecord 注释），
         # 加 major_name 兜底去重——否则同一学校同批次下所有缺代码的专业会撞成同一个
-        # natural_key，被后面的重复校验错误地拒绝。
+        # natural_key，被后面的重复校验错误地拒绝。restrictions 也加进来：单校招生
+        # 计划页里常见同一专业名称按备注区分成多条独立招生线（如宁波大学"音乐学
+        # （师范）"按备注"器乐主项"/"声乐主项"拆成两行、计划数不同），缺 major_code
+        # 时备注往往是唯一能把它们分开的字段，已用真实数据验证过这个坑。
         parts = [
             record.province,
             record.year,
@@ -65,6 +68,7 @@ def natural_key(record: Record) -> str:
             record.major_code,
             record.major_name,
             record.admission_type,
+            record.restrictions,
         ]
     raw = "|".join(str(part) for part in parts)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()

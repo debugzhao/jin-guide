@@ -12,6 +12,7 @@ import httpx
 from data_pipeline.collectors import HttpCollector
 from data_pipeline.config import PipelineConfig, SourceConfig
 from data_pipeline.discovery import discover_links
+from data_pipeline.text_encoding import decode_html_bytes
 from data_pipeline.parsers import (
     chunk_document,
     extract_policy_rule,
@@ -19,6 +20,7 @@ from data_pipeline.parsers import (
     parse_admission_score_rows,
     parse_admission_plan_rows,
     parse_rank_segment_rows,
+    parse_single_university_admission_plan_rows,
     parse_zhejiang_admission_score_rows,
     read_tabular_document,
 )
@@ -144,7 +146,7 @@ class PipelineJob:
                 continue
             if node.artifact.content_path.suffix.lower() not in {".html", ".htm"}:
                 continue
-            html = node.artifact.content_path.read_text(encoding="utf-8", errors="replace")
+            html = decode_html_bytes(node.artifact.content_path.read_bytes())
             links = discover_links(
                 html,
                 base_url=node.artifact.source_url,
@@ -205,7 +207,9 @@ class PipelineJob:
                         )
                     )
             elif source.data_type in {"rank_segment", "admission_score", "admission_plan"}:
-                if suffix not in {".csv", ".xlsx", ".xls", ".pdf", ".jpg", ".jpeg", ".png"}:
+                if suffix not in {
+                    ".csv", ".xlsx", ".xls", ".pdf", ".jpg", ".jpeg", ".png", ".html", ".htm",
+                }:
                     return []
                 subject_type = self._infer_subject(node.title, node.artifact.source_url)
                 if subject_type is None:
@@ -246,6 +250,18 @@ class PipelineJob:
                             provenance=provenance,
                             config=self.config,
                         )
+                elif source.target_university_code:
+                    # 有target_university_code的招生计划源是"某一所学校自己招生网
+                    # 的页面"，天然只含这一所学校的数据、没有"院校名称"列可以匹配
+                    # 白名单（跟江苏manual+人工整理JSON发布、从未真正走这条http
+                    # 解析路径的admission_plan不同，这是浙江新增的真实http场景）
+                    records = parse_single_university_admission_plan_rows(
+                        document,
+                        provenance=provenance,
+                        config=self.config,
+                        target_university_code=source.target_university_code,
+                        subject_type=subject_type,
+                    )
                 else:
                     records = parse_admission_plan_rows(
                         document,

@@ -154,6 +154,11 @@ sources:
     collection_method: http
     parser: tabular_html_v1
     update_frequency: yearly
+    # 数据直接嵌在入口页自己的<table>里，不是链接到的附件，不需要发现子链接——
+    # 曾经用默认discovery_depth=1时，因为没设discovery_title_pattern，把整站导航
+    # （联系我们/学院介绍等22个不相关页面，甚至外链到gaokao.chsi.com.cn触发412）
+    # 都当成"可能的附件"抓了一遍，改成0之后只拉入口页本身。
+    discovery_depth: 0
   - id: zjut-admission-plan-2026
     name: 浙江工业大学2026年招生计划（分省分专业）
     entry_url: https://zs.zjut.edu.cn/html/w26_1.html
@@ -185,8 +190,13 @@ sources:
     collection_method: http
     parser: manual_playwright_v1
     update_frequency: yearly
-    discovery_title_pattern: 浙江
-    discovery_depth: 1
+    # 真实链路是"列表页→年份详情页→PDF附件"两跳，depth=1只能到详情页，需要2；
+    # 同一个discovery_title_pattern要同时匹配两跳的链接文字："列表页→详情页"这一跳
+    # 链接文字是"2026年浙江省招生计划"，"详情页→PDF"这一跳是"2026年浙江省普通计划"
+    # （详情页上还同时挂着艺体类/三位一体/地方专项/中本一体化4个特殊招生机制的PDF，
+    # 跟admission_plan语义对不上，故意不匹配，见状态看板）
+    discovery_title_pattern: 2026年浙江省(招生计划|普通计划)
+    discovery_depth: 2
   # 浙江工商大学：招生计划查询页确认为JS动态渲染（筛选控件+"正在加载数据"占位），
   # 与江苏苏州大学MorePlan.aspx同类，标记manual走Playwright人工辅助路径。
   - id: zjgsu-admission-plan-2026
