@@ -3,7 +3,7 @@ from typing import Optional
 from uuid import uuid4
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, ForeignKey, JSON, String, Text
+from sqlalchemy import DateTime, ForeignKey, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -27,7 +27,7 @@ class Document(Base):
     # 文件内容的 SHA256 校验和，用于去重
     checksum: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     source_document_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("pipeline_source_documents.id"), nullable=True, unique=True
+        String(36), ForeignKey("pipeline_source_documents.id"), nullable=True
     )
     raw_storage_path: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     # raw / parsed / verified / published / deprecated
@@ -38,6 +38,10 @@ class Document(Base):
     # 软删除
     deleted_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint("source_document_id", name="uq_rag_documents_source_document_id"),
     )
 
 

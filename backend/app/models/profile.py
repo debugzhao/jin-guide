@@ -65,7 +65,12 @@ class StudentProfile(_ProvenanceMixin, Base):
         onupdate=lambda: datetime.now(UTC),
     )
     __table_args__ = (
-        ForeignKeyConstraint(["superseded_by"], ["candidate_student_profiles.id"], ondelete="SET NULL"),
+        ForeignKeyConstraint(
+            ["superseded_by"],
+            ["candidate_student_profiles.id"],
+            ondelete="SET NULL",
+            name="fk_candidate_student_profiles_superseded_by",
+        ),
     )
 
 
@@ -92,5 +97,10 @@ class Preference(_ProvenanceMixin, Base):
         onupdate=lambda: datetime.now(UTC),
     )
     __table_args__ = (
-        ForeignKeyConstraint(["superseded_by"], ["candidate_preferences.id"], ondelete="SET NULL"),
+        ForeignKeyConstraint(
+            ["superseded_by"],
+            ["candidate_preferences.id"],
+            ondelete="SET NULL",
+            name="fk_candidate_preferences_superseded_by",
+        ),
     )
