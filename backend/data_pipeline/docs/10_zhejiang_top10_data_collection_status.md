@@ -8,6 +8,29 @@
 
 ✅ 完成 ｜ ⚠️ 部分完成（有产出但卡在某一步） ｜ ❌ 未开始 ｜ 🛑 阻塞在外部依赖（需人决策/协调） ｜ 🔧 代码适配中（不是数据任务，是"能否复用"的前提）
 
+## §0 数据落地情况（2026-08-22）
+
+之前几轮验证全部跑在 `/tmp` 临时目录，只是验证代码，没有真正落库。现已用
+`docker compose exec backend python -m scripts.run_jiangsu_pipeline --config
+data_pipeline/configs/zhejiang.yaml --source <id> --persist` 对全部11个http源
+重新采集，原始文件落在 `backend/data/raw/浙江/`（6.5M，44个文件），staging数据
+写入 `pipeline_staging_records` 表（`--persist`会自动建`pipeline_data_sources`/
+`pipeline_collection_runs`记录）。`/tmp`下的浙江相关临时目录已清理。
+
+| source_id | valid | needs_review |
+|---|---|---|
+| zjzs-policy-2026 / 2025 | 12 / 12 | 1 / 1 |
+| zjzs-rank-segment-2026 / 2025 | 428 / 426 | 0 / 0 |
+| zjzs-admission-score-2026-stage1 / stage2 | 401 / 2 | 0 / 0 |
+| zjzs-admission-score-2025-stage1 / stage2 | 370 / 5 | 0 / 0 |
+| nbu-admission-plan-2026 | 90 | 0 |
+| zstu-admission-plan-2026 | 61 | 0 |
+| hznu-admission-plan-2026 | 42 | 0 |
+
+投档线"第二段"只有2/5条命中白名单10校（已核实不是bug——第二段是征集志愿补缺，
+热门院校在第一段就招满了，只有温州医科大学等少数校有零星剩余名额，7239行原始表
+里只有这几条属于白名单校）。以上均为staging，**还没有publish成正式dataset_version**
+（下一步若要发布，需要走跟江苏一样的enrichment/人工核对流程，见§4）。
 ## §1 已确认的10校白名单
 
 | 排名 | 学校 | 教育部代码 | 城市 | 办学性质 | 招生网 |
