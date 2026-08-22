@@ -75,6 +75,9 @@ EXCLUDES=(
   --exclude=.DS_Store
   --exclude=memory
   --exclude=.claude
+  --exclude=data/raw
+  --exclude=data/reports
+  --exclude=eval_reports
   --exclude=.cursor
   --exclude="*.log"
 )
