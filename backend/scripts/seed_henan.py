@@ -372,10 +372,10 @@ async def run_seed(db_url: str = DATABASE_URL) -> None:
 
     async with AsyncSession(engine) as session:
         # 清除旧数据（幂等）
-        await session.execute(text("DELETE FROM subject_requirements"))
-        await session.execute(text("DELETE FROM admission_scores"))
-        await session.execute(text("DELETE FROM rank_segments"))
-        await session.execute(text("DELETE FROM universities"))
+        await session.execute(text("DELETE FROM enrollment_data_subject_requirements"))
+        await session.execute(text("DELETE FROM enrollment_data_admission_scores"))
+        await session.execute(text("DELETE FROM enrollment_data_rank_segments"))
+        await session.execute(text("DELETE FROM enrollment_data_universities"))
         await session.commit()
 
         # ── 插入院校 ────────────────────────────────────────────────────────
@@ -385,7 +385,7 @@ async def run_seed(db_url: str = DATABASE_URL) -> None:
             uid = str(uuid.uuid4())
             univ_id_map[key] = uid
             await session.execute(text("""
-                INSERT INTO universities (id, name, code, city, province, school_type,
+                INSERT INTO enrollment_data_universities (id, name, code, city, province, school_type,
                     is_985, is_211, is_shuangyiliu, has_medical_program,
                     annual_tuition_min, annual_tuition_max)
                 VALUES (:id, :name, :code, :city, :province, :school_type,
@@ -408,7 +408,7 @@ async def run_seed(db_url: str = DATABASE_URL) -> None:
             if ukey not in univ_id_map:
                 continue
             await session.execute(text("""
-                INSERT INTO admission_scores
+                INSERT INTO enrollment_data_admission_scores
                     (id, university_id, year, province, batch, subject_type,
                      min_score, min_rank, avg_score, avg_rank, max_score, enrollment_count)
                 VALUES (:id, :univ_id, :year, '河南', '本科批', 'physics',
@@ -427,7 +427,7 @@ async def run_seed(db_url: str = DATABASE_URL) -> None:
         for segs, year in [(RANK_SEGMENTS_2025, 2025), (RANK_SEGMENTS_2024, 2024), (RANK_SEGMENTS_2023, 2023)]:
             for score, rank in segs:
                 await session.execute(text("""
-                    INSERT INTO rank_segments (id, year, province, subject_type, score, cumulative_rank)
+                    INSERT INTO enrollment_data_rank_segments (id, year, province, subject_type, score, cumulative_rank)
                     VALUES (:id, :year, '河南', 'physics', :score, :rank)
                 """), {"id": str(uuid.uuid4()), "year": year, "score": score, "rank": rank})
                 seg_count += 1
@@ -441,7 +441,7 @@ async def run_seed(db_url: str = DATABASE_URL) -> None:
             if ukey not in univ_id_map:
                 continue
             await session.execute(text("""
-                INSERT INTO subject_requirements
+                INSERT INTO enrollment_data_subject_requirements
                     (id, university_id, major_name, required_subjects,
                      optional_subjects, optional_required_count,
                      restricted_subjects, medical_restrictions)

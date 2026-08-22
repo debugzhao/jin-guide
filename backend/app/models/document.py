@@ -12,7 +12,7 @@ EMBEDDING_DIMS = 1536
 
 
 class Document(Base):
-    __tablename__ = "documents"
+    __tablename__ = "rag_documents"
 
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid4())
@@ -27,7 +27,7 @@ class Document(Base):
     # 文件内容的 SHA256 校验和，用于去重
     checksum: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     source_document_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("source_documents.id"), nullable=True, unique=True
+        String(36), ForeignKey("pipeline_source_documents.id"), nullable=True, unique=True
     )
     raw_storage_path: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     # raw / parsed / verified / published / deprecated
@@ -42,13 +42,13 @@ class Document(Base):
 
 
 class Chunk(Base):
-    __tablename__ = "chunks"
+    __tablename__ = "rag_chunks"
 
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid4())
     )
     document_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("documents.id")
+        String(36), ForeignKey("rag_documents.id")
     )
     content: Mapped[str] = mapped_column(Text)
     embedding: Mapped[Optional[list]] = mapped_column(Vector(EMBEDDING_DIMS), nullable=True)

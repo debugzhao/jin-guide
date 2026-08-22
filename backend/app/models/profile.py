@@ -24,7 +24,7 @@ class _ProvenanceMixin:
     )
     # 来源于某条对话消息时指向 conversation_messages.id；表单提交场景恒为 None
     source_message_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("conversation_messages.id", ondelete="SET NULL"), nullable=True
+        String(36), ForeignKey("memory_conversation_messages.id", ondelete="SET NULL"), nullable=True
     )
     # 自引用：这条记录被哪条新记录取代、何时取代——同一偏好改过多次时保留历史链条，
     # 不直接覆盖旧值
@@ -35,13 +35,13 @@ class _ProvenanceMixin:
 
 
 class StudentProfile(_ProvenanceMixin, Base):
-    __tablename__ = "student_profiles"
+    __tablename__ = "candidate_student_profiles"
 
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid4())
     )
     user_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("users.id"), nullable=True
+        String(36), ForeignKey("auth_users.id"), nullable=True
     )
     # 匿名建档阶段草稿归属；登录/注册后绑定到 user_id（见 auth.py 的绑定逻辑）
     anonymous_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
@@ -65,18 +65,18 @@ class StudentProfile(_ProvenanceMixin, Base):
         onupdate=lambda: datetime.now(UTC),
     )
     __table_args__ = (
-        ForeignKeyConstraint(["superseded_by"], ["student_profiles.id"], ondelete="SET NULL"),
+        ForeignKeyConstraint(["superseded_by"], ["candidate_student_profiles.id"], ondelete="SET NULL"),
     )
 
 
 class Preference(_ProvenanceMixin, Base):
-    __tablename__ = "preferences"
+    __tablename__ = "candidate_preferences"
 
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid4())
     )
     profile_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("student_profiles.id")
+        String(36), ForeignKey("candidate_student_profiles.id")
     )
     # JSON 数组
     major_prefs: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
@@ -92,5 +92,5 @@ class Preference(_ProvenanceMixin, Base):
         onupdate=lambda: datetime.now(UTC),
     )
     __table_args__ = (
-        ForeignKeyConstraint(["superseded_by"], ["preferences.id"], ondelete="SET NULL"),
+        ForeignKeyConstraint(["superseded_by"], ["candidate_preferences.id"], ondelete="SET NULL"),
     )

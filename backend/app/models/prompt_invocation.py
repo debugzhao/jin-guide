@@ -12,7 +12,7 @@ from app.models.base import Base
 class PromptInvocation(Base):
     """仅记录 Prompt 版本和调用状态，不保存用户原文或动态上下文。"""
 
-    __tablename__ = "prompt_invocations"
+    __tablename__ = "observability_prompt_invocations"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     prompt_name: Mapped[str] = mapped_column(String(100), index=True, nullable=False)

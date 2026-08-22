@@ -18,12 +18,12 @@ class AgentRun(Base):
     # LangGraph checkpoint 系统使用的唯一 thread ID
     thread_id: Mapped[str] = mapped_column(String(36), unique=True)
     user_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("users.id"), nullable=True
+        String(36), ForeignKey("auth_users.id"), nullable=True
     )
     # 匿名会话发起的 run；用于把产出的 Report 正确归属（见 report_agent.py）
     anonymous_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     profile_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("student_profiles.id"), nullable=True
+        String(36), ForeignKey("candidate_student_profiles.id"), nullable=True
     )
     # generate_report / check_volunteer
     task_type: Mapped[str] = mapped_column(String(50))

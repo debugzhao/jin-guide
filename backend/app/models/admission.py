@@ -17,7 +17,7 @@ def _uuid() -> str:
 
 
 class University(Base):
-    __tablename__ = "universities"
+    __tablename__ = "enrollment_data_universities"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -36,17 +36,17 @@ class University(Base):
     subject_requirements: Mapped[list["SubjectRequirement"]] = relationship(back_populates="university")
 
     __table_args__ = (
-        Index("ix_universities_name", "name"),
+        Index("ix_enrollment_data_universities_name", "name"),
     )
 
 
 class AdmissionScore(Base):
     """历年录取分数线（按年、省份、批次、科类）"""
-    __tablename__ = "admission_scores"
+    __tablename__ = "enrollment_data_admission_scores"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     university_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("universities.id", ondelete="CASCADE"), nullable=False
+        String(36), ForeignKey("enrollment_data_universities.id", ondelete="CASCADE"), nullable=False
     )
     year: Mapped[int] = mapped_column(Integer, nullable=False)
     province: Mapped[str] = mapped_column(String(50), nullable=False)      # 招生省份
@@ -63,14 +63,14 @@ class AdmissionScore(Base):
     university: Mapped["University"] = relationship(back_populates="admission_scores")
 
     __table_args__ = (
-        Index("ix_admission_scores_lookup", "province", "year", "batch", "subject_type"),
-        Index("ix_admission_scores_university", "university_id"),
+        Index("ix_enrollment_data_admission_scores_lookup", "province", "year", "batch", "subject_type"),
+        Index("ix_enrollment_data_admission_scores_university", "university_id"),
     )
 
 
 class RankSegment(Base):
     """省份位次段表（分数 → 累计位次）"""
-    __tablename__ = "rank_segments"
+    __tablename__ = "enrollment_data_rank_segments"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     year: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -80,17 +80,17 @@ class RankSegment(Base):
     cumulative_rank: Mapped[int] = mapped_column(Integer, nullable=False)   # 该分数的累计位次（全省排名）
 
     __table_args__ = (
-        Index("ix_rank_segments_lookup", "province", "year", "subject_type", "score", unique=True),
+        Index("ix_enrollment_data_rank_segments_lookup", "province", "year", "subject_type", "score", unique=True),
     )
 
 
 class SubjectRequirement(Base):
     """选科要求（高校专业对高考选科的限制）"""
-    __tablename__ = "subject_requirements"
+    __tablename__ = "enrollment_data_subject_requirements"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     university_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("universities.id", ondelete="CASCADE"), nullable=False
+        String(36), ForeignKey("enrollment_data_universities.id", ondelete="CASCADE"), nullable=False
     )
     major_name: Mapped[str] = mapped_column(String(200), nullable=False)
     # required_subjects: ["物理"] 表示必须选物理; [] 表示不限
@@ -106,21 +106,21 @@ class SubjectRequirement(Base):
     university: Mapped["University"] = relationship(back_populates="subject_requirements")
 
     __table_args__ = (
-        Index("ix_subject_req_university", "university_id"),
-        Index("ix_subject_req_major", "university_id", "major_name"),
+        Index("ix_enrollment_data_subject_req_university", "university_id"),
+        Index("ix_enrollment_data_subject_req_major", "university_id", "major_name"),
     )
 
 
 class AdmissionPlan(Base):
     """招生计划（区别于 admission_scores 历年投档线）：某年份/省份/批次下某专业组的招生名额与学费"""
-    __tablename__ = "admission_plans"
+    __tablename__ = "enrollment_data_admission_plans"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     year: Mapped[int] = mapped_column(Integer, nullable=False)
     province: Mapped[str] = mapped_column(String(50), nullable=False)
     batch: Mapped[str] = mapped_column(String(50), nullable=False)
     university_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("universities.id", ondelete="CASCADE"), nullable=False
+        String(36), ForeignKey("enrollment_data_universities.id", ondelete="CASCADE"), nullable=False
     )
     major_group: Mapped[str | None] = mapped_column(String(100), nullable=True)
     major_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -138,13 +138,13 @@ class AdmissionPlan(Base):
     )
 
     __table_args__ = (
-        Index("ix_admission_plans_lookup", "province", "year", "batch", "major_group"),
+        Index("ix_enrollment_data_admission_plans_lookup", "province", "year", "batch", "major_group"),
     )
 
 
 class RuleRequirement(Base):
     """通用规则 + 来源引用存储（选科/体检/批次等规则的可追溯配置，见 docs/backend-prd-v2.md §6.3）"""
-    __tablename__ = "rule_requirements"
+    __tablename__ = "enrollment_data_rule_requirements"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     type: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -153,20 +153,20 @@ class RuleRequirement(Base):
     target_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     rule_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     source_id: Mapped[str | None] = mapped_column(
-        String(36), ForeignKey("documents.id"), nullable=True
+        String(36), ForeignKey("rag_documents.id"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )
 
     __table_args__ = (
-        Index("ix_rule_requirements_target", "target_id"),
+        Index("ix_enrollment_data_rule_requirements_target", "target_id"),
     )
 
 
 class ProvinceThreshold(Base):
     """省份级冲稳保位次阈值 + 志愿数上限配置，替代代码内硬编码 (docs/03_data_model.md §2.5)"""
-    __tablename__ = "province_thresholds"
+    __tablename__ = "enrollment_data_province_thresholds"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     province: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -179,5 +179,5 @@ class ProvinceThreshold(Base):
     max_volunteers: Mapped[int] = mapped_column(Integer, nullable=False, default=96)
 
     __table_args__ = (
-        Index("ix_province_thresholds_province_year", "province", "year", unique=True),
+        Index("ix_enrollment_data_province_thresholds_province_year", "province", "year", unique=True),
     )

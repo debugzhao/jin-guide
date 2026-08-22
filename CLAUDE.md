@@ -13,7 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **邮箱 + 密码**登录/注册，验证码经 **Resend** 发送（`RESEND_API_KEY`、`EMAIL_FROM=onboarding@resend.dev`）
 - 注册需额外提交固定**邀请码**（`RegisterIn.invite_code`，校验在验证码校验之前），配置项 `register_invite_code`/环境变量 `REGISTER_INVITE_CODE`，默认值写死在 `backend/app/config.py`
 - API：`POST /auth/send-code`、`/auth/register`、`/auth/login`、`/auth/logout`、`GET /auth/me`
-- Session 存 `sessions` 表，ORM 类名 **`AuthSession`**（勿与 SQLAlchemy `Session` 混淆）
+- Session 存 `auth_sessions` 表，ORM 类名 **`AuthSession`**（勿与 SQLAlchemy `Session` 混淆）
 - 验证码存 Redis（`auth:code:{email}`，TTL 10 分钟）
 
 ### 已移除（v1.1）
@@ -114,15 +114,15 @@ docker compose exec backend python -m pytest -q
 
 ### Prompt Registry
 
-所有线上生成类 Prompt 统一位于 `backend/app/prompts/definitions/`，通过 `active_versions.yaml` 选择版本；业务代码必须从 `prompt_registry` 加载，不再内嵌大段 Prompt。版本文件发布后不可原地修改，`version_hashes.yaml` 和启动校验会阻止旧版本被静默覆盖。每次调用把 `prompt_name`、`prompt_version`、`prompt_hash`、`invocation_id` 发送给 LiteLLM/LangSmith，并 best-effort 写入 `prompt_invocations`；审计不保存用户原文和动态上下文。完整约定见 `backend/docs/prompt-registry.md`。
+所有线上生成类 Prompt 统一位于 `backend/app/prompts/definitions/`，通过 `active_versions.yaml` 选择版本；业务代码必须从 `prompt_registry` 加载，不再内嵌大段 Prompt。版本文件发布后不可原地修改，`version_hashes.yaml` 和启动校验会阻止旧版本被静默覆盖。每次调用把 `prompt_name`、`prompt_version`、`prompt_hash`、`invocation_id` 发送给 LiteLLM/LangSmith，并 best-effort 写入 `observability_prompt_invocations`；审计不保存用户原文和动态上下文。完整约定见 `backend/docs/prompt-registry.md`。
 
 ### 报告问答（ConversationAgent）
 
-`backend/app/agent/conversation_agent.py` + `backend/app/api/v1/chat.py`（路由挂在 `/reports/{report_id}/chat`）。这是独立于主 LangGraph 流程的**同步 SSE 流式问答**，不经过 ARQ 队列：请求进来直接调 LiteLLM `report-agent` 模型 streaming；每段文本先经过 `agent/output_guard.py` 的跨 chunk 合规过滤与引用白名单校验，再向用户发送。报告、摘要、检索结果不再拼入 system，而是作为转义并标记为不可信的独立数据消息。历史记录 Redis 热层（`chat:history:{report_id}:{user_id}`，7 天 TTL）+ PostgreSQL `report_conversations` 表冷层兜底；限流 30 条/用户/天（`chat:daily:{user_id}:{date}`）。
+`backend/app/agent/conversation_agent.py` + `backend/app/api/v1/chat.py`（路由挂在 `/reports/{report_id}/chat`）。这是独立于主 LangGraph 流程的**同步 SSE 流式问答**，不经过 ARQ 队列：请求进来直接调 LiteLLM `report-agent` 模型 streaming；每段文本先经过 `agent/output_guard.py` 的跨 chunk 合规过滤与引用白名单校验，再向用户发送。报告、摘要、检索结果不再拼入 system，而是作为转义并标记为不可信的独立数据消息。历史记录 Redis 热层（`chat:history:{report_id}:{user_id}`，7 天 TTL）+ PostgreSQL `memory_report_conversations` 表冷层兜底；限流 30 条/用户/天（`chat:daily:{user_id}:{date}`）。
 
 ### 建档前聊天（IntakeAgent）
 
-`backend/app/agent/intake_agent.py` + `backend/app/api/v1/intake_chat.py`（路由挂在 `/intake/chat`）。首页 Chat-first 首屏用的真正多轮聊天，不是"先分类再二选一"：每轮发一次带 `tools` 的流式请求（`intake-agent` 模型），模型可以直接输出文本，也可以调用 function calling 工具——`lookup_university_score`/`lookup_subject_requirement`/`compare_universities` 三个纯 SQL 工具（`backend/app/engine/school_lookup.py`，不经过 LLM）负责查分数/位次/选科要求/多校对比，参数先经过 Pydantic 白名单与范围校验，结果由后端模板化为自然语言；`start_profile_capture` 是不返回数据的信号工具，命中后端直接发 SSE `trigger_profile_capture` 事件，前端收到即内联渲染建档表单。模型的 `reasoning_content` 由后端环境变量 `ENABLE_REASONING_DISPLAY` 控制（默认 `false`）：关闭时后端直接丢弃，开启时经过跨 chunk 合规过滤和 4000 字符上限后，以 SSE `thinking` 事件发送；每条流先发送 `reasoning_config`，前端只在该配置开启时展示“查看 AI 推理过程”，且推理内容不写入后端聊天历史或前端持久化存储。正式文本同样在发送前经过跨 chunk 合规过滤。系统提示词把话题严格限定在高考志愿相关范围，硬性要求事实性数字必须过工具查询、禁止凭模型记忆回答。多会话模型：`intake_conversations.id` 即会话/thread id，一个 `owner_key`（`user_id` 或匿名会话 `anon:{anonymous_id}`）可以有多条会话，侧栏 `GET /intake/conversations`（游标分页）展示历史列表，点击某条继续对话；`PATCH`/`DELETE /intake/conversations/{id}` 支持重命名/软删除（`deleted_at`，删除后传其 `conversation_id` 发消息会 404）。`POST /intake/chat` 不传 `conversation_id` 时懒创建新会话（首条消息 `done` 事件前才建行），传了则校验属于当前 `owner_key` 且未被删除（否则 404）；`done` 事件之后用 FastAPI `BackgroundTasks` 异步调 `profile-agent` 模型把标题从截断态升级成自然语言摘要（best-effort，失败/已被手动重命名则不覆盖）。登录/注册成功时 `auth.py::_bind_anonymous_data` 把匿名会话的 `owner_key` 批量改写成 `user_id`，与 `StudentProfile`/`Report` 走同一个合并入口。历史持久化与 ConversationAgent 同构：Redis 热层（`intake:history:{owner_key}:{conversation_id}`）+ PostgreSQL `intake_conversations` 冷层，建档前还没有 `report_id` 可挂靠，需要先有 `session_token` Cookie，前端在聊天前会调 `POST /auth/anonymous-session` 兜底建立。前端把 `currentIntakeConversationId` 持久化进 localStorage（`wenjin-store`），刷新后自动回到上次那条会话；但它与身份 Cookie（`session_token`/`anonymous_id`）生命周期独立，匿名会话轮换/登出后可能残留"孤儿 id"，此时 `GET /intake/chat/history` 或 `POST /intake/chat` 会 404——前端在这两处都做了自愈：历史加载 404 直接清掉持久化 id 回落到新会话，发消息 404 则把已输入消息平移到草稿会话并清 id（保留重试入口），不再死循环打同一个坏 id。历史另可通过侧栏显式点选恢复。
+`backend/app/agent/intake_agent.py` + `backend/app/api/v1/intake_chat.py`（路由挂在 `/intake/chat`）。首页 Chat-first 首屏用的真正多轮聊天，不是"先分类再二选一"：每轮发一次带 `tools` 的流式请求（`intake-agent` 模型），模型可以直接输出文本，也可以调用 function calling 工具——`lookup_university_score`/`lookup_subject_requirement`/`compare_universities` 三个纯 SQL 工具（`backend/app/engine/school_lookup.py`，不经过 LLM）负责查分数/位次/选科要求/多校对比，参数先经过 Pydantic 白名单与范围校验，结果由后端模板化为自然语言；`start_profile_capture` 是不返回数据的信号工具，命中后端直接发 SSE `trigger_profile_capture` 事件，前端收到即内联渲染建档表单。模型的 `reasoning_content` 由后端环境变量 `ENABLE_REASONING_DISPLAY` 控制（默认 `false`）：关闭时后端直接丢弃，开启时经过跨 chunk 合规过滤和 4000 字符上限后，以 SSE `thinking` 事件发送；每条流先发送 `reasoning_config`，前端只在该配置开启时展示“查看 AI 推理过程”，且推理内容不写入后端聊天历史或前端持久化存储。正式文本同样在发送前经过跨 chunk 合规过滤。系统提示词把话题严格限定在高考志愿相关范围，硬性要求事实性数字必须过工具查询、禁止凭模型记忆回答。多会话模型：`memory_intake_conversations.id` 即会话/thread id，一个 `owner_key`（`user_id` 或匿名会话 `anon:{anonymous_id}`）可以有多条会话，侧栏 `GET /intake/conversations`（游标分页）展示历史列表，点击某条继续对话；`PATCH`/`DELETE /intake/conversations/{id}` 支持重命名/软删除（`deleted_at`，删除后传其 `conversation_id` 发消息会 404）。`POST /intake/chat` 不传 `conversation_id` 时懒创建新会话（首条消息 `done` 事件前才建行），传了则校验属于当前 `owner_key` 且未被删除（否则 404）；`done` 事件之后用 FastAPI `BackgroundTasks` 异步调 `profile-agent` 模型把标题从截断态升级成自然语言摘要（best-effort，失败/已被手动重命名则不覆盖）。登录/注册成功时 `auth.py::_bind_anonymous_data` 把匿名会话的 `owner_key` 批量改写成 `user_id`，与 `StudentProfile`/`Report` 走同一个合并入口。历史持久化与 ConversationAgent 同构：Redis 热层（`intake:history:{owner_key}:{conversation_id}`）+ PostgreSQL `memory_intake_conversations` 冷层，建档前还没有 `report_id` 可挂靠，需要先有 `session_token` Cookie，前端在聊天前会调 `POST /auth/anonymous-session` 兜底建立。前端把 `currentIntakeConversationId` 持久化进 localStorage（`wenjin-store`），刷新后自动回到上次那条会话；但它与身份 Cookie（`session_token`/`anonymous_id`）生命周期独立，匿名会话轮换/登出后可能残留"孤儿 id"，此时 `GET /intake/chat/history` 或 `POST /intake/chat` 会 404——前端在这两处都做了自愈：历史加载 404 直接清掉持久化 id 回落到新会话，发消息 404 则把已输入消息平移到草稿会话并清 id（保留重试入口），不再死循环打同一个坏 id。历史另可通过侧栏显式点选恢复。
 
 ### 可观测性 / Admin Debug Console
 
@@ -162,14 +162,14 @@ docker compose exec backend python -m pytest -q
 
 ### Embedding 模型一致性
 
-BM25（`chunks` 表）和 pgvector 向量**不能混用两种 embedding 模型**。MVP 用 `text-embedding-3-small`（1536 维）。切换到 BGE（1024 维）时必须全库重建，`chunks.embedding_model` 字段记录模型标识用于迁移过滤。
+BM25（`rag_chunks` 表）和 pgvector 向量**不能混用两种 embedding 模型**。MVP 用 `text-embedding-3-small`（1536 维）。切换到 BGE（1024 维）时必须全库重建，`rag_chunks.embedding_model` 字段记录模型标识用于迁移过滤。
 
 ### BM25 实现
 
 PostgreSQL 原生 `tsvector` 不是 BM25。需要 **`pg_bm25`** 扩展（ParadeDB）：
 ```sql
 CREATE EXTENSION pg_bm25;
-CREATE INDEX chunks_bm25 ON chunks USING bm25 (content);
+CREATE INDEX rag_chunks_bm25 ON rag_chunks USING bm25 (content);
 ```
 
 ### 分页规范
@@ -191,13 +191,13 @@ GET /api/v1/reports?cursor=<opaque>&limit=20
 
 ## 数据模型要点
 
-- **`admission_scores`**：必须有 `batch` 字段区分本科批/专科批
-- **`province_thresholds`**：省份级冲稳保位次阈值配置表，替代代码内硬编码
+- **`enrollment_data_admission_scores`**：必须有 `batch` 字段区分本科批/专科批
+- **`enrollment_data_province_thresholds`**：省份级冲稳保位次阈值配置表，替代代码内硬编码
 - **LangGraph checkpoint 表**（`checkpoints`/`checkpoint_blobs`/`checkpoint_writes`）：由 LangGraph 自动管理，不是业务表，不在 `alembic` 迁移中维护
 - **`agent_runs`** 通过 `thread_id` 与 LangGraph checkpoint 关联，只存业务元数据；同时承载 Admin Debug Console 所需的 `debug_summary_json`（node_timings、tool_call_summary、cost_breakdown 等，无 PII）
-- **`report_conversations`/`intake_conversations`**：只保留会话身份与 `updated_at`，不存消息内容——消息本体是追加式的 `conversation_messages` 表（一行一条，按 `seq` 递增，`report_conversation_id`/`intake_conversation_id` 二选一），早于 Agent 原文窗口（`MAX_HISTORY_MESSAGES`）的历史由 `conversation_summaries` 结构化摘要（`confirmed_facts`/`preferences`/`rejected_options`/`previous_decisions`/`open_questions`）覆盖，由 `POST /intake/chat`、`POST /reports/{id}/chat` 的 `done` 分支触发 `BackgroundTasks` 增量生成；Redis 仍是热层，DB 写入 best-effort。曾经的 `messages_json` JSONB 列已在这次拆表中删除，详见 `backend/docs/03_data_model.md` §2.7
-- **`users`**：`email`（unique）、`password_hash`、`email_verified`、`openid`（预留）、`role`
-- **`sessions`**：ORM 模型类名为 `AuthSession`，表名 `sessions`
+- **`memory_report_conversations`/`memory_intake_conversations`**：只保留会话身份与 `updated_at`，不存消息内容——消息本体是追加式的 `memory_conversation_messages` 表（一行一条，按 `seq` 递增，`report_conversation_id`/`intake_conversation_id` 二选一），早于 Agent 原文窗口（`MAX_HISTORY_MESSAGES`）的历史由 `memory_conversation_summaries` 结构化摘要（`confirmed_facts`/`preferences`/`rejected_options`/`previous_decisions`/`open_questions`）覆盖，由 `POST /intake/chat`、`POST /reports/{id}/chat` 的 `done` 分支触发 `BackgroundTasks` 增量生成；Redis 仍是热层，DB 写入 best-effort。曾经的 `messages_json` JSONB 列已在这次拆表中删除，详见 `backend/docs/03_data_model.md` §2.7
+- **`auth_users`**：`email`（unique）、`password_hash`、`email_verified`、`openid`（预留）、`role`
+- **`auth_sessions`**：ORM 模型类名为 `AuthSession`，表名 `auth_sessions`
 
 ---
 

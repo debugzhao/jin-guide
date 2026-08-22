@@ -19,16 +19,16 @@ class ReportConversation(Base):
     over to ConversationMessage and dropped that column.
     """
 
-    __tablename__ = "report_conversations"
+    __tablename__ = "memory_report_conversations"
 
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid4())
     )
     report_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("reports.id", ondelete="CASCADE"), nullable=False
+        String(36), ForeignKey("agent_runs_reports.id", ondelete="CASCADE"), nullable=False
     )
     user_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        String(36), ForeignKey("auth_users.id", ondelete="SET NULL"), nullable=True
     )
     # 匿名会话标识（登录用户为 null）；避免所有匿名用户共享 user_id IS NULL 导致
     # 同一份报告下不同匿名人互相读到对方的问答历史
@@ -60,7 +60,7 @@ class IntakeConversation(Base):
     按 updated_at 倒序展示，见 `docs/backend-prd-v2.md` §5.6b。
     """
 
-    __tablename__ = "intake_conversations"
+    __tablename__ = "memory_intake_conversations"
 
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid4())
@@ -96,14 +96,14 @@ class ConversationMessage(Base):
     覆盖写那样丢失对方已经写入的消息内容。
     """
 
-    __tablename__ = "conversation_messages"
+    __tablename__ = "memory_conversation_messages"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     report_conversation_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("report_conversations.id", ondelete="CASCADE"), nullable=True
+        String(36), ForeignKey("memory_report_conversations.id", ondelete="CASCADE"), nullable=True
     )
     intake_conversation_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("intake_conversations.id", ondelete="CASCADE"), nullable=True
+        String(36), ForeignKey("memory_intake_conversations.id", ondelete="CASCADE"), nullable=True
     )
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
     role: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -115,14 +115,14 @@ class ConversationMessage(Base):
     __table_args__ = (
         CheckConstraint(
             "(report_conversation_id IS NULL) != (intake_conversation_id IS NULL)",
-            name="ck_conversation_messages_exactly_one_parent",
+            name="ck_memory_conversation_messages_exactly_one_parent",
         ),
         # Postgres 里 NULL 在唯一约束中互不冲突，所以这两个约束分别只对"属于该类型
         # 会话的消息"生效，不会因为另一类型的行 parent_id 恒为 NULL 而误判冲突。
-        UniqueConstraint("report_conversation_id", "seq", name="uq_conversation_messages_report_seq"),
-        UniqueConstraint("intake_conversation_id", "seq", name="uq_conversation_messages_intake_seq"),
-        Index("ix_conversation_messages_report_seq", "report_conversation_id", "seq"),
-        Index("ix_conversation_messages_intake_seq", "intake_conversation_id", "seq"),
+        UniqueConstraint("report_conversation_id", "seq", name="uq_memory_conversation_messages_report_seq"),
+        UniqueConstraint("intake_conversation_id", "seq", name="uq_memory_conversation_messages_intake_seq"),
+        Index("ix_memory_conversation_messages_report_seq", "report_conversation_id", "seq"),
+        Index("ix_memory_conversation_messages_intake_seq", "intake_conversation_id", "seq"),
     )
 
 
@@ -136,14 +136,14 @@ class ConversationSummary(Base):
     等同于当前未接入摘要时的行为）。
     """
 
-    __tablename__ = "conversation_summaries"
+    __tablename__ = "memory_conversation_summaries"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     report_conversation_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("report_conversations.id", ondelete="CASCADE"), nullable=True
+        String(36), ForeignKey("memory_report_conversations.id", ondelete="CASCADE"), nullable=True
     )
     intake_conversation_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("intake_conversations.id", ondelete="CASCADE"), nullable=True
+        String(36), ForeignKey("memory_intake_conversations.id", ondelete="CASCADE"), nullable=True
     )
     summary_json: Mapped[dict] = mapped_column(JSONB, nullable=False)
     # 本次摘要覆盖到哪条消息的 seq（含）；Agent 侧只需再拼上 seq > covered_through_seq
@@ -164,10 +164,10 @@ class ConversationSummary(Base):
     __table_args__ = (
         CheckConstraint(
             "(report_conversation_id IS NULL) != (intake_conversation_id IS NULL)",
-            name="ck_conversation_summaries_exactly_one_parent",
+            name="ck_memory_conversation_summaries_exactly_one_parent",
         ),
         # 每个会话至多一条摘要行（NULL 在唯一约束中互不冲突，两条约束各自只约束
         # 自己类型的会话）
-        UniqueConstraint("report_conversation_id", name="uq_conversation_summaries_report"),
-        UniqueConstraint("intake_conversation_id", name="uq_conversation_summaries_intake"),
+        UniqueConstraint("report_conversation_id", name="uq_memory_conversation_summaries_report"),
+        UniqueConstraint("intake_conversation_id", name="uq_memory_conversation_summaries_intake"),
     )

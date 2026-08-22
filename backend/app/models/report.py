@@ -10,16 +10,16 @@ from app.models.base import Base
 
 
 class Report(Base):
-    __tablename__ = "reports"
+    __tablename__ = "agent_runs_reports"
 
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid4())
     )
     profile_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("student_profiles.id"), nullable=True
+        String(36), ForeignKey("candidate_student_profiles.id"), nullable=True
     )
     user_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("users.id"), nullable=True
+        String(36), ForeignKey("auth_users.id"), nullable=True
     )
     # 匿名建档阶段生成的报告归属；登录/注册后绑定到 user_id（见 auth.py 的绑定逻辑）
     anonymous_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
@@ -41,7 +41,7 @@ class Report(Base):
     # 同一血缘链内从 1 递增；/refine 产出的新版本 parent_report_id 指向被 refine 的报告
     version: Mapped[int] = mapped_column(Integer, default=1)
     parent_report_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("reports.id"), nullable=True
+        String(36), ForeignKey("agent_runs_reports.id"), nullable=True
     )
     # 用户可见的生成过程摘要，供报告页"决策过程回放"卡片使用（只读回放，不重新调用 Agent）
     run_summary_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
@@ -55,16 +55,16 @@ class Report(Base):
 
 
 class VolunteerCheck(Base):
-    __tablename__ = "volunteer_checks"
+    __tablename__ = "agent_runs_volunteer_checks"
 
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid4())
     )
     profile_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("student_profiles.id"), nullable=True
+        String(36), ForeignKey("candidate_student_profiles.id"), nullable=True
     )
     report_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("reports.id"), nullable=True
+        String(36), ForeignKey("agent_runs_reports.id"), nullable=True
     )
     # 风险条目对象列表
     risk_items_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)

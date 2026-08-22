@@ -14,7 +14,7 @@ def _uuid() -> str:
 
 
 class DataSource(Base):
-    __tablename__ = "data_sources"
+    __tablename__ = "pipeline_data_sources"
 
     id: Mapped[str] = mapped_column(String(100), primary_key=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -37,16 +37,16 @@ class DataSource(Base):
     )
 
     __table_args__ = (
-        Index("ix_data_sources_type_year", "data_type", "year"),
+        Index("ix_pipeline_data_sources_type_year", "data_type", "year"),
     )
 
 
 class CollectionRun(Base):
-    __tablename__ = "collection_runs"
+    __tablename__ = "pipeline_collection_runs"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     source_id: Mapped[str] = mapped_column(
-        String(100), ForeignKey("data_sources.id"), nullable=False
+        String(100), ForeignKey("pipeline_data_sources.id"), nullable=False
     )
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="running")
     started_at: Mapped[datetime] = mapped_column(
@@ -60,18 +60,18 @@ class CollectionRun(Base):
     rejected_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    __table_args__ = (Index("ix_collection_runs_source_started", "source_id", "started_at"),)
+    __table_args__ = (Index("ix_pipeline_collection_runs_source_started", "source_id", "started_at"),)
 
 
 class SourceDocument(Base):
-    __tablename__ = "source_documents"
+    __tablename__ = "pipeline_source_documents"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     source_id: Mapped[str] = mapped_column(
-        String(100), ForeignKey("data_sources.id"), nullable=False
+        String(100), ForeignKey("pipeline_data_sources.id"), nullable=False
     )
     collection_run_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("collection_runs.id"), nullable=False
+        String(36), ForeignKey("pipeline_collection_runs.id"), nullable=False
     )
     source_url: Mapped[str] = mapped_column(String(1000), nullable=False)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
@@ -85,20 +85,20 @@ class SourceDocument(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("source_id", "checksum", name="uq_source_documents_source_checksum"),
-        Index("ix_source_documents_checksum", "checksum"),
+        UniqueConstraint("source_id", "checksum", name="uq_pipeline_source_documents_source_checksum"),
+        Index("ix_pipeline_source_documents_checksum", "checksum"),
     )
 
 
 class StagingRecord(Base):
-    __tablename__ = "staging_records"
+    __tablename__ = "pipeline_staging_records"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     source_document_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("source_documents.id"), nullable=False
+        String(36), ForeignKey("pipeline_source_documents.id"), nullable=False
     )
     collection_run_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("collection_runs.id"), nullable=False
+        String(36), ForeignKey("pipeline_collection_runs.id"), nullable=False
     )
     record_type: Mapped[str] = mapped_column(String(80), nullable=False)
     natural_key: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -113,15 +113,15 @@ class StagingRecord(Base):
 
     __table_args__ = (
         UniqueConstraint(
-            "source_document_id", "natural_key", name="uq_staging_document_natural_key"
+            "source_document_id", "natural_key", name="uq_pipeline_staging_document_natural_key"
         ),
-        Index("ix_staging_records_review_status", "review_status"),
-        Index("ix_staging_records_run", "collection_run_id"),
+        Index("ix_pipeline_staging_records_review_status", "review_status"),
+        Index("ix_pipeline_staging_records_run", "collection_run_id"),
     )
 
 
 class DatasetVersion(Base):
-    __tablename__ = "dataset_versions"
+    __tablename__ = "pipeline_dataset_versions"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(150), nullable=False, unique=True)
@@ -139,18 +139,18 @@ class DatasetVersion(Base):
 
     __table_args__ = (
         UniqueConstraint(
-            "dataset_type", "province", "year", "version", name="uq_dataset_version_scope"
+            "dataset_type", "province", "year", "version", name="uq_pipeline_dataset_version_scope"
         ),
-        Index("ix_dataset_versions_lookup", "dataset_type", "province", "year", "status"),
+        Index("ix_pipeline_dataset_versions_lookup", "dataset_type", "province", "year", "status"),
     )
 
 
 class PublishedDataRecord(Base):
-    __tablename__ = "published_data_records"
+    __tablename__ = "pipeline_published_data_records"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     dataset_version_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("dataset_versions.id"), nullable=False
+        String(36), ForeignKey("pipeline_dataset_versions.id"), nullable=False
     )
     record_type: Mapped[str] = mapped_column(String(80), nullable=False)
     natural_key: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -169,11 +169,11 @@ class PublishedDataRecord(Base):
 
     __table_args__ = (
         UniqueConstraint(
-            "dataset_version_id", "natural_key", name="uq_published_dataset_natural_key"
+            "dataset_version_id", "natural_key", name="uq_pipeline_published_dataset_natural_key"
         ),
         Index(
-            "ix_published_records_lookup",
+            "ix_pipeline_published_records_lookup",
             "province", "year", "record_type", "subject_type", "batch",
         ),
-        Index("ix_published_records_university", "university_code", "major_group_code"),
+        Index("ix_pipeline_published_records_university", "university_code", "major_group_code"),
     )

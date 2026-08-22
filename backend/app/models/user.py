@@ -9,7 +9,7 @@ from app.models.base import Base
 
 
 class User(Base):
-    __tablename__ = "users"
+    __tablename__ = "auth_users"
 
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid4())
@@ -36,13 +36,13 @@ class User(Base):
 
 
 class AuthSession(Base):
-    __tablename__ = "sessions"
+    __tablename__ = "auth_sessions"
 
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid4())
     )
     user_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("users.id"), nullable=True
+        String(36), ForeignKey("auth_users.id"), nullable=True
     )
     anonymous_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

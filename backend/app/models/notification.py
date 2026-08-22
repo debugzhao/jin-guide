@@ -13,13 +13,13 @@ from app.models.base import Base
 
 
 class Notification(Base):
-    __tablename__ = "notifications"
+    __tablename__ = "notify_notifications"
 
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid4())
     )
     user_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+        String(36), ForeignKey("auth_users.id", ondelete="CASCADE"), nullable=False
     )
     type: Mapped[str] = mapped_column(String(50), nullable=False)
     payload_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
@@ -29,5 +29,5 @@ class Notification(Base):
     )
 
     __table_args__ = (
-        Index("ix_notifications_user_created", "user_id", "created_at"),
+        Index("ix_notify_notifications_user_created", "user_id", "created_at"),
     )
