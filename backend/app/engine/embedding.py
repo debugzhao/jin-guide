@@ -19,7 +19,10 @@ from app.models.document import Chunk
 
 EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_DIMS = 1024
-_BATCH_SIZE = 100
+# DashScope qwen3.7-text-embedding 硬性限制单次请求最多20条文本（超出返回
+# InternalError.Algo.InvalidParameter: batch size...should not be larger than 20），
+# 切换供应商前 Moonshot 用的是100，没跟着改会导致chunk数一超过20整批请求失败。
+_BATCH_SIZE = 20
 
 logger = logging.getLogger(__name__)
 

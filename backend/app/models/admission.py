@@ -129,6 +129,13 @@ class AdmissionPlan(Base):
     # 的不同专业——同一专业名称完全可能物理类/历史类各招一次、计划数不同。
     major_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     subject_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # major_name+subject_type 仍不够：不分文理的省份（subject_type恒为unified）下，
+    # 同一专业名称还可能在"普通类"平行志愿和"三位一体"综合评价等不同录取机制下各
+    # 出现一次、计划数不同，靠 admission_type 再兜底一层，否则会被当成重复覆盖掉。
+    admission_type: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # 同校同批次同专业名称还可能按备注拆成互斥的多条独立招生线（如宁波大学"音乐学
+    # （师范）"按"器乐主项"/"声乐主项"拆成两行、计划数不同），是最后一层去重兜底。
+    restrictions: Mapped[str | None] = mapped_column(String(500), nullable=True)
     quota: Mapped[int | None] = mapped_column(Integer, nullable=True)
     subjects: Mapped[list | None] = mapped_column(JSON, nullable=True)
     tuition: Mapped[int | None] = mapped_column(Integer, nullable=True)

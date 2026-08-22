@@ -25,7 +25,7 @@
 | 8 | 2024 逐分段表 | ❌ | 无 | 非本轮 P0 |
 | 9 | 10校专业录取线 | ❌ | 无 | 需逐校排查官网是否公开"专业录取分数线"（区别于院校投档线），未公开则明确标记缺失，不推算 |
 | 10 | 院校/学院/专业主数据 | ⚠️ | 院校层：`enrollment_data_universities`已补全7所(华东理工/上海理工/东华/华东师大/上外/上海财大/上海大学)的`is_985`/`is_211`/`is_shuangyiliu`/`school_type`元数据（`business_sync.py::_UNIVERSITY_META`），复旦/交大/同济此前已存在 | 学院/专业层仍无实体表（同江苏#10现状） |
-| 11 | 10校章程/专业介绍/转专业政策（RAG） | ❌ | 无 | 🛑 已知会卡在 Moonshot 账户 embedding 权限（`moonshot-v1-emb-small` 403），与江苏 #11 同一个外部阻塞，采集本身不受影响，chunk 入库后 embedding 步骤会卡住 |
+| 11 | 10校章程/专业介绍/转专业政策（RAG） | ❌ | 无 | **原Moonshot embedding权限阻塞已解除**（2026-08-22已切换到DashScope `qwen3.7-text-embedding`，1024维，见`09_pipeline_run_status.md` #11-embed），embedding管线已打通且验证可用；上海本轮尚未登记章程/专业介绍/转专业政策数据源，采集完可以直接跑`--embed-only`补embedding，不会再卡在外部权限 |
 | 12 | 业务表同步 | ✅ | `scripts/sync_published_data_to_business_tables.py` 已跑，#1#2#3#4全部同步，`skipped_missing_university`清零 | 无 |
 
 ## Discover 阶段结论（2026-08-22，WebSearch/WebFetch 实测，未编造URL）

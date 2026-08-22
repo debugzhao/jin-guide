@@ -63,6 +63,19 @@ _UNIVERSITY_META: dict[str, dict] = {
     "10271": {"is_985": False, "is_211": True, "is_shuangyiliu": True, "school_type": "外语"},
     "10272": {"is_985": False, "is_211": True, "is_shuangyiliu": True, "school_type": "财经"},
     "10280": {"is_985": False, "is_211": True, "is_shuangyiliu": True, "school_type": "综合"},
+    # 浙江目标10校（configs/zhejiang.yaml）：除浙江大学外省内基本没有211，
+    # 双一流状态按教育部公开的双一流建设高校名单核对（宁波大学2022年第二轮新增；
+    # 西湖大学是社会力量举办的新型高校，不在双一流建设高校名单内）
+    "10335": {"is_985": True, "is_211": True, "is_shuangyiliu": True, "school_type": "综合"},
+    "11646": {"is_985": False, "is_211": False, "is_shuangyiliu": True, "school_type": "综合"},
+    "10337": {"is_985": False, "is_211": False, "is_shuangyiliu": False, "school_type": "理工"},
+    "10345": {"is_985": False, "is_211": False, "is_shuangyiliu": False, "school_type": "师范"},
+    "14626": {"is_985": False, "is_211": False, "is_shuangyiliu": False, "school_type": "综合"},
+    "10338": {"is_985": False, "is_211": False, "is_shuangyiliu": False, "school_type": "理工"},
+    "10353": {"is_985": False, "is_211": False, "is_shuangyiliu": False, "school_type": "财经"},
+    "10336": {"is_985": False, "is_211": False, "is_shuangyiliu": False, "school_type": "理工"},
+    "10346": {"is_985": False, "is_211": False, "is_shuangyiliu": False, "school_type": "师范"},
+    "10343": {"is_985": False, "is_211": False, "is_shuangyiliu": False, "school_type": "医科"},
 }
 
 
@@ -196,6 +209,8 @@ def sync_admission_plans(session: Session) -> SyncResult:
         major_code = payload.get("major_code")
         major_name = payload.get("major_name")
         subject_type = payload.get("subject_type")
+        admission_type = payload.get("admission_type")
+        restrictions = payload.get("restrictions")
         selection = payload.get("selection_requirement")
         existing = session.scalar(
             select(AdmissionPlan).where(
@@ -207,6 +222,8 @@ def sync_admission_plans(session: Session) -> SyncResult:
                 AdmissionPlan.major_group == major_group,
                 AdmissionPlan.major_code == major_code,
                 AdmissionPlan.major_name == major_name,
+                AdmissionPlan.admission_type == admission_type,
+                AdmissionPlan.restrictions == restrictions,
             )
         )
         values = dict(
@@ -226,6 +243,8 @@ def sync_admission_plans(session: Session) -> SyncResult:
                     major_code=major_code,
                     major_name=major_name,
                     subject_type=subject_type,
+                    admission_type=admission_type,
+                    restrictions=restrictions,
                     **values,
                 )
             )

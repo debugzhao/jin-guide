@@ -21,7 +21,7 @@
 | 8 | 2024 逐分段表 | ⚠️ | staging仅3条valid | 同#6 |
 | 9 | 10校专业录取线 | ❌ | 0 | 未登记数据源，PRD要求官方未公开则明确标记缺失，不可推算 |
 | 10 | 院校/学院/专业主数据 | ❌ | 院校层：`enrollment_data_universities`已有大部分字段；学院/专业层：0（无表） | 院校层缺`admissions_url`一列（加列即可）；学院/专业层无实体表，`major_name`只是交易表里的自由文本列，不能当主数据用 |
-| 11-embed | 补现有4条chunk的embedding | ✅ | 4/4条已补embedding（DashScope qwen3.7-text-embedding，1024维），检索抽样验证通过（"平行志愿是怎么投档的？"命中最相关chunk相似度0.809，排序符合预期） | 无。见下方"#11-embed 执行记录（2026-08-22 完结）" |
+| 11-embed | 补现有chunk的embedding | ✅ | 2026-08-22首次切换时4/4条补齐；上海政策chunk入库后待处理量涨到36条，暴露`_BATCH_SIZE=100`超过DashScope单请求20条上限的bug，修复后40/40条全部补齐，检索抽样验证通过（"平行志愿是怎么投档的？"命中最相关chunk相似度0.809，排序符合预期） | 无。见下方"#11-embed 执行记录（2026-08-22 完结）" |
 | 11-collect | 10校章程/专业介绍/转专业政策新数据源 | ❌ | `rag_documents`仍只有1条（policy），10校新文档还没采 | 未登记数据源，embedding管线已打通，采集完直接能用 |
 | 12 | 教育部院校/专业标准目录 | ❌ | 0 | 未登记数据源 |
 | 13 | 业务表同步 loader | ✅ | `sync_published_data_to_business_tables.py` 已跑，#1#2#3全部同步 | 每次全量重扫，数据量涨上去后可加增量游标（当前不必要） |
@@ -95,6 +95,7 @@
   5. 跑`docker compose exec backend python -m scripts.chunk_documents --embed-only` → `Embedded 4/4 chunks`
 - **验证**：用`Chunk.embedding.cosine_distance()`查"平行志愿是怎么投档的？"，命中"平行志愿具体投档办法"chunk，相似度0.809，排序符合预期，RAG检索链路端到端打通
 - **意外发现并修复的独立bug（不是本任务范围，但直接挡路，顺手修了）**：`.env`里`LITELLM_MASTER_KEY=sk-wenjin-dev# ...`一行`#`前面没空格，导致docker-compose把行内注释文本也解析进了变量值。`backend`/`worker`容器因为很久没重建，一直缓存着历史上干净的值，没发现问题；本次重建`litellm`容器后该问题暴露，**所有走LiteLLM的LLM调用（不只是embedding）全部返回`400 No connected db.`**（litellm用错的master key去做虚拟key鉴权，触发了它内部一条误导性的DB连接检查分支）。已在`.env`里给`#`前面补了空格修好，重建容器后chat/embedding都恢复200
+- **2026-08-22 追加发现并修复：DashScope 批量大小限制未同步**：当时验证只有4条chunk（<20），没暴露问题；后续新增上海政策chunk后待处理量涨到36条，`app/engine/embedding.py::_BATCH_SIZE=100`是照抄Moonshot时代的值，一次性把36条塞进一个请求，DashScope `qwen3.7-text-embedding`硬性限制单次最多20条，直接报`400 InternalError.Algo.InvalidParameter: batch size...should not be larger than 20`，整批全部跳过。已把`_BATCH_SIZE`改成20，重跑`--embed-only`后40/40条chunk全部补齐（`docker compose logs litellm`能看到具体400错误体，`httpx.HTTPStatusError`本身只报状态码不够定位，排查这类问题要去看litellm容器日志）
 
 ### #11-collect　新增10校章程/专业介绍/转专业政策数据源
 

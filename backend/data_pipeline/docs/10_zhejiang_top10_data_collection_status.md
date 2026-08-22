@@ -29,8 +29,39 @@ data_pipeline/configs/zhejiang.yaml --source <id> --persist` 对全部11个http�
 
 投档线"第二段"只有2/5条命中白名单10校（已核实不是bug——第二段是征集志愿补缺，
 热门院校在第一段就招满了，只有温州医科大学等少数校有零星剩余名额，7239行原始表
-里只有这几条属于白名单校）。以上均为staging，**还没有publish成正式dataset_version**
-（下一步若要发布，需要走跟江苏一样的enrichment/人工核对流程，见§4）。
+里只有这几条属于白名单校）。
+
+### §0.1 发布 + 业务表同步（2026-08-22，追加）
+
+已用 `scripts/publish_zhejiang_data.py --record-type <T> --year <Y>`（新写的通用
+发布脚本，浙江这几类记录跟江苏policy/rank_segment一样不需要enrichment就能发布——
+投档线原始表本身自带位次，不用像江苏那样另外关联逐分段表）把上述staging全部发布
+成不可变 `dataset_version`：
+
+| dataset_version | record_count |
+|---|---|
+| zhejiang_policy_2026_rank_segment_v1 / 2025 | 428 / 426 |
+| zhejiang_policy_2026_policy_v1 / 2025 | 1 / 1（另1条空壳公告页needs_review未发布，同江苏#4模式） |
+| zhejiang_top10_2026_admission_v1 / 2025 | 403 / 375（含第一段+第二段合并） |
+| zhejiang_top10_2026_plan_v1 | 193 |
+
+再用 `scripts/sync_published_data_to_business_tables.py` 同步进
+`enrollment_data_admission_scores`/`rank_segments`/`admission_plans`，三张业务表
+最终行数分别是778/854/193，跟发布记录数完全对齐。过程中发现并修复2个连带问题：
+
+1. **`business_sync.py::_UNIVERSITY_META` 没有浙江10校**，会导致同步时全部
+   `skipped_missing_university`——已按公开信息（教育部211名单、双一流建设高校
+   名单）补全10校的985/211/双一流/学校类型元数据。
+2. **`enrollment_data_admission_plans` 的去重键不够细，会把不同专业悄悄合并丢失**：
+   浙江单校自采数据没有`major_group`/`major_code`，`subject_type`又恒为`unified`
+   （不像江苏能靠物理/历史类区分），首次同步把193条发布记录合并丢成了174条——
+   跟`020_admission_plan_major_name`当年修的是完全同一类问题在更深一层重现（那次
+   加`major_name`+`subject_type`，这次前提条件变了，两者都不够用）。新增两条迁移
+   `024_admission_plan_adm_type`/`025_admission_plan_restrict`分别补`admission_type`
+   和`restrictions`两层去重兜底，修复后重新清空重同步，193条一条不丢（含宁波大学
+   "水产养殖学"普通类/三位一体两条轨道、"音乐学"器乐/声乐主项两条线，均已验证
+   正确保留为独立记录）。
+
 ## §1 已确认的10校白名单
 
 | 排名 | 学校 | 教育部代码 | 城市 | 办学性质 | 招生网 |
