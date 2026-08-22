@@ -1,6 +1,7 @@
 """
 Embedding 流水线：通过 LiteLLM Gateway 批量将文本向量化。
-模型：text-embedding-3-small（1536 维，见 PRD §9.2）
+模型：text-embedding-3-small 是 LiteLLM 虚拟模型名，实际后端是 DashScope qwen3.7-text-embedding（1024 维，
+2026-08-22 从 Moonshot moonshot-v1-emb-small 切换，原因见 backend/docs/04_rag_pipeline.md §9）
 所有 embedding 调用都必须经过 LiteLLM proxy —— 禁止直连 OpenAI。
 """
 from __future__ import annotations
@@ -17,7 +18,7 @@ from app.config import settings
 from app.models.document import Chunk
 
 EMBEDDING_MODEL = "text-embedding-3-small"
-EMBEDDING_DIMS = 1536
+EMBEDDING_DIMS = 1024
 _BATCH_SIZE = 100
 
 logger = logging.getLogger(__name__)

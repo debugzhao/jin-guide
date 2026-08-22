@@ -8,7 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
 
-EMBEDDING_DIMS = 1536
+EMBEDDING_DIMS = 1024
 
 
 class Document(Base):

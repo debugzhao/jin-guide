@@ -38,12 +38,14 @@ model_list:
       api_base: os.environ/MOONSHOT_BASE_URL
       api_key: os.environ/MOONSHOT_API_KEY
 
-  # Embedding（Moonshot 兼容 OpenAI embedding 接口）
+  # Embedding（DashScope qwen3.7-text-embedding，兼容 OpenAI embedding 接口；
+  # Moonshot moonshot-v1-emb-small 返回 403 且官方文档查无此模型，已废弃，
+  # 见 backend/docs/04_rag_pipeline.md §9）
   - model_name: text-embedding-3-small
     litellm_params:
-      model: openai/moonshot-v1-emb-small
-      api_base: os.environ/MOONSHOT_BASE_URL
-      api_key: os.environ/MOONSHOT_API_KEY
+      model: openai/qwen3.7-text-embedding
+      api_base: os.environ/DASHSCOPE_EMBEDDING_BASE_URL
+      api_key: os.environ/DASHSCOPE_API_KEY
 
 router_settings:
   routing_strategy: simple-shuffle
