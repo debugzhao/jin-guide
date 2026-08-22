@@ -288,3 +288,136 @@ Report Agent 的 system prompt + 结构化指令约 2K tokens，plan_json 骨架
 - [向量化-大模型服务平台百炼(Model Studio)-阿里云帮助中心](https://help.aliyun.com/zh/model-studio/embedding)
 - [/embeddings | liteLLM](https://docs.litellm.ai/docs/embedding/supported_embedding)
 - [Jina AI | liteLLM](https://docs.litellm.ai/docs/providers/jina_ai)
+
+---
+
+## 10. 向量数据库选型问答记录（2026-08-22）
+
+> 背景：用户提问"现在系统用的是哪个向量数据库？市面上有哪些向量数据库？不同的向量数据库使用场景上有什么区别？当前项目为什么选择这个向量数据库？架构设计上的 trade off 是什么？"，随后追问"Milvus和Qdrant和chroma和pgvector 这四个向量数据库再给我系统全面详细对比一下"。以下按用户要求原文存档两轮问答，不做删减。
+
+### 10.1 第一轮：当前用的是什么、市面全景、为什么选它、trade-off
+
+#### 结论先说
+
+当前系统用的是 **pgvector**——PostgreSQL 的向量扩展（`pgvector/pgvector:pg16` 镜像），不是独立的向量数据库。`rag_chunks.embedding` 列类型 `vector(1024)`，配 HNSW 索引（`vector_cosine_ops`），检索用 cosine 距离取 top-20，再过 Cohere Rerank 精排到 top-8（`backend/app/engine/retrieval.py`）。选它本质是"业务数据库直接顺手加一列"，不是"为向量检索单独选型"。
+
+> 补充纠偏：CLAUDE.md 里提到的 BM25（`pg_bm25`/ParadeDB）目前**代码里没有实际接入**，`retrieval.py` 现在只有纯向量检索，没有做混合检索——这是文档写的设计意图，还没有落地，回头有机会可以更新一下文档标注这个 gap。
+
+#### 市面上的向量数据库全景
+
+| 类别 | 代表产品 | 特点 |
+|---|---|---|
+| **专用向量数据库** | Milvus、Qdrant、Weaviate、Pinecone、Chroma | 从零为向量检索设计，索引算法（HNSW/IVF/DiskANN）选择多、支持数十亿级向量、有专门的水平扩展和分片机制 |
+| **关系库插件** | pgvector（Postgres）、pgvecto.rs | 在已有关系库里加一种列类型，向量检索和业务数据（事务、外键、SQL join）天然在同一个库里 |
+| **搜索引擎扩展** | Elasticsearch/OpenSearch 的 `dense_vector`、pg_bm25（ParadeDB） | 主战场是全文检索，向量是附加能力，天然适合做"关键词+语义"混合检索 |
+| **托管一体化服务** | Pinecone、Zilliz Cloud、阿里云 DashVector | 免运维，按量计费，通常锁定单一云厂商 |
+
+#### 使用场景上的核心区别
+
+| 维度 | 专用向量DB（Milvus/Qdrant） | pgvector | 搜索引擎（ES/OpenSearch） |
+|---|---|---|---|
+| 适合的数据规模 | 千万~百亿级向量，需要水平扩展 | 百万级以内，单机够用 | 中等规模，且已经在用ES做日志/搜索 |
+| 索引算法选择 | 丰富（HNSW/IVF-PQ/DiskANN），可精细调优召回/延迟/内存 | 只有HNSW/IVFFlat两种，调优空间小 | dense_vector功能较新，成熟度不如专用DB |
+| 与业务数据关联查询 | 弱，向量库和业务库是两套系统，要应用层拼接 | 强，向量和结构化字段（如省份/年份/院校）能写在同一条SQL里 | 中等，擅长关键词过滤+向量混合 |
+| 运维复杂度 | 高，多一套独立系统的部署/监控/备份 | 低，复用现有Postgres运维能力 | 中，如果本来就有ES集群则边际成本低 |
+| 典型选择场景 | 电商推荐、图片搜索等海量向量、独立RAG中台 | 中小型RAG应用、已有Postgres业务库、数据强一致性要求高 | 已有全文搜索需求，向量是锦上添花 |
+
+#### 为什么这个项目选 pgvector
+
+结合项目实际情况，这几点决定性因素：
+
+1. **数据规模小**：目前 `rag_chunks` 只有个位数到几百条（江苏10校政策文档），未来即使铺开到多省份也是万级别，远达不到需要专用向量DB的规模门槛
+2. **单机部署**：`docker-compose` 跑在一台 jdy_server 上，没有独立运维团队，多引入一套 Milvus/Qdrant 意味着多一套要维护的分布式系统，性价比低
+3. **业务数据已经在 Postgres 里**：`AdmissionScore`/`University`等结构化数据本来就在同一个库，`vector_search` 能直接和业务表 join 或用同一次事务查询，不用应用层做"两个数据源拼接"
+4. **无 GPU、依赖托管 Embedding API**：向量生成本身已经外包给 DashScope，本地不需要为向量检索单独囤算力，pgvector 的 HNSW 在这个数据量级下 CPU 查询延迟完全够用
+
+#### 架构设计上的 Trade-off
+
+| 换来了什么 | 付出了什么代价 |
+|---|---|
+| 零额外运维成本（复用现有 Postgres 备份/监控/高可用） | 索引能力弱于专用向量DB，只有HNSW一种可调索引，召回率/延迟的精细调优空间小 |
+| 向量检索能和业务字段在一条SQL里精确过滤（如"只查浙江2025年政策类chunk"） | 单机纵向扩展的天花板明显，未来数据量涨到千万级会先撞到Postgres本身的扩展瓶颈 |
+| embedding 模型/维度变更时，迁移路径就是标准的 alembic migration（如这次从1536维切到1024维只是一次 drop+recreate 列） | pgvector 列宽是类型的一部分，改维度不能 `ALTER...USING`，必须整列重建，且**必须全库重新跑一遍 embedding**（CLAUDE.md 里明确写的硬约束） |
+| 技术栈单一，团队只需要精通一套数据库 | 没有专用向量DB的高级特性（如Qdrant的payload过滤+向量联合索引优化、Milvus的多种量化压缩），未来数据量上去后如果要迁移，成本不小 |
+
+**一句话总结**：这是一个"当前阶段用最小代价换够用的能力"的选择——数据量和团队规模都还没到需要专用向量数据库的临界点，用 pgvector 省了一整套独立系统的运维成本；代价是把"向量检索的精细调优空间"和"未来规模化的扩展性"往后押了，等真的遇到瓶颈时再评估迁移到 Milvus/Qdrant 之类的专用方案。
+
+### 10.2 第二轮：Milvus / Qdrant / Chroma / pgvector 系统对比
+
+#### 结论先说
+
+这四个工具分属三个不同的"重量级"：**Chroma**是轻量原型工具，**pgvector**是"关系库+向量"的务实方案，**Qdrant**是中量级专用向量数据库，**Milvus**是重量级、面向超大规模的专用向量数据库。选择顺序基本跟着"数据规模 + 运维投入意愿"走，不是功能谁更强。
+
+#### 一、总览定位
+
+| 维度 | Milvus | Qdrant | Chroma | pgvector |
+|---|---|---|---|---|
+| 本质 | 专用分布式向量数据库 | 专用向量数据库（Rust） | 嵌入式/轻量向量存储 | PostgreSQL 扩展 |
+| 开发者 | Zilliz（中国团队主导，LF AI基金会托管） | Qdrant团队（俄罗斯/德国背景） | Chroma团队（YC背景） | pgvector 社区维护，独立于PG核心 |
+| 发布时间 | 2019 | 2021 | 2022 | 2021 |
+| 定位一句话 | "向量检索界的 Elasticsearch/Hadoop"，为海量向量而生 | "向量检索界的 Qdrant"，性能与易用性平衡 | "给 LLM 应用做的默认向量库"，几行代码启动 | "给已有 Postgres 加一种列类型" |
+| 典型使用者画像 | 大厂搜推/独立RAG中台/十亿级向量 | 中大型RAG应用、需要性能又不想太重 | Demo/原型/个人项目/小型应用 | 已有Postgres业务库的中小型RAG应用 |
+
+#### 二、架构与部署形态
+
+| 维度 | Milvus | Qdrant | Chroma | pgvector |
+|---|---|---|---|---|
+| 语言实现 | Go + C++（核心计算） | Rust | Python（底层用 SQLite/DuckDB/ClickHouse可选） | C（PG扩展） |
+| 部署形态 | 分布式集群（计算存储分离，类Hadoop架构）或轻量单机版 Milvus Lite | 单机二进制 / Docker / 分布式集群模式 | 嵌入式进程内运行，或轻量 server 模式 | 就是Postgres的一部分，随PG部署 |
+| 分布式能力 | 原生支持，计算/存储/协调分离（类似 Kafka+MinIO架构），可水平扩展到十亿~百亿级 | 支持分片+副本集群模式，扩展能力不如Milvus激进 | 无原生分布式，单机为主 | 无原生分布式，跟着Postgres走（读写分离/分区表需要自己搭） |
+| 存储依赖 | 依赖etcd（元数据）+ MinIO/S3（对象存储）+ Pulsar/Kafka（消息队列），组件多 | 自带存储引擎，依赖少 | 自带（默认SQLite） | 无额外依赖，就是一张PG表 |
+| 单机可用性 | 提供 Milvus Lite（嵌入式，功能阉割版）应对轻量场景 | 单机模式非常轻量，一个二进制/一个容器就能跑 | 天生为单机/嵌入式设计 | 天生为单机场景设计 |
+
+**关键判断**：Milvus 的分布式架构组件最多（etcd+MinIO+Pulsar），单机部署"杯水车薪、集群部署又杀鸡用牛刀"，是四者里运维成本曲线最陡的。
+
+#### 三、索引算法与查询能力
+
+| 维度 | Milvus | Qdrant | Chroma | pgvector |
+|---|---|---|---|---|
+| 支持的索引类型 | 最全：HNSW、IVF-FLAT、IVF-PQ、IVF-SQ8、DiskANN、ANNOY、GPU索引（RAFT） | HNSW（主力），支持标量量化/二值量化压缩内存 | HNSW（基于 hnswlib） | HNSW、IVFFlat 两种 |
+| 量化/压缩支持 | 丰富（PQ乘积量化、SQ标量量化、支持GPU加速） | 支持标量量化、二值量化，大幅降内存占用 | 无 | 无（0.7版本后有一些实验性支持，生产不成熟） |
+| 元数据过滤（filter） | 支持，标量字段建索引后可高效过滤 | 支持，且过滤与向量检索结合优化得较好（filter不降级为brute force） | 支持基础的 where 过滤，复杂过滤能力较弱 | 强——本身就是SQL，`WHERE`任意组合、JOIN业务表都行 |
+| 混合检索（向量+关键词） | 支持稀疏+稠密混合检索（Milvus 2.4+） | 支持稀疏向量+稠密向量混合 | 不支持原生混合检索 | 需要额外接 `pg_bm25`/`tsvector`自己拼，无原生方案 |
+| 多租户/Collection隔离 | 支持Database/Collection/Partition多级隔离 | 支持Collection级隔离 | 支持Collection级隔离 | 就是表/schema，Postgres原生权限体系 |
+| 查询语言 | SDK（Python/Java/Go）+ 类SQL的部分能力 | REST/gRPC API，SDK友好 | Python API，极简 | 原生SQL，学习成本最低（如果你会SQL） |
+
+**关键判断**：过滤检索这块，pgvector因为是SQL反而是"降维打击"——业务字段过滤是它的主场；Milvus在索引丰富度和量化压缩上最强，适合真正的大规模场景；Chroma过滤能力最弱，适合数据量小、过滤需求简单的场景。
+
+#### 四、性能与规模
+
+| 维度 | Milvus | Qdrant | Chroma | pgvector |
+|---|---|---|---|---|
+| 适合的向量规模 | 千万~百亿级 | 百万~十亿级 | 十万~千万级（单机瓶颈明显） | 百万级以内（受限于Postgres单机性能） |
+| 查询延迟（同规模下） | 大规模下延迟稳定性最好（专门优化过） | 单机场景延迟表现优秀，Rust实现效率高 | 数据量大时延迟明显劣化（缺乏分布式和高级索引） | 百万级以内延迟可控，但HNSW调参空间小于专用DB |
+| 写入吞吐 | 高（专门设计了流式写入+批量构建索引的分离架构） | 中高 | 低~中（更适合读多写少场景） | 中（受Postgres MVCC/WAL机制影响，大批量写入需要调优） |
+| 横向扩展方式 | 加计算节点/查询节点，云原生 | 加分片节点 | 无原生方案，只能纵向加机器 | Postgres读写分离/分区表，非向量检索原生特性 |
+
+#### 五、运维复杂度与生态
+
+| 维度 | Milvus | Qdrant | Chroma | pgvector |
+|---|---|---|---|---|
+| 上手难度 | 高，概念多（Collection/Partition/Segment/Channel），生产部署需要理解整套分布式组件 | 中，单机模式很容易上手，集群模式需要一些经验 | 极低，`pip install chromadb`几行代码起飞 | 低（如果团队本来就懂Postgres），`CREATE EXTENSION vector`即可 |
+| 监控/可观测性 | 完善（Prometheus/Grafana集成成熟，毕竟走过大规模生产验证） | 提供基础metrics，不如Milvus完善 | 较弱，缺乏生产级监控工具链 | 完全复用Postgres已有的监控体系（pg_stat_statements等） |
+| 云托管选项 | Zilliz Cloud（官方托管） | Qdrant Cloud（官方托管） | Chroma Cloud（较新，仍在完善） | 各大云厂商RDS/云数据库PostgreSQL都直接支持（AWS RDS、阿里云RDS等），托管生态最成熟 |
+| 社区/生态成熟度 | 最成熟，LF AI基金会背书，大量生产案例 | 成长快，社区活跃，Rust生态加分 | 社区活跃但偏"教程/demo"向，生产案例较少 | 依托Postgres的庄大生态，工具链（备份/迁移/ORM）现成 |
+| LangChain/LlamaIndex集成 | 支持完善 | 支持完善 | 支持完善（是很多LLM教程的默认选择） | 支持完善 |
+
+#### 六、成本考量
+
+| 维度 | Milvus | Qdrant | Chroma | pgvector |
+|---|---|---|---|---|
+| 自建硬件成本 | 高（多组件、建议多节点） | 中（单机模式硬件需求低） | 低（嵌入式，几乎无额外成本） | 极低（复用现有Postgres实例） |
+| 云托管价格 | 中高（按计算/存储分别计费） | 中 | 中（新兴，定价还在调整） | 低（大部分云RDS本身价格，扩展免费） |
+| 团队学习成本 | 高（新概念、新运维体系） | 中 | 极低 | 极低（如果已经懂SQL/Postgres） |
+| 迁移成本（换掉它） | 高（数据模型、API都是专有的） | 中 | 低（数据量通常小，迁移容易） | 低（本质是一张表，导出/导入是标准SQL操作） |
+
+#### 七、一句话选型建议
+
+| 场景 | 推荐 | 理由 |
+|---|---|---|
+| 快速做 Demo/POC，几百条数据 | **Chroma** | 零运维，几行代码起飞，够用就行 |
+| 已有 Postgres 业务库，数据量中小、需要向量+业务字段联合查询 | **pgvector** | 零额外系统，SQL天然支持复杂过滤，本项目正是这个场景 |
+| 独立 RAG 中台，数据量中等偏大（百万级+），追求性能又不想太重 | **Qdrant** | 性能优秀、运维比Milvus轻，是"专用向量DB"里的性价比之选 |
+| 千万级以上向量、需要真正的分布式弹性扩展、有专门团队运维 | **Milvus** | 索引/量化能力最全，生产验证最充分，但代价是最重的运维负担 |
+
+**回到当前项目**：数据量（几百到万级chunk）、单机部署、无专职运维团队，都精准落在 pgvector 的舒适区，暂时没有触及需要迁移到 Qdrant/Milvus 的临界点——真到了那个规模，Qdrant会是比Milvus更现实的下一步（运维成本曲线更平滑）。
