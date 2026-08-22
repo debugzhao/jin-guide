@@ -84,6 +84,8 @@ export default function LoginSheet({ isOpen, onClose, onSuccess }: LoginSheetPro
       // 过来），当前正在看的这条会话原样保留即可；但侧栏列表只按 owner_key
       // 拉取过一次匿名身份下的会话，需要重新拉取才能看到这个账号自己的历史。
       useAppStore.getState().bumpConversationListVersion()
+      // 匿名每日额度限制只对匿名身份生效，登录后要立即解除限流提示条/输入框隐藏。
+      useAppStore.getState().intakeClearDailyLimits()
       onSuccess?.()
       onClose()
     } catch (e: unknown) {
@@ -117,6 +119,7 @@ export default function LoginSheet({ isOpen, onClose, onSuccess }: LoginSheetPro
       const me = await api.me()
       setUser(me)
       useAppStore.getState().bumpConversationListVersion()
+      useAppStore.getState().intakeClearDailyLimits()
       onSuccess?.()
       onClose()
     } catch (e: unknown) {

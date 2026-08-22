@@ -122,6 +122,10 @@ interface IntakeSlice {
   intakeCommitStreamingMessage: (key: string) => void
   intakeSetStreaming: (key: string, streaming: boolean) => void
   intakeSetDailyLimit: (key: string, reached: boolean, message?: string, loginRequired?: boolean) => void
+  /** 登录/注册成功后调用——匿名每日额度限制只对匿名身份生效，登录后应立即
+   *  解除；否则登录前触发过的限流提示条会一直挂在会话里，输入框也一直被
+   *  隐藏，用户会误以为登录后依然被限制。 */
+  intakeClearDailyLimits: () => void
   intakeSetLastFailedMessage: (key: string, message: string | null) => void
   /** 草稿会话拿到后端真实 id 后，把它的 state 平移到新 key 下 */
   intakeRenameConversationKey: (oldKey: string, newKey: string) => void
@@ -366,6 +370,16 @@ export const useAppStore = create<AppStore>()(
             },
           }
         }),
+
+      intakeClearDailyLimits: () =>
+        set((s) => ({
+          intakeConversations: Object.fromEntries(
+            Object.entries(s.intakeConversations).map(([key, conv]) => [
+              key,
+              { ...conv, dailyLimitReached: false, dailyLimitMessage: null, loginRequired: false },
+            ])
+          ),
+        })),
 
       intakeSetLastFailedMessage: (key, message) =>
         set((s) => {
