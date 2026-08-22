@@ -165,11 +165,15 @@ sources:
     data_type: admission_plan
     year: 2026
     target_university_code: "10337"
-    collection_method: http
+    # 列表页链接（jsp/news.jsp?neId=2569）本身是个JS重定向壳（"top.window.location=
+    # ...n2569.html"），httpx不执行JS只能拿到935字节的壳；跟进去后的真实文章页
+    # (html/n2569.html)也确认了：唯一的两个<table>都是导航/页脚装饰表，真正的
+    # 招生计划数据挂在#news1content这个容器里，内容由前端JS异步渲染，静态HTML里
+    # 是空的——已用真实curl响应验证过，不是discovery_title_pattern没配对，是这
+    # 条链路本身需要能执行JS的浏览器，改成manual走Playwright人工辅助路径。
+    collection_method: manual
     parser: manual_playwright_v1
     update_frequency: yearly
-    discovery_title_pattern: 2026.*浙江.*(pdf|xls|xlsx)
-    discovery_depth: 1
   - id: zstu-admission-plan-2026
     name: 浙江理工大学2026年招生计划（分省）
     entry_url: https://zs.zstu.edu.cn/zsjh.htm
@@ -179,7 +183,11 @@ sources:
     collection_method: http
     parser: manual_playwright_v1
     update_frequency: yearly
-    discovery_title_pattern: 浙江
+    # 学校自己名字就带"浙江"两个字，之前只写"浙江"会把18个省份的分省计划链接全部
+    # 匹配上（每条链接文字都是"浙江理工大学2026年分省招生计划（XX省）"），已用真实
+    # 页面验证过这个坑——必须精确到"分省招生计划（浙江）"这个带括号的完整短语，
+    # 才能只锁定目标省份自己那一条，排除掉其余17个省份的链接
+    discovery_title_pattern: 分省招生计划（浙江）
     discovery_depth: 1
   - id: hznu-admission-plan-2026
     name: 杭州师范大学2026年省级招生计划

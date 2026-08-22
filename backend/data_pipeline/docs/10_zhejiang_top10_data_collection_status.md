@@ -47,7 +47,7 @@
 |---|---|---|---|
 | 1 | 2025/2026 平行投档分数线（`admission_score`） | ✅ | **已用真实数据跑通并验证**：新写`parse_zhejiang_admission_score_rows`（扁平表专用，复用`major_group_code`/`major_group_name`存专业代号/名称，直接读位次不需要enrichment），`--source zjzs-admission-score-2026-stage1`真实拉取xls解析出401条，401条全部`valid`、0条`needs_review`/`rejected`。抽样核对`university_code`按教育部标准代码正确映射（浙大10335等）、`provincial_university_code`存浙江本地代号（如浙大"0001"）、`batch="第一段"`（从标题"第一段"关键词判断）、`subject_type=unified`全部正确。**白名单10校里9校有数据，西湖大学0条**——已用真实xls核实确认这不是匹配bug，是西湖大学本身不参与这份标准普通类平行录取批次（其招生规模极小，走的是"创新班"等特殊渠道，数据在招生简章正文里，不在这类结构化表格中，属于真实缺失，如实标记不推算） |
 | 2 | 2025/2026 总分分数段表（`rank_segment`） | ✅ | **已用真实数据跑通并验证**：`--source zjzs-rank-segment-2026`拉取官方PDF，OCR/表格解析出428条，428条全部`valid`、0条`needs_review`/`rejected`，抽样核对分数从693到266递减、位次同步递增、`province=浙江`、`subject_type=unified`全部正确，字段完全符合预期。当前只是staging，未跑publish |
-| 3 | 2026 招生计划（10校，`admission_plan`） | ⚠️ | 5校已登记有信心的URL，尚未实际跑Implement验证（还未确认这5个页面能被现有`parse_admission_plan_rows`正确解析，很可能同样需要按各校真实表头调整，参考#1的经验）。**5校未登记**：浙大/西湖大学官网无承载页；杭电/浙师大栏目静态但未定位到2025/2026年具体条目；温州医科大学数据在微信公众号文章里 |
+| 3 | 2026 招生计划（10校，`admission_plan`） | ⚠️ | **5校已用真实数据跑通**：新写`parse_single_university_admission_plan_rows`（单校专属页解析，不依赖"院校名称"列匹配白名单，因为target_university_code已经知道是哪一所）——宁波大学90条valid、浙江理工大学61条valid、杭州师范大学42条valid，共193条全部`valid`、0条`needs_review`/`rejected`。浙江工业大学确认真实内容需要JS渲染（`#news1content`静态HTML里是空的，已用真实响应验证），改成`collection_method: manual`；浙江工商大学本来就是manual（JS查询页）。**5校未登记**：浙大/西湖大学官网无承载页；杭电未定位到2025/2026年具体条目；温州医科大学数据在微信公众号文章里，共2/10走manual、5/10走http全部跑通、3/10缺口 |
 | 4 | 2025/2026 招生政策（`policy`） | ✅ | **已用真实数据跑通并验证**：`--source zjzs-policy-2026`真实拉取通知页+docx附件（zjzs.net的附件是`downfile.jsp?...&filename=x.docx`下载代理端点，不是直链，过程中发现并修复了3个连带bug，见下方"Implement阶段发现的新问题"），docx正文提取出11条`DocumentChunkRecord`（内容可读、非乱码）+ 1条`valid`的`PolicyRuleRecord`（`volunteer_mode=parallel`, `max_volunteers=80`，已用真实政策原文验证准确）+ 1条`needs_review`（来自入口公告页本身，同江苏#4"空壳公告页"模式） |
 | 5-8 | 2023/2024 分数线+分数段表 | ❌ | 未Discover，浙江"3+3"是2014年后逐步推行，需先确认2023/2024年官方是否仍用同名"分数段表"格式，不能假设跟2025/2026一致 |
 | 9 | 10校专业录取线 | ❌ | 未登记数据源 |
@@ -63,10 +63,16 @@
 - **`extract_policy_rule`的`max_volunteers`正则**：浙江政策原文实际用词是"专业平行志愿"+"考生每次可填报不超过80个志愿"（不是笔者最初猜测的"专业(类)+学校"），且同一份文档里还有"传统志愿"轨道下不相关的"5个院校志愿""6个专业志愿"两个干扰数字，第一版正则曾误抓到"1个志愿"（来自"1个志愿单位"这句说明性文字）。最终用`不超过(\d{1,3})个志愿(?!单位|专业|院校)`精确锁定，已用真实文档验证提取出正确的`80`，并补了两条回归测试（`test_parsing_and_validation.py`，江苏用例+浙江用例各一条）覆盖这个坑。
 - **`run_jiangsu_pipeline.py`硬编码只认`jiangsu.yaml`**：脚本本身跟省份无关，加了`--config`参数（默认仍指向jiangsu.yaml不破坏现有文档里记录的命令），本次浙江所有真实数据验证都是用这个脚本跑的。
 - **admission_score新写`parse_zhejiang_admission_score_rows`**（`data_pipeline/parsers/tabular.py`）：浙江扁平表结构（学校代号/学校名称/专业代号/专业名称/计划数/分数线/位次）跟江苏合并单元格格式完全不同，新写专用函数而不是改`parse_admission_score_rows`的别名（避免把江苏那份搞复杂）；`jobs/collect.py`按`config.province`分派到对应解析函数，并新增`_infer_zhejiang_stage`从标题识别"第一段/第二段"写入`batch`字段。已用真实2026年第一段xls验证：401条全部valid。
+- **HTML编码不能假设UTF-8**：杭州师范大学页面是GB2312编码，统一当UTF-8解码会把中文标题读成乱码（`errors="replace"`不报错，只是静默产出垃圾），导致discovery标题匹配和正文提取全部静默失效。新增`data_pipeline/text_encoding.py::decode_html_bytes`（从HTML头部`charset`声明识别真实编码，读不到才回退UTF-8），`jobs/collect.py`/`document.py`/`tabular.py`三处读HTML字节的地方全部切过去。
+- **单校招生计划页需要新解析路径**：`read_tabular_document`新增`.html`/`.htm`支持（`_read_html_table`，正确处理`rowspan`/`colspan`合并单元格，续格填空字符串跟openpyxl语义一致）；新写`parse_single_university_admission_plan_rows`——不像省级汇总表那样按"院校名称"列匹配白名单，因为`target_university_code`已经知道是哪一所学校，改用关键词包含匹配识别列头（各校写法差异大："专业（类）名称" vs "专业名称"）。已用宁波大学/浙江理工大学/杭州师范大学三所真实数据验证。
+- **AdmissionPlanRecord的natural_key太粗，同一专业名称的不同招生线会被误判重复**：真实数据里发现两类坑——①宁波大学"水产养殖学（拔尖人才创新班）"在"普通类"平行志愿和"三位一体"综合评价两条轨道各出现一次，仅靠`admission_type`默认值分不开；②浙江理工大学"电子信息工程(电力电子技术)(本科)"在"单独考试招生计算机类"/"单独考试招生电子与电工类"两条线各出现一次，连`restrictions`都完全相同。修法：`validators/quality.py::natural_key`把`restrictions`也纳入去重key；解析函数里"类别"列不匹配标准"普通类 0005"格式时，退化成用原始类别文本兜底当`admission_type`；新增识别"批次"列（浙江理工大学表头真的叫"批次"），值存在时优先用它而不是函数默认的"本科批"。
+- **discovery_title_pattern 按学校名称本身命中会引入其他省份的数据**：浙江理工大学网站上每个省份的分省计划链接都是"浙江理工大学2026年分省招生计划（XX省）"，之前只写`discovery_title_pattern: 浙江`会把全部18个省份的链接都匹配上（因为学校名字本身带"浙江"两个字），而不仅仅是目标省份——已用真实页面验证到这个坑（部分专业曾同时收到"浙江"和其他省份的计划数据，被误判成同一个natural_key下的"重复"）。改成精确锁定`分省招生计划（浙江）`这个带括号的完整短语才安全。
+- **JS重定向壳/JS异步渲染无法用纯HTTP采集**：浙江工业大学列表页链接指向的是一个JS重定向壳（`top.window.location=...`），httpx不执行JS只能拿到935字节的空壳；跟进真实文章页后确认数据容器`#news1content`是空的（内容由前端异步渲染），已用真实响应验证过，改成`collection_method: manual`走Playwright人工辅助路径，不再当成http源硬跑。
 
-### 已知会卡住的坑（新发现，用真实数据验证过）
+### 已知会卡住的坑（尚未处理）
 
 - **西湖大学不在标准投档线表里**：9/10白名单校在admission_score真实数据里有记录，西湖大学0条——已核实不是解析bug，是它招生规模极小、走"创新班"等特殊渠道，数据只存在于招生简章正文，不在这类结构化文件里。发布/展示时不能对西湖大学的admission_score留白，要明确标"不适用"而不是"未采集"。
+- **10校招生计划最终覆盖率7/10**（http直采5校+manual标记2校，缺口3校：浙大/西湖大学无承载页，杭电未定位到具体年份条目，温州医科大学数据在微信公众号文章里），低于江苏10/10，需要跟你对齐验收线。
 
 ## §5 推荐执行顺序
 
@@ -76,12 +82,12 @@
 ③#4 policy 端到端跑通验证（docx解析+zjzs.net下载代理端点+policy正则三个连带bug）     ✅ 已完成 2026-08-22
 ④#2 rank_segment 端到端跑通验证（428条valid，0 needs_review/rejected）           ✅ 已完成 2026-08-22
 ⑤#1 admission_score 端到端跑通验证（新写浙江专用解析函数，401条valid）             ✅ 已完成 2026-08-22
-⑥#3 10校招生计划：5校已登记的先跑通；浙大/西湖/杭电/浙师大/温医5校缺口需人工决策    ← 下一步
-⑦#9/#10/#12 与江苏同等次序靠后
+⑥#3 10校招生计划：5校http直采跑通（193条全部valid）+2校标记manual                 ✅ 已完成 2026-08-22（7/10，见下方坑记录）
+⑦#9/#10/#12 与江苏同等次序靠后                                               ← 下一步
 ⑧#11 RAG，卡点在Moonshot权限，与江苏共享同一个阻塞
 ```
 
-## 已知会卡住的坑
+## 补充说明
 
 - ~~浙江`major_group_code`字段怎么填~~ 已解决：`parse_zhejiang_admission_score_rows`复用`major_group_code`/`major_group_name`存专业代号/专业名称，理由是浙江"1个专业(类)"和江苏"1个院校专业组"同为最小志愿单位，语义对得上
 - 西湖大学的 `ownership` 无法用现有 `central`/`provincial` 二值描述，已在yaml里留空，后续如果要在其他代码里按ownership分组统计需要注意这条记录会被漏统计
