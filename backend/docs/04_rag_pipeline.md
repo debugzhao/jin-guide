@@ -232,3 +232,59 @@ Report Agent 的 system prompt + 结构化指令约 2K tokens，plan_json 骨架
 | Rerank 召回率 | top-8 中有效（score ≥ 0.3）的比例 | ≥ 85% |
 
 这些指标在 LangSmith 的 Trace 中记录，每次 run 都可以追踪。
+
+---
+
+## 9. 向量模型选型复议（2026-08-22）
+
+> 背景：`data_pipeline` 的 `#11-embed` 任务在跑 `scripts/chunk_documents.py --embed-only` 时，LiteLLM 转发到 `litellm_config.yaml` 里配置的 `openai/moonshot-v1-emb-small` 返回 `403 The API you are accessing is not open`，因此重新调研了一遍向量模型选型。以下是联网调研的原始结论，按用户要求原文存档，不做删减。
+
+### 结论先说
+
+不建议死磕 Moonshot 的 `moonshot-v1-emb-small`——查了 Moonshot 官方文档和现有资料，**没有找到这个模型名真实存在的证据**，很可能是当初配置 `litellm_config.yaml` 时没验证过的占位/误填，值得先去 Moonshot 控制台核实这模型是否真的存在，而不是假设"申请权限就能用"。
+
+对这个项目（中文为主、pgvector、LiteLLM网关、目前无GPU、数据量还小），推荐顺序：
+
+1. **阿里云百炼 DashScope `text-embedding-v3`/`v4`（Qwen系列）**——托管API，中文检索质量第一梯队，OpenAI兼容协议，接入方式和现在配置Moonshot几乎一样（改`litellm_config.yaml`一行）
+2. 备选：自建 **BGE-small-zh/BGE-base-zh**——如果数据不能出域，牺牲一点精度换数据留在自己手里
+3. 不推荐 OpenAI `text-embedding-3-small`（现在代码里的命名）——它对中文优化程度明显弱于专门做中文/多语言的模型
+
+### 选型依据：这几个维度决定怎么选
+
+| 维度 | 为什么重要 | 对本项目的具体影响 |
+|---|---|---|
+| 中文检索质量 | 招生政策/专业介绍全是中文长文本，通用MTEB总分不能直接看，要看C-MTEB或MTEB里的retrieval子任务分 | BGE系列的基准（C-MTEB）本来就是为中文设计的；OpenAI的模型对中文是"够用"而非"优化过" |
+| 部署方式 | 托管API零运维但要出网；自建保数据但吃算力 | jdy_server是单机docker-compose，**没有GPU**，自建大模型（Qwen3-Embedding-8B、BGE-M3全量568M）在CPU上查询延迟会明显，只能选小模型自建 |
+| 与LiteLLM的兼容性 | 项目强制"所有embedding走LiteLLM代理" | 只要是OpenAI兼容协议、能填`api_base`+`api_key`，接入成本都一样低——DashScope、Moonshot都是这么接的 |
+| 向量维度 | 影响pgvector存储和查询速度 | 阿里云官方自己的建议：**1024维是性能/成本的最佳平衡点**，1536/2048只在高精度场景才有必要 |
+| 迁移成本 | CLAUDE.md已经写死"BM25和向量不能混用两种embedding模型，切换必须全库重建" | **现在恰好是最便宜的切换窗口**——`rag_chunks`目前只有4条数据，重建成本几乎为零；等#11-collect把10校数据都采进来之后再想换，代价会成倍增加 |
+| 数据合规 | 高考志愿/学生信息属于敏感教育数据 | 国内厂商（阿里云/自建）在数据不出境这点上比调用境外API更省心 |
+| 成本 | 按token计费 vs 自建固定算力成本 | 项目当前数据量级（几千条chunk）用哪个API价格都是零头，这一项在当前阶段不该是决定因素 |
+
+### 候选模型对比
+
+| 模型 | 类型 | 中文能力 | 部署方式 | 备注 |
+|---|---|---|---|---|
+| **Qwen3-Embedding / DashScope text-embedding-v3/v4** | 托管API（阿里云百炼） | 强，多语言MTEB榜首梯队（Qwen3-Embedding-8B多语言MTEB 70.58分） | 零运维，OpenAI兼容接口 | 官方建议默认1024维；支持自定义维度 |
+| **BGE-M3** | 开源，可自建 | 强，C-MTEB基准的源头模型 | 568M参数，需要CPU/GPU资源；MIT协议 | 支持dense+sparse+多向量混合检索，功能上比单纯embedding更强，但本项目目前只用了简单向量检索，用不上这些高级特性 |
+| **BGE-small/base-zh** | 开源，可自建 | 良好（比BGE-M3弱一档，换取更小体积） | 数十MB到百MB级，CPU可跑，适合当前无GPU的infra | 如果坚持要数据不出域，这是现实的自建选项 |
+| **OpenAI text-embedding-3-small**（当前代码里的命名） | 托管API | 一般，官方定位是"英文优先" | 需要能连OpenAI（国内网络环境要考虑） | 只是历史遗留的命名，不代表真在用OpenAI |
+| **Moonshot moonshot-v1-emb-small**（当前配置） | 托管API | 未知，**官方文档查无实据** | 当前403 | 建议先去核实这模型是否真的存在于Moonshot产品列表里 |
+
+### 怎么做 trade-off
+
+按项目的实际情况，优先级排序应该是：**中文检索质量 > 迁移时机（现在数据量小） > 部署运维成本 > token成本**——token成本在现在的数据量级下几乎可以忽略，不该是决定因素；反而"现在数据只有4条chunk，换模型几乎零成本，等#11-collect把10校数据采完再换就要重新embed全库"这个时机窗口，是最值得权衡的一点。
+
+如果最终目标是"数据绝对不出境"，那就应该优先看自建BGE系列，接受CPU推理延迟和运维成本；如果目标是"尽快解锁RAG检索且减少运维负担"，DashScope是更快的路径，且换掉配置不需要动代码——`app/engine/embedding.py`里的`EMBEDDING_MODEL`/`EMBEDDING_DIMS`常量和`litellm_config.yaml`里的一条映射改一下就行。
+
+### Sources
+
+- [How to Choose the Best Embedding Model for RAG in 2026: 10 Models Benchmarked](https://milvusio.medium.com/how-to-choose-the-best-embedding-model-for-rag-in-2026-10-models-benchmarked-4efc9508a193)
+- [Best Embedding Model for RAG 2026: 10 Models Compared - Milvus Blog](https://milvus.io/blog/choose-embedding-model-rag-2026.md)
+- [Which Embedding Model Should You Actually Use in 2026?](https://zc277584121.github.io/rag/2026/03/20/embedding-models-benchmark-2026.html)
+- [Embedding models comparison: OpenAI, Google, Qwen, Nomic, Jina, BAAI | SurrealDB](https://surrealdb.com/blog/embedding-models-comparison)
+- [Comparative Analysis of Qwen-3 and BGE-M3 Embedding Models for Multilingual Information Retrieval](https://medium.com/@mrAryanKumar/comparative-analysis-of-qwen-3-and-bge-m3-embedding-models-for-multilingual-information-retrieval-72c0e6895413)
+- [Best Embedding Models for RAG (2026): Ranked by MTEB Score, Cost, and Self-Hosting](https://www.premai.io/blog/best-embedding-models-for-rag-2026-ranked-by-mteb-score-cost-and-self-hosting/)
+- [向量化-大模型服务平台百炼(Model Studio)-阿里云帮助中心](https://help.aliyun.com/zh/model-studio/embedding)
+- [/embeddings | liteLLM](https://docs.litellm.ai/docs/embedding/supported_embedding)
+- [Jina AI | liteLLM](https://docs.litellm.ai/docs/providers/jina_ai)
