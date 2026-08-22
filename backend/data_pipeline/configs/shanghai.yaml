@@ -72,7 +72,13 @@ sources:
     year: 2025
     parser: shmeea_score_distribution_v1
     update_frequency: yearly
-    discovery_title_pattern: 本科录取控制分数线上考生高考成绩分布表|.*类.*专业统考.*成绩分布表
+    # 只匹配全体考生的成绩分布表；同一入口页还链接着11份艺术类/体育类专业统考
+    # 考生的成绩分布表，那些是不同的报考人群，跟全体考生共用同一套(分数,人数,
+    # 累计人数)三列结构但语义不同——如果一起匹配进来，会在同一个
+    # (province,year,subject_type,score) natural_key下产生大量重复/冲突记录
+    # （实测踩过这个坑，发布时报"215 natural key duplicate"），本轮不采集，
+    # 需要时应作为独立数据类型单独建模，不能和主表混在一起
+    discovery_title_pattern: 本科录取控制分数线上考生高考成绩分布表
     discovery_depth: 1
   - id: shmeea-admission-score-2025-general
     name: 上海市2025年普通高校招生本科普通批次平行志愿院校专业组投档分数线

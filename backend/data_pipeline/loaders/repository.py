@@ -32,6 +32,7 @@ class PublicationError(RuntimeError):
 _PROVINCE_SLUGS = {
     "江苏": "jiangsu",
     "浙江": "zhejiang",
+    "上海": "shanghai",
 }
 
 

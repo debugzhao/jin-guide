@@ -54,6 +54,15 @@ _UNIVERSITY_META: dict[str, dict] = {
     "10295": {"is_985": False, "is_211": True, "is_shuangyiliu": True, "school_type": "综合"},
     "10307": {"is_985": False, "is_211": True, "is_shuangyiliu": True, "school_type": "农业"},
     "10316": {"is_985": False, "is_211": True, "is_shuangyiliu": True, "school_type": "医药"},
+    # 上海目标 10 校里 universities 表原本没有的那 6 所（复旦10246/同济10247/
+    # 交大10248 已在表里），同样按公开信息核对，未发布数据的那 8 所不在此列表里
+    "10251": {"is_985": False, "is_211": True, "is_shuangyiliu": True, "school_type": "理工"},
+    "10252": {"is_985": False, "is_211": False, "is_shuangyiliu": False, "school_type": "理工"},
+    "10255": {"is_985": False, "is_211": True, "is_shuangyiliu": True, "school_type": "理工"},
+    "10269": {"is_985": True, "is_211": True, "is_shuangyiliu": True, "school_type": "综合"},
+    "10271": {"is_985": False, "is_211": True, "is_shuangyiliu": True, "school_type": "外语"},
+    "10272": {"is_985": False, "is_211": True, "is_shuangyiliu": True, "school_type": "财经"},
+    "10280": {"is_985": False, "is_211": True, "is_shuangyiliu": True, "school_type": "综合"},
 }
 
 

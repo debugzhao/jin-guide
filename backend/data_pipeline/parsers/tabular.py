@@ -183,8 +183,38 @@ def _read_pdf(path: Path) -> TabularDocument:
                     if any(normalized):
                         rows.append(normalized)
                         pages.append(page_number)
+    if rows:
+        return TabularDocument(rows=rows, page_or_sheet=pages)
+    # 扫描版PDF（如上海市教育考试院的《考生高考成绩分布表》）没有可提取文本/表格，
+    # pdfplumber 拿不到任何行；渲染成图片后走跟 _read_image 一样的 Vision OCR 路径，
+    # 而不是直接报错要求人工——这类PDF在生产环境同样需要OCR兜底
+    return _read_pdf_via_ocr(path)
+
+
+def _read_pdf_via_ocr(path: Path) -> TabularDocument:
+    vision_script = Path(__file__).resolve().parents[2] / "scripts" / "macos_vision_ocr.swift"
+    if os.uname().sysname != "Darwin" or not vision_script.exists():
+        raise RuntimeError(
+            "PDF contains no extractable tables and image OCR unavailable; "
+            "install PaddleOCR in production or run on macOS with Vision"
+        )
+    import pdfplumber
+
+    rows: list[list[str]] = []
+    pages: list[int] = []
+    with pdfplumber.open(path) as document, tempfile.TemporaryDirectory(dir="/tmp") as temp_dir:
+        for page_number, page in enumerate(document.pages, start=1):
+            page_image_path = Path(temp_dir) / f"page-{page_number}.png"
+            page.to_image(resolution=200).save(page_image_path)
+            observations = _run_vision(page_image_path, vision_script)
+            # 单栏正文表格（分数/人数/累计人数三列），不是江苏那种一页三个分栏拼版，
+            # panel_count=1 直接按行聚类即可
+            for row in _cluster_ocr_rows(observations, panel_count=1):
+                if any(row):
+                    rows.append(row)
+                    pages.append(page_number)
     if not rows:
-        raise RuntimeError("PDF contains no extractable tables; OCR/manual review required")
+        raise RuntimeError("PDF OCR produced no rows; manual review required")
     return TabularDocument(rows=rows, page_or_sheet=pages)
 
 
@@ -335,6 +365,97 @@ def parse_rank_segment_rows(
                 )
             )
     return records
+
+
+# 上海市教育考试院投档线PDF里高校名称是简称（如"上海交大"而非"上海交通大学"），且
+# 表格从扫描/水印PDF提取时偶尔会在名称前混入一个水印字（"市\n华东理工(02)"），已用
+# 真实2025年PDF核对过这10所目标高校在该文件里的确切写法，不是猜测；复旦/交大各自
+# 的"复旦医学"/"交大医学"专业组是本校上海医学院的投档线，仍算同一所学校。
+_SHMEEA_UNIVERSITY_ALIASES: dict[str, str] = {
+    "复旦大学": "10246",
+    "复旦医学": "10246",
+    "上海交大": "10248",
+    "交大医学": "10248",
+    "同济大学": "10247",
+    "华东师大": "10269",
+    "上海财大": "10272",
+    "上海外大": "10271",
+    "华东理工": "10251",
+    "东华大学": "10255",
+    "上海大学": "10280",
+    "上海理工": "10252",
+}
+
+
+def _clean_shmeea_cell(value: str) -> str:
+    # 水印字混入时总是作为独立的一行出现在真正内容前面（如"市\n华东理工(02)"），
+    # 取最后一段就能拿到干净文本；没有换行时原样返回
+    return value.split("\n")[-1].strip()
+
+
+def parse_shmeea_admission_score_rows(
+    document: TabularDocument,
+    *,
+    provenance: Provenance,
+    config: PipelineConfig,
+    batch: str,
+    admission_type: str = "普通",
+) -> tuple[list[AdmissionScoreRecord], int]:
+    """解析上海市教育考试院《本科批次平行志愿院校专业组投档分数线》。
+
+    返回 (records, undisclosed_count)：580分及以上考生的投档线官方明确不公开
+    （"由市教育考试院会同考生所在中学逐一告知"），这些行会被跳过而不是编造成
+    580 分——undisclosed_count 记录跳过了多少条，用于在报告里如实体现覆盖率
+    缺口，而不是让它无声消失。
+    """
+    allowed_codes = {target.university_code for target in config.target_universities}
+    records: list[AdmissionScoreRecord] = []
+    undisclosed_count = 0
+    for row_number, row in enumerate(document.rows, start=1):
+        if len(row) < 3:
+            continue
+        group_code = _clean_shmeea_cell(row[0])
+        name_cell = _clean_shmeea_cell(row[1])
+        score_cell = _clean_shmeea_cell(row[2])
+        if not re.fullmatch(r"[A-Za-z0-9]{4,8}", group_code):
+            continue
+        base_name = re.sub(r"\(.*", "", name_cell).strip()
+        university_code = _SHMEEA_UNIVERSITY_ALIASES.get(base_name)
+        if university_code is None or university_code not in allowed_codes:
+            continue
+        if "以上" in score_cell:
+            # "580分及以上"这类未公开区间，_integer()会误把580当成真实投档线提取
+            # 出来，必须先排除这个模式，不能拿580去冒充真实投档线
+            undisclosed_count += 1
+            continue
+        min_score = _integer(score_cell)
+        if min_score is None:
+            continue
+        target = next(t for t in config.target_universities if t.university_code == university_code)
+        records.append(
+            AdmissionScoreRecord(
+                province=config.province,
+                year=provenance.year,
+                batch=batch,
+                subject_type="unified",
+                university_code=university_code,
+                university_name=target.name,
+                major_group_code=group_code,
+                # 保留"(01)"这类组别后缀，不能只存base_name——business_sync.py的
+                # sync_admission_scores按(university_id,year,batch,subject_type,
+                # major_category)去重，major_category取major_group_name优先，
+                # 同校多个专业组若都存成同一个base_name会在业务表里互相覆盖（同
+                # 一所大学的"华东理工(01)"560分和"华东理工(03)"548分曾经因此被
+                # 合并成一条，已实测踩过这个坑）
+                major_group_name=name_cell,
+                admission_type=admission_type,
+                min_score=min_score,
+                provenance=_row_number(
+                    provenance, row_number, document.page_or_sheet[row_number - 1]
+                ),
+            )
+        )
+    return records, undisclosed_count
 
 
 _GROUP_PATTERN = re.compile(
@@ -520,7 +641,8 @@ def parse_single_university_admission_plan_rows(
         raise ValueError(f"target_university_code {target_university_code!r} not in whitelist")
 
     aliases = {
-        "类别": ("类别",),
+        "类别": ("类别", "类型"),
+        "批次": ("批次",),
         "专业名称": ("专业",),
         "计划数": ("计划数", "计划人数", "招生计划"),
         "学费": ("学费", "收费"),
@@ -578,7 +700,12 @@ def parse_single_university_admission_plan_rows(
             AdmissionPlanRecord(
                 province=config.province,
                 year=provenance.year,
-                batch=batch,
+                # 部分学校的表本身就有"批次"列（如浙江理工大学：普通类/艺术类统考批/
+                # 地方专项计划/单独考试招生计算机类/单独考试招生电子与电工类），比
+                # 函数默认的"本科批"更精确，这一列存在时优先用它——同一专业名称在
+                # "单独考试招生计算机类"和"单独考试招生电子与电工类"两条线各出现一次
+                # 时，光靠admission_type/restrictions区分不开，已用真实数据验证过。
+                batch=value(row, "批次") or batch,
                 subject_type=subject_type,
                 university_code=target.university_code,
                 university_name=target.name,
