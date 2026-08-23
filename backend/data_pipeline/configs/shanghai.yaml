@@ -210,3 +210,96 @@ sources:
     collection_method: manual
     parser: manual_playwright_v1
     update_frequency: yearly
+
+# 10校招生章程（RAG，charter）：8所是静态HTML正文，可直接HttpCollector采集；
+# 复旦章程未本地托管（跳转阳光高考平台，抓取返回412反爬）、交大是JS渲染SPA
+# （admissions.sjtu.edu.cn/newDetails?contentsID=3810000004270，静态抓取只有
+# 页面外壳），这两所本轮不通过http source采集，留作后续Playwright渲染方案。
+  - id: tongji-charter-2026
+    name: 同济大学2026年本科招生章程
+    entry_url: https://xxgk.tongji.edu.cn/index.php?classid=3138&newsid=21443&t=show
+    data_type: charter
+    year: 2026
+    target_university_code: "10247"
+    parser: charter_document_v1
+    update_frequency: yearly
+    discovery_depth: 0
+  - id: ecnu-charter-2026
+    name: 华东师范大学2026年本科招生章程
+    entry_url: https://zsb.ecnu.edu.cn/a3/50/c37582a762704/page.htm
+    data_type: charter
+    year: 2026
+    target_university_code: "10269"
+    parser: charter_document_v1
+    update_frequency: yearly
+    discovery_depth: 0
+  - id: sufe-charter-2026
+    name: 上海财经大学2026年本科招生章程
+    entry_url: https://zs.sufe.edu.cn/05/64/c3337a263524/page.htm
+    data_type: charter
+    year: 2026
+    target_university_code: "10272"
+    parser: charter_document_v1
+    update_frequency: yearly
+    discovery_depth: 0
+  - id: shisu-charter-2026
+    name: 上海外国语大学2026年本科招生章程
+    entry_url: https://info.shisu.edu.cn/ad/2e/c82a44334/page.htm
+    data_type: charter
+    year: 2026
+    target_university_code: "10271"
+    parser: charter_document_v1
+    update_frequency: yearly
+    discovery_depth: 0
+  - id: ecust-charter-2026
+    name: 华东理工大学2026年本科招生章程
+    entry_url: https://zsb.ecust.edu.cn/2026/0528/c2307a190692/page.htm
+    data_type: charter
+    year: 2026
+    target_university_code: "10251"
+    parser: charter_document_v1
+    update_frequency: yearly
+    discovery_depth: 0
+  - id: dhu-charter-2026
+    name: 东华大学2026年本科招生章程
+    entry_url: https://zs.dhu.edu.cn/2026/0528/c9563a376561/page.htm
+    data_type: charter
+    year: 2026
+    target_university_code: "10255"
+    parser: charter_document_v1
+    update_frequency: yearly
+    discovery_depth: 0
+  - id: shu-charter-2026
+    name: 上海大学2026年本科招生章程
+    entry_url: https://bkzsw.shu.edu.cn/info/7743/38680.htm
+    data_type: charter
+    year: 2026
+    target_university_code: "10280"
+    parser: charter_document_v1
+    update_frequency: yearly
+    discovery_depth: 0
+  - id: usst-charter-2026
+    name: 上海理工大学2026年本科招生章程
+    entry_url: https://zhaoban.usst.edu.cn/2026/0515/c6165a361595/page.htm
+    data_type: charter
+    year: 2026
+    target_university_code: "10252"
+    parser: charter_document_v1
+    update_frequency: yearly
+    discovery_depth: 0
+
+# 10校专业介绍（RAG，major_intro）：华东师大是单页大而全的静态页面，直接采集；
+# 其余多数学校是"列表页链多篇学院文章"结构，用 discovery_depth+discovery_title_
+# pattern 让 HttpCollector 自动发现子页面，pattern 里的学院名称通过实测页面确认，
+# 不是猜测。复旦（无独立专业介绍栏目）、交大（仅专业名录无介绍正文）本轮跳过；
+# 同济专业介绍栏目是SPA，静态抓取拿不到正文，本轮跳过；上海理工专业介绍列表页
+# 多数条目外链微信公众号文章，采集可行性未知，本轮先跳过，记录为已知待办。
+  - id: ecnu-major-intro-2026
+    name: 华东师范大学专业介绍
+    entry_url: https://zsb.ecnu.edu.cn/zyts2/list.htm
+    data_type: major_intro
+    year: 2026
+    target_university_code: "10269"
+    parser: major_intro_document_v1
+    update_frequency: yearly
+    discovery_depth: 0
