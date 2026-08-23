@@ -22,6 +22,7 @@ from data_pipeline.parsers import (
     parse_rank_segment_rows,
     parse_shmeea_admission_score_rows,
     parse_single_university_admission_plan_rows,
+    parse_single_university_admission_result_rows,
     parse_zhejiang_admission_score_rows,
     read_tabular_document,
 )
@@ -227,7 +228,24 @@ class PipelineJob:
                         config=self.config,
                     )
                 elif source.data_type == "admission_score":
-                    if self.config.province == "浙江":
+                    if self.config.province == "浙江" and source.target_university_code:
+                        # 学校自己"历年招生"栏目发布的录取情况页（带平均分/最高分/
+                        # 实际录取人数，省考试院投档线表没有这些字段），跟省考试院
+                        # 扁平表结构不同，也不需要按院校名称匹配白名单（学校已知）
+                        stage_batch = self._infer_zhejiang_stage(node.title)
+                        if stage_batch is None:
+                            report.messages.append(
+                                f"manual review: cannot infer 第一段/第二段 for {node.artifact.source_url}"
+                            )
+                            return []
+                        records = parse_single_university_admission_result_rows(
+                            document,
+                            provenance=provenance,
+                            config=self.config,
+                            target_university_code=source.target_university_code,
+                            batch=stage_batch,
+                        )
+                    elif self.config.province == "浙江":
                         # 浙江投档线是扁平表（学校/专业逐行铺开，自带位次），跟江苏
                         # "院校专业组"合并单元格格式完全不同，需要专用解析函数；
                         # "第一段/第二段"从标题里判断，判断不出来时明确进人工复核，
@@ -326,6 +344,13 @@ class PipelineJob:
         if "第一段" in title:
             return "第一段"
         if "第二段" in title:
+            return "第二段"
+        # 学校自己发布的录取情况页标题习惯写"一段"/"二段"（不带"第"字，如杭州师范
+        # 大学"2025年浙江省普通类一段首轮录取情况"），跟省考试院文件的"第一段/
+        # 第二段"写法不同，放在省考试院两种精确写法都不匹配之后兜底判断
+        if "一段" in title:
+            return "第一段"
+        if "二段" in title:
             return "第二段"
         return None
 

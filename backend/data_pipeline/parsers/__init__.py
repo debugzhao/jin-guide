@@ -5,6 +5,7 @@ from data_pipeline.parsers.tabular import (
     parse_rank_segment_rows,
     parse_shmeea_admission_score_rows,
     parse_single_university_admission_plan_rows,
+    parse_single_university_admission_result_rows,
     parse_zhejiang_admission_score_rows,
     read_tabular_document,
 )
@@ -17,6 +18,7 @@ __all__ = [
     "parse_rank_segment_rows",
     "parse_shmeea_admission_score_rows",
     "parse_single_university_admission_plan_rows",
+    "parse_single_university_admission_result_rows",
     "parse_zhejiang_admission_score_rows",
     "read_tabular_document",
     "chunk_document",

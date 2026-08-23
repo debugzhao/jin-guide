@@ -216,3 +216,141 @@ sources:
     collection_method: manual
     parser: manual_playwright_v1
     update_frequency: yearly
+
+  # 10校招生章程（RAG，2026-08-23新增）：西湖大学/浙江工商大学/杭州电子科技大学
+  # 三校官网章程正文是JS异步加载，纯http抓不到，暂不注册（见状态看板），其余7校
+  # 已用curl验证200且为静态HTML正文。浙大官网未见独立发布2026年版，退而用2025年
+  # （已在Discover阶段确认，非偷懒漏检）。
+  - id: zju-charter-2025
+    name: 浙江大学2025年普通本科招生章程
+    entry_url: https://zdzsc.zju.edu.cn/2025/0605/c87333a3058818/page.htm
+    data_type: charter
+    year: 2025
+    target_university_code: "10335"
+    parser: policy_document_v1
+    update_frequency: yearly
+    # 章程本身已经是完整正文的独立文章页，不需要发现子链接——曾经用默认
+    # discovery_depth=1时把整站导航/页脚（甚至外链到gaokao.chsi.com.cn触发412）
+    # 都当成"可能的附件"抓了一遍，22个artifact里真正的章程只有1个，改成0后只拉本页。
+    discovery_depth: 0
+  - id: nbu-charter-2026
+    name: 宁波大学2026年普通本科招生章程
+    entry_url: https://zsb.nbu.edu.cn/info/1012/3986.htm
+    data_type: charter
+    year: 2026
+    target_university_code: "11646"
+    parser: policy_document_v1
+    update_frequency: yearly
+    discovery_depth: 0
+  - id: zjut-charter-2026
+    name: 浙江工业大学2026年普通本科招生章程
+    entry_url: https://zs.zjut.edu.cn/html/n2553.html
+    data_type: charter
+    year: 2026
+    target_university_code: "10337"
+    parser: policy_document_v1
+    update_frequency: yearly
+    discovery_depth: 0
+  - id: zjnu-charter-2026
+    name: 浙江师范大学2026年普通本科招生章程
+    entry_url: https://zs.zjnu.edu.cn/2026/0520/c6828a554709/page.htm
+    data_type: charter
+    year: 2026
+    target_university_code: "10345"
+    parser: policy_document_v1
+    update_frequency: yearly
+    discovery_depth: 0
+  - id: zstu-charter-2026
+    name: 浙江理工大学2026年普通本科招生章程
+    entry_url: https://zs.zstu.edu.cn/info/1034/4074.htm
+    data_type: charter
+    year: 2026
+    target_university_code: "10338"
+    parser: policy_document_v1
+    update_frequency: yearly
+    discovery_depth: 0
+  - id: wmu-charter-2026
+    name: 温州医科大学2026年普通本科招生章程
+    entry_url: https://zhaosheng.wmu.edu.cn/info/3159/17412.htm
+    data_type: charter
+    year: 2026
+    target_university_code: "10343"
+    parser: policy_document_v1
+    update_frequency: yearly
+    discovery_depth: 0
+  - id: hznu-charter-2026
+    name: 杭州师范大学2026年普通本科招生章程
+    entry_url: https://undergrad.hznu.edu.cn/Details/20260520/310356202605200356291925.html
+    data_type: charter
+    year: 2026
+    target_university_code: "10346"
+    parser: policy_document_v1
+    discovery_depth: 0
+    update_frequency: yearly
+
+  # 10校专业介绍（RAG，2026-08-23新增）：以下5校有清晰的"专业介绍"列表页，用
+  # discovery自动发现列表下的各专业/学院详情页；浙师大官网正文外链到微信公众号
+  # 会被反爬拦截，杭师大同样，暂不注册；杭电/温医没有统一列表页（逐学院分散），
+  # 需要按学院枚举，本轮先不做，见状态看板。
+  - id: zju-major-intro-2026
+    name: 浙江大学专业介绍（创新班）
+    entry_url: http://zdzsc.zju.edu.cn/cxb/list.htm
+    data_type: major_intro
+    year: 2026
+    target_university_code: "10335"
+    parser: policy_document_v1
+    update_frequency: yearly
+    discovery_title_pattern: 班
+    discovery_depth: 1
+  - id: nbu-major-intro-2026
+    name: 宁波大学专业介绍
+    entry_url: https://zsb.nbu.edu.cn/index/a2026nzszyjs.htm
+    data_type: major_intro
+    year: 2026
+    target_university_code: "11646"
+    parser: policy_document_v1
+    update_frequency: yearly
+    discovery_depth: 1
+  - id: zjut-major-intro-2026
+    name: 浙江工业大学专业介绍（工大教授话专业）
+    entry_url: https://zs.zjut.edu.cn/html/w82_1.html
+    data_type: major_intro
+    year: 2026
+    target_university_code: "10337"
+    parser: policy_document_v1
+    update_frequency: yearly
+    discovery_depth: 1
+  - id: zstu-major-intro-2026
+    name: 浙江理工大学专业介绍（按学院）
+    entry_url: https://zs.zstu.edu.cn/yxjs/zyjs.htm
+    data_type: major_intro
+    year: 2026
+    target_university_code: "10338"
+    parser: policy_document_v1
+    update_frequency: yearly
+    discovery_depth: 1
+  - id: zjgsu-major-intro-2026
+    name: 浙江工商大学专业介绍（按学院）
+    entry_url: https://zhaoban.zjgsu.edu.cn/?zyjs.html
+    data_type: major_intro
+    year: 2026
+    target_university_code: "10353"
+    parser: policy_document_v1
+    update_frequency: yearly
+    discovery_depth: 1
+
+  # 10校专业录取线补充数据（2026-08-23新增，见状态看板#9）：省考试院投档线表
+  # 只有分数线+位次，缺平均分/最高分/实际录取人数——杭州师范大学"历年招生"栏目
+  # 自己发布了含这些字段的录取情况页，且是2025年（最新），已用真实数据核实过
+  # 表头是"专业名称/录取数/最高分/最低分/平均分/最低位次"，跟省表结构不同，需要
+  # 新解析器（未随本次配置一起写，见状态看板"待处理"）。这里先登记source，跑
+  # collect只到staging，不会跟已发布的admission数据集混在一起。
+  - id: hznu-major-admission-result-2025
+    name: 杭州师范大学2025年浙江省普通类一段首轮录取情况
+    entry_url: https://undergrad.hznu.edu.cn/Details/20251114/610232202511140232680627.html
+    data_type: admission_score
+    year: 2025
+    target_university_code: "10346"
+    parser: hznu_major_admission_result_v1
+    update_frequency: yearly
+    discovery_depth: 0

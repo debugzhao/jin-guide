@@ -37,7 +37,9 @@ def _cell(value: object) -> str:
     return re.sub(r"\s+", " ", str(value)).strip()
 
 
-def read_tabular_document(path: str | Path) -> TabularDocument:
+def read_tabular_document(
+    path: str | Path, *, table_index: int | None = None
+) -> TabularDocument:
     file_path = Path(path)
     suffix = file_path.suffix.lower()
     if suffix == ".csv":
@@ -51,22 +53,29 @@ def read_tabular_document(path: str | Path) -> TabularDocument:
     if suffix in {".jpg", ".jpeg", ".png"}:
         return _read_image(file_path)
     if suffix in {".html", ".htm"}:
-        return _read_html_table(file_path)
+        return _read_html_table(file_path, table_index=table_index)
     raise ValueError(f"unsupported tabular document: {file_path.name}")
 
 
 class _HtmlTableParser(HTMLParser):
-    """把第一个 <table> 转成矩形网格，rowspan/colspan 的续格用空字符串占位——
-    跟 openpyxl/pdfplumber 读合并单元格的语义一致（续格是空字符串不是重复文本），
-    这样 parse_admission_plan_rows 已有的"空列=沿用上一行"前向填充逻辑可以直接复用，
-    不需要为HTML另写一套规则。只处理页面第一个 <table>，多表格页面（目前没遇到过）
-    需要另外扩展。"""
+    """把页面里每一个"顶层"（不嵌套在别的表格里）<table> 各转成一个矩形网格，
+    rowspan/colspan 的续格用空字符串占位——跟 openpyxl/pdfplumber 读合并单元格的
+    语义一致（续格是空字符串不是重复文本），这样 parse_admission_plan_rows 已有的
+    "空列=沿用上一行"前向填充逻辑可以直接复用，不需要为HTML另写一套规则。
+
+    老式布局页面常见"表格套表格"（导航栏用一层 <table> 包住整个页头，真正的数据
+    表在更后面另一个顶层 <table> 里）——按嵌套深度过滤，只在深度恰好为1（直接在
+    某个顶层表格内，不在其嵌套子表格内）时才记录 <tr>/<td>，避免把导航表格自己
+    嵌套的子表格误当成页面级别的第二个候选表格、也避免嵌套表格提前触发"表格结束"
+    把外层表格后续的行截断。真正选哪个表格是"数据表"由调用方按行数挑（见
+    read_tabular_document 的 table_index 参数），这里只负责把所有顶层表格都提取
+    出来。
+    """
 
     def __init__(self) -> None:
         super().__init__()
-        self.rows: list[list[str]] = []
-        self._table_seen = False
-        self._in_table = False
+        self.tables: list[list[list[str]]] = []
+        self._depth = 0
         self._row: list[str] | None = None
         self._cell_parts: list[str] | None = None
         self._cell_colspan = 1
@@ -75,9 +84,15 @@ class _HtmlTableParser(HTMLParser):
         self._col = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag == "table" and not self._table_seen:
-            self._in_table = True
-        elif tag == "tr" and self._in_table:
+        if tag == "table":
+            self._depth += 1
+            if self._depth == 1:
+                self.tables.append([])
+                self._pending = {}
+            return
+        if self._depth != 1:
+            return
+        if tag == "tr":
             self._row = []
             self._col = 0
         elif tag in ("td", "th") and self._row is not None:
@@ -87,10 +102,17 @@ class _HtmlTableParser(HTMLParser):
             self._cell_rowspan = self._parse_span(values.get("rowspan"))
 
     def handle_data(self, data: str) -> None:
-        if self._cell_parts is not None:
+        if self._depth == 1 and self._cell_parts is not None:
             self._cell_parts.append(data)
 
     def handle_endtag(self, tag: str) -> None:
+        if tag == "table":
+            self._depth = max(0, self._depth - 1)
+            if self._depth == 0:
+                self._row = None
+            return
+        if self._depth != 1:
+            return
         if tag in ("td", "th") and self._cell_parts is not None and self._row is not None:
             text = re.sub(r"\s+", " ", "".join(self._cell_parts)).strip()
             self._fill_pending_columns()
@@ -101,11 +123,8 @@ class _HtmlTableParser(HTMLParser):
                 self._col += 1
             self._cell_parts = None
         elif tag == "tr" and self._row is not None:
-            self.rows.append(self._row)
+            self.tables[-1].append(self._row)
             self._row = None
-        elif tag == "table" and self._in_table:
-            self._in_table = False
-            self._table_seen = True
 
     def _fill_pending_columns(self) -> None:
         assert self._row is not None
@@ -126,10 +145,18 @@ class _HtmlTableParser(HTMLParser):
             return 1
 
 
-def _read_html_table(path: Path) -> TabularDocument:
+def _read_html_table(path: Path, *, table_index: int | None = None) -> TabularDocument:
     parser = _HtmlTableParser()
     parser.feed(decode_html_bytes(path.read_bytes()))
-    return TabularDocument(rows=parser.rows, page_or_sheet=[1] * len(parser.rows))
+    if not parser.tables:
+        return TabularDocument(rows=[], page_or_sheet=[])
+    if table_index is not None:
+        rows = parser.tables[table_index]
+    else:
+        # 默认挑行数最多的顶层表格——装饰性的导航/页头/页脚表格行数很少，
+        # 真正的数据表通常是页面里行数最多的那个，已用真实多表格页面验证过。
+        rows = max(parser.tables, key=len)
+    return TabularDocument(rows=rows, page_or_sheet=[1] * len(rows))
 
 
 def _read_excel(path: Path) -> TabularDocument:
@@ -609,6 +636,91 @@ def parse_zhejiang_admission_score_rows(
                 major_group_code=major_code,
                 major_group_name=major_name,
                 min_score=min_score,
+                min_rank=_integer(value(row, "位次")),
+                provenance=_row_number(
+                    provenance, row_number, document.page_or_sheet[row_number - 1]
+                ),
+            )
+        )
+    return records
+
+
+def parse_single_university_admission_result_rows(
+    document: TabularDocument,
+    *,
+    provenance: Provenance,
+    config: PipelineConfig,
+    target_university_code: str,
+    batch: str,
+) -> list[AdmissionScoreRecord]:
+    """有些学校自己在"历年招生"栏目发布的录取情况页，字段比省考试院投档线表更
+    丰富——真实表头是"专业名称/录取数/最高分/最低分/平均分/最低位次"（已用杭州
+    师范大学2025年浙江省普通类一段首轮录取情况页验证），带平均分/最高分/实际
+    录取人数，这些是`parse_zhejiang_admission_score_rows`（省考试院表，只有
+    分数线+位次）没有的补充信息，对应PRD"专业录取最低分、最低位次...官方提供时
+    保存平均分、最高分和录取人数"这条要求。
+
+    没有专业代号（省考试院表才有），major_group_code复用专业名称本身（不是
+    编造代码，是如实反映"这份数据源里专业没有编号，名称就是唯一标识"）——这跟
+    省考试院表的major_group_code（数字代号）取值格式不同，两份数据的
+    natural_key不会撞在一起，是两条并存的独立记录，不是同一条记录的两个版本，
+    发布前需要人工决定要不要合并（见状态看板#9）。
+    """
+    by_code = {target.university_code: target for target in config.target_universities}
+    target = by_code.get(target_university_code)
+    if target is None:
+        raise ValueError(f"target_university_code {target_university_code!r} not in whitelist")
+
+    aliases = {
+        "专业名称": ("专业名称",),
+        "录取数": ("录取数", "录取人数"),
+        "最高分": ("最高分",),
+        "最低分": ("最低分",),
+        "平均分": ("平均分",),
+        "位次": ("最低位次", "位次"),
+    }
+    header_index = None
+    columns: dict[str, int] = {}
+    for index, row in enumerate(document.rows):
+        compact = [re.sub(r"\s+", "", value) for value in row]
+        found: dict[str, int] = {}
+        for canonical, keywords in aliases.items():
+            for cell_index, value in enumerate(compact):
+                if value and any(keyword in value for keyword in keywords):
+                    found[canonical] = cell_index
+                    break
+        if {"专业名称", "最低分"}.issubset(found):
+            header_index = index
+            columns = found
+            break
+    if header_index is None:
+        return []
+
+    def value(row: Sequence[str], key: str) -> str:
+        position = columns.get(key)
+        return row[position].strip() if position is not None and position < len(row) else ""
+
+    records: list[AdmissionScoreRecord] = []
+    for row_number in range(header_index + 1, len(document.rows)):
+        row = document.rows[row_number]
+        major_name = value(row, "专业名称")
+        min_score = _integer(value(row, "最低分"))
+        if not major_name or min_score is None:
+            continue
+        records.append(
+            AdmissionScoreRecord(
+                province=config.province,
+                year=provenance.year,
+                batch=batch,
+                subject_type="unified",
+                university_code=target.university_code,
+                university_name=target.name,
+                major_group_code=major_name,
+                major_group_name=major_name,
+                min_score=min_score,
+                max_score=_integer(value(row, "最高分")),
+                avg_score=_integer(value(row, "平均分")),
+                enrollment_count=_integer(value(row, "录取数")),
                 min_rank=_integer(value(row, "位次")),
                 provenance=_row_number(
                     provenance, row_number, document.page_or_sheet[row_number - 1]
