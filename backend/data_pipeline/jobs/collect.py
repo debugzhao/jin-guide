@@ -109,6 +109,21 @@ class PipelineJob:
                     )
                 if not is_new:
                     continue
+                if (
+                    node.depth == 0
+                    and source.discovery_depth >= 1
+                    and len(nodes) > 1
+                    and source.data_type in {"policy", "charter", "major_intro", "transfer_policy"}
+                ):
+                    # 入口页配了discovery_depth>=1且真的发现了子链接，说明这个source
+                    # 把入口页当"发现列表/学院导航"用，不是真正的正文——它本身的
+                    # HTML基本是站内导航菜单（首页/联系我们/校园风光/招生政策...），
+                    # 照常chunk会把这些菜单文字当成"专业介绍"正文存进rag_chunks。
+                    # 已用真实数据验证过这个坑：hdu-major-intro-2026、
+                    # zjut/nbu/zstu/zjgsu/zju的major_intro列表页都踩过，产出的
+                    # chunk内容清一色是导航栏文字，不是任何专业的介绍内容。单文档型
+                    # source（discovery_depth=0）不受影响，入口页本身就是正文。
+                    continue
                 document_id = document_model.id if document_model else node.artifact.checksum
                 validated = self._parse_node(source, node, document_id, report)
                 if repository and run and document_model and validated:

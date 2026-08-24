@@ -106,7 +106,7 @@ data_pipeline/configs/zhejiang.yaml --source <id> --persist` 对全部11个http�
 | 5-8 | 2023/2024 分数线+分数段表 | 🚫 | **产品决策：明确不做**（2026-08-23），不再是"未排期"而是主动排除范围，理由不变（浙江3+3推行时间线与格式存在不确定性，投入产出比低于其他任务） |
 | 9 | 10校专业录取线 | ✅ | 10校里5所确认有省考试院表之外的补充信息，且全部已跑通并转为valid：杭州师范大学46条、**浙江工商大学**55条（JSON接口，经enrichment反查逐分段表位次后全部转valid）、**温州医科大学**47条（JSON接口，含位次）、**浙江师范大学**66条（POST JSON接口，全省数据质量最完整，覆盖普通类+体育类+各艺术类）；宁波大学/西湖大学官网确认无历年专业录取统计入口（真实缺失非遗漏，非本任务范围能解决）。详见"2026-08-23 追加（浏览器复核）"与"2026-08-24 追加（第三轮）"两个小节 |
 | 10 | 院校/学院/专业主数据 | ❌ | 未登记数据源，且浙江"专业(类)+学校"模式下专业主数据的粒度需要重新设计 |
-| 11a | 10校章程/专业介绍（RAG） | ✅ | 章程**10校全覆盖**（浙大/宁波/浙工大/浙师大/浙理工/温医/杭师大/西湖/浙工商/**杭电**，杭电章程靠macOS Vision OCR识别PNG截图解决）+ 专业介绍9校（浙大/宁波/浙工大/浙理工/浙工商/杭电/**温医/浙师大/杭师大**，后3校仅代表性样本非全量，正文托管在微信公众号）已用真实数据跑通，累计890条`DocumentChunkRecord` valid（第一轮807+第二轮71+第三轮12），930个rag_chunks全部完成embedding（`SELECT count(*) FROM rag_chunks WHERE embedding IS NULL`=0，已实查验证）。详见"2026-08-23 追加（浏览器复核）"与"2026-08-24 追加（第三轮）"两个小节 |
+| 11a | 10校章程/专业介绍（RAG） | ✅ | 章程**10校全覆盖**（浙大/宁波/浙工大/浙师大/浙理工/温医/杭师大/西湖/浙工商/**杭电**，杭电章程靠macOS Vision OCR识别PNG截图解决）+ 专业介绍9校（浙大/宁波/浙工大/浙理工/浙工商/杭电/**温医/浙师大/杭师大**，后3校仅代表性样本非全量，正文托管在微信公众号）已用真实数据跑通，731个rag_chunks全部完成embedding（`SELECT count(*) FROM rag_chunks WHERE embedding IS NULL`=0，已实查验证；此数字已扣除第四轮清理掉的145个历史遗留垃圾文档，是真实干净的有效数据）。详见"2026-08-23 追加（浏览器复核）"「2026-08-24 追加（第三轮）」与「2026-08-24 追加（第四轮）」三个小节 |
 | 11b | 转专业政策（RAG） | 🚫 | **产品决策：明确不做**（2026-08-23） |
 | 12 | 教育部院校/专业标准目录 | ⚠️ | 见下方"2026-08-23 追加"小节——之前"可与江苏共用"这句结论未经核实，正在重新核查 |
 | 13 | 业务表同步 loader | ✅ | 已完成，见§0.1（`enrollment_data_admission_scores`/`rank_segments`/`admission_plans`分别778/854/193行，跟发布记录数完全对齐） |
@@ -196,6 +196,47 @@ RAG之前卡在Moonshot embedding账户权限（`09_pipeline_run_status.md`#11�
 **踩到的坑**：
 - 通过`--persist`往DB里跑通的文档，`PipelineRepository.register_document`按`(source_id, checksum)`去重，**同一份原始内容重复采集会被判定"未变化"直接跳过重新解析**，哪怕解析代码本身在两次采集之间已经修了bug——修复zjnu的`natural_key`撞车问题后，必须先手工`DELETE FROM pipeline_staging_records/pipeline_source_documents WHERE source_id=...`清掉旧记录才能让fix生效，不是脚本没跑对
 - `chunk_document`的`max_chars`截断逻辑只在"追加下一段前"检查累计长度，只有一个"段落"（没有`\n`）时永远不会触发拆分——第一版把OCR/微信正文整段拼接成无换行的一大块，导致产出一个远超1200字的巨型chunk；改成按中文句号重新分句再用`\n`拼接，才能让`chunk_document`按字数正常切成多个大小合理的chunk
+
+### 2026-08-24 追加（第四轮）：RAG垃圾数据清理 + 修复"发现列表页自身也被当正文"的新bug
+
+用户顺带追问#10为什么要重新设计时，一并查库确认了此前会话记忆里提到的"浙江RAG
+污染"（`rag_documents`/`rag_chunks`是跨省份共享表，浙江的脏数据会拖累其他省份
+检索精度）确实存在且规模不小，现场清理：
+
+**根因**：`nbu-major-intro-2026`/`zjut-major-intro-2026`/`zstu-major-intro-2026`/
+`zjgsu-major-intro-2026`4个source注册时配了`discovery_depth: 1`但没配
+`discovery_title_pattern`，`zju-major-intro-2026`配了但过宽（`班`会命中微信
+验证码墙链接），导致入口页全部导航链接（首页/联系我们/校园风光/三位一体报名
+系统/纯数字分页产物"2""3"..."8"）被当"可能的专业介绍"一起抓下来chunk。
+
+**清理过程**（`SELECT source_url FROM rag_documents`按域名复查+按URL模式建
+白名单，级联删`rag_chunks`/`rag_documents`/`pipeline_staging_records`/
+`pipeline_source_documents`）：
+
+| 批次 | 内容 | 数量 |
+|---|---|---|
+| 第一批 | 5校导航/分页/外链垃圾文档（首页/联系我们/校园风光/三位一体报名系统/纯数字分页等） | 124个rag_documents，级联197个rag_chunks |
+| 第二批 | 修复过程中发现的新bug：入口列表页本身也被当正文chunk（见下） | 6个rag_documents，级联9个rag_chunks |
+| 第三批 | hdu-major-intro-2026因页面带实时"浏览数"计数器，重跑验证时被误判成"内容变化"产生的14篇重复文章 | 14个rag_documents，级联66个rag_chunks |
+
+**顺带发现并修复一个新bug（不是历史遗留，是这类"列表页发现子文章"型source的
+通用设计缺陷，本次会话新加的`hdu-major-intro-2026`也中招）**：`jobs/collect.py`
+里入口页（depth=0）不论有没有配置discovery发现子链接，都会被一视同仁地
+`chunk_document`——但一个专门配了`discovery_depth>=1`且真发现了子链接的入口页，
+本质是"发现列表/学院导航"用的，它自己的HTML就是导航菜单，不是正文。已修复：
+`data_type`是`policy`/`charter`/`major_intro`/`transfer_policy`且
+`discovery_depth>=1`且真发现了子节点时，跳过对depth=0根节点本身的
+`_parse_node`调用（`pipeline_source_documents`审计记录仍保留，只是不再产出
+`DocumentChunkRecord`）。已用`pytest`全量260条验证不回归，并重新实跑6个受影响
+source确认不再产生垃圾chunk。
+
+**配置修复**：5个source补上精确的`discovery_title_pattern`（`discover_links`
+实际匹配"标题+绝对URL"拼接字符串，可以直接写URL路径特征，如
+`/info/1021/\d+\.htm`），防止未来重新采集再次引入同样的污染。
+
+**清理后现状**：`rag_documents`=252、`rag_chunks`=731，`embedding IS NULL`=0，
+已实查验证。已跟负责上海任务的并行会话约定的"谁开的谁收尾"原则不冲突——这批
+数据是浙江任务自己历史遗留的，由浙江任务（本文档）自己收尾。
 
 ### 2026-08-23 追加：#12 教育部院校/专业标准目录 —— 核实结果
 

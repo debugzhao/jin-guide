@@ -352,6 +352,16 @@ sources:
     update_frequency: yearly
     discovery_title_pattern: 专业介绍
     discovery_depth: 1
+  # 2026-08-24追加：以下5校major_intro source最初注册时discovery_depth=1却没配
+  # discovery_title_pattern（除zju外），导致discover_links把entry页所有导航链接
+  # （首页/联系我们/校园风光/招生政策/三位一体报名系统、甚至纯数字分页产物"2""3"
+  # "4"）都当"可能的附件"抓下来一起chunk，混进rag_documents/rag_chunks（跨省份
+  # 共享表）拖累检索精度——同一个坑CLAUDE.md和本文档前面已经踩过多次（nbu-
+  # admission-plan-2026、章程页等），这里是漏网的。已用真实DB数据核实污染范围
+  # 并清理（124个垃圾rag_documents级联删除，见状态看板"RAG垃圾数据清理"小节），
+  # 现在补上title_pattern防止未来重新采集时再次引入——discover_links的
+  # pattern实际匹配"标题+绝对URL"拼接后的字符串（discovery.py:77），所以可以
+  # 直接写URL路径特征而不只是标题关键词。
   - id: zju-major-intro-2026
     name: 浙江大学专业介绍（创新班）
     entry_url: http://zdzsc.zju.edu.cn/cxb/list.htm
@@ -360,7 +370,10 @@ sources:
     target_university_code: "10335"
     parser: policy_document_v1
     update_frequency: yearly
-    discovery_title_pattern: 班
+    # 原来的"班"这个词太宽泛，会命中微信公众号链接（真实内容其实是反爬验证码墙，
+    # 已用真实数据核实这7条命中的wechat链接全是wappoc_appmsgcaptcha验证页，
+    # 不是真文章），收紧到只认zdzsc.zju.edu.cn域名下的正式文章页
+    discovery_title_pattern: zdzsc\.zju\.edu\.cn/2026/.*/page\.htm
     discovery_depth: 1
   - id: nbu-major-intro-2026
     name: 宁波大学专业介绍
@@ -370,6 +383,7 @@ sources:
     target_university_code: "11646"
     parser: policy_document_v1
     update_frequency: yearly
+    discovery_title_pattern: /info/1021/\d+\.htm
     discovery_depth: 1
   - id: zjut-major-intro-2026
     name: 浙江工业大学专业介绍（工大教授话专业）
@@ -379,6 +393,7 @@ sources:
     target_university_code: "10337"
     parser: policy_document_v1
     update_frequency: yearly
+    discovery_title_pattern: neId=\d+
     discovery_depth: 1
   - id: zstu-major-intro-2026
     name: 浙江理工大学专业介绍（按学院）
@@ -388,6 +403,7 @@ sources:
     target_university_code: "10338"
     parser: policy_document_v1
     update_frequency: yearly
+    discovery_title_pattern: /info/1096/\d+\.htm
     discovery_depth: 1
   - id: zjgsu-major-intro-2026
     name: 浙江工商大学专业介绍（按学院）
@@ -397,6 +413,10 @@ sources:
     target_university_code: "10353"
     parser: policy_document_v1
     update_frequency: yearly
+    # 真实专业详情页在zjsu.edu.cn域名下（不是zjgsu，站点内部重定向后的真实域名），
+    # 只保留这类?news/NNN.html的具体专业页，学院首页(*.zjgsu.edu.cn/main.htm)
+    # 属于泛化的学院概览而非"专业介绍"本身，一并排除
+    discovery_title_pattern: zjsu\.edu\.cn/\?news/\d+\.html
     discovery_depth: 1
 
   # 温医/浙师大/杭师大专业介绍（2026-08-24新增）：三校统一列表页本身能访问，
