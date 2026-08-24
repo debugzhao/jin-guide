@@ -104,9 +104,9 @@ data_pipeline/configs/zhejiang.yaml --source <id> --persist` 对全部11个http�
 | 3 | 2026 招生计划（10校，`admission_plan`） | ⚠️ | **5校已用真实数据跑通**：新写`parse_single_university_admission_plan_rows`（单校专属页解析，不依赖"院校名称"列匹配白名单，因为target_university_code已经知道是哪一所）——宁波大学90条valid、浙江理工大学61条valid、杭州师范大学42条valid，共193条全部`valid`、0条`needs_review`/`rejected`。浙江工业大学确认真实内容需要JS渲染（`#news1content`静态HTML里是空的，已用真实响应验证），改成`collection_method: manual`；浙江工商大学本来就是manual（JS查询页）。**5校未登记**：浙大/西湖大学官网无承载页；杭电未定位到2025/2026年具体条目；温州医科大学数据在微信公众号文章里，共2/10走manual、5/10走http全部跑通、3/10缺口 |
 | 4 | 2025/2026 招生政策（`policy`） | ✅ | **已用真实数据跑通并验证**：`--source zjzs-policy-2026`真实拉取通知页+docx附件（zjzs.net的附件是`downfile.jsp?...&filename=x.docx`下载代理端点，不是直链，过程中发现并修复了3个连带bug，见下方"Implement阶段发现的新问题"），docx正文提取出11条`DocumentChunkRecord`（内容可读、非乱码）+ 1条`valid`的`PolicyRuleRecord`（`volunteer_mode=parallel`, `max_volunteers=80`，已用真实政策原文验证准确）+ 1条`needs_review`（来自入口公告页本身，同江苏#4"空壳公告页"模式） |
 | 5-8 | 2023/2024 分数线+分数段表 | 🚫 | **产品决策：明确不做**（2026-08-23），不再是"未排期"而是主动排除范围，理由不变（浙江3+3推行时间线与格式存在不确定性，投入产出比低于其他任务） |
-| 9 | 10校专业录取线 | ⚠️ | 已用Playwright浏览器逐校核实，10校里4所确认有省考试院表之外的补充信息：杭州师范大学（46条valid）、**浙江工商大学**（真实JSON接口，55条parsed但缺位次字段全部needs_review，见下方"2026-08-23 追加（浏览器复核）"）、**温州医科大学**（真实JSON接口，47条全部valid，含位次）已用真实数据跑通；宁波大学/西湖大学官网确认无历年专业录取统计入口（真实缺失非遗漏）；浙江师范大学数据在JS单页应用未继续攻克 |
+| 9 | 10校专业录取线 | ✅ | 10校里5所确认有省考试院表之外的补充信息，且全部已跑通并转为valid：杭州师范大学46条、**浙江工商大学**55条（JSON接口，经enrichment反查逐分段表位次后全部转valid）、**温州医科大学**47条（JSON接口，含位次）、**浙江师范大学**66条（POST JSON接口，全省数据质量最完整，覆盖普通类+体育类+各艺术类）；宁波大学/西湖大学官网确认无历年专业录取统计入口（真实缺失非遗漏，非本任务范围能解决）。详见"2026-08-23 追加（浏览器复核）"与"2026-08-24 追加（第三轮）"两个小节 |
 | 10 | 院校/学院/专业主数据 | ❌ | 未登记数据源，且浙江"专业(类)+学校"模式下专业主数据的粒度需要重新设计 |
-| 11a | 10校章程/专业介绍（RAG） | ✅ | 章程9校（浙大/宁波/浙工大/浙师大/浙理工/温医/杭师大/**西湖/浙工商**）+ 专业介绍6校（浙大/宁波/浙工大/浙理工/浙工商/**杭电**）已用真实数据跑通，第一轮807条+第二轮71条（西湖1+浙商大2+杭电68）共878条`DocumentChunkRecord` valid，918个rag_chunks（含本轮新增71个）全部用`scripts/chunk_documents.py --embed-only`补齐DashScope 1024维embedding，见下方"2026-08-23 追加（浏览器复核）"小节；仅杭电章程（正文是整张PNG截图需OCR）和温医/浙师大/杭师大专业介绍（正文托管在微信公众号）仍缺 |
+| 11a | 10校章程/专业介绍（RAG） | ✅ | 章程**10校全覆盖**（浙大/宁波/浙工大/浙师大/浙理工/温医/杭师大/西湖/浙工商/**杭电**，杭电章程靠macOS Vision OCR识别PNG截图解决）+ 专业介绍9校（浙大/宁波/浙工大/浙理工/浙工商/杭电/**温医/浙师大/杭师大**，后3校仅代表性样本非全量，正文托管在微信公众号）已用真实数据跑通，累计890条`DocumentChunkRecord` valid（第一轮807+第二轮71+第三轮12），930个rag_chunks全部完成embedding（`SELECT count(*) FROM rag_chunks WHERE embedding IS NULL`=0，已实查验证）。详见"2026-08-23 追加（浏览器复核）"与"2026-08-24 追加（第三轮）"两个小节 |
 | 11b | 转专业政策（RAG） | 🚫 | **产品决策：明确不做**（2026-08-23） |
 | 12 | 教育部院校/专业标准目录 | ⚠️ | 见下方"2026-08-23 追加"小节——之前"可与江苏共用"这句结论未经核实，正在重新核查 |
 | 13 | 业务表同步 loader | ✅ | 已完成，见§0.1（`enrollment_data_admission_scores`/`rank_segments`/`admission_plans`分别778/854/193行，跟发布记录数完全对齐） |
@@ -172,10 +172,30 @@ RAG之前卡在Moonshot embedding账户权限（`09_pipeline_run_status.md`#11�
 - `parsers/tabular.py`新增`parse_zjgsu_admission_score_json`/`parse_wmu_admission_score_json`
 - `jobs/collect.py::_parse_node`新增两处分支：charter类按`source.parser=="westlake_embedded_html_v1"`切到专用提取器；admission_score类新增`suffix==".json"`分支按`source.parser`分派到上述两个JSON解析器（`HttpCollector`本身仍只支持GET，浙商大接口验证过GET+query string和POST+form body返回完全一致的数据，不需要新增POST支持）
 
-**仍未解决、需要额外工程的缺口**（如实标注，非回避）：
-- 杭电章程需要通用长文本OCR（现有OCR基础设施是`tabular.py`里为表格行聚类设计的，直接复用会把整页当表格识别，效果不对）
-- 温医/浙师大/杭师大专业介绍正文在微信公众号，需要新增一条"浏览器抓取→人工整理JSON→专用发布脚本"的manual数据落库路径（参考`scripts/publish_jiangsu_admission_plans.py`），目前pipeline没有这条路径
-- 浙商大专业录取线55条数据卡在`needs_review`（缺位次），若要发布需要额外做"按分数关联省考试院逐分段表反查位次"的enrichment（现有validator提示信息本身就是这么建议的），本轮未做
+**本轮遗留的3项缺口已在2026-08-24第三轮全部推进**（见下方新增小节），仅微信专业介绍因数量庞大只采了代表性样本，其余两项已彻底解决。
+
+### 2026-08-24 追加（第三轮）：浙师大专业录取线API + 杭电章程OCR + 位次enrichment + 微信专业介绍样本
+
+继续核对上一轮遗留的3项"需要额外工程"缺口，逐项处理：
+
+| 缺口 | 处理结果 |
+|---|---|
+| 浙江师范大学专业录取线（JS单页应用） | **找到真实API，彻底解决**——`lqcx.zjnu.edu.cn/zsdata/lqxx/#/lnfs`背后是`POST /lqxx/s/api/front/lqxx/getList`（`Access-Control-Allow-Origin`锁同源只影响浏览器fetch，不影响httpx），新增`SourceConfig.request_method`/`request_body`支持POST（`HttpCollector`此前只支持GET），新写`parse_zjnu_admission_score_json`。已注册`zjnu-major-admission-result-2025`：66条parsed，2条因"音乐学（师范）"器乐/声乐主项同名撞`natural_key`被拒（同宁波大学"音乐学"器乐/声乐主项在`AdmissionPlanRecord.restrictions`踩过的坑），改成把`zslb`类别并入`major_group_name`消歧后重跑，**66条全部valid**，是数据质量最完整的一批（含最高分/最低分/平均分/最低位次/实际录取人数，覆盖普通类+体育类+各艺术类） |
+| 杭州电子科技大学章程（PNG截图） | **用macOS Vision框架OCR彻底解决**——在宿主机（不是docker容器，Vision框架需要真机macOS）跑通`zh-Hans`中文识别（现有`tabular.py`那套OCR配置是`en-US`+面向表格行聚类，不能直接复用），16个章程条款全部识别正确、可读。新写通用脚本`scripts/publish_zhejiang_manual_document.py`（复用`chunk_document`+`PipelineRepository.register_document/stage_records`，`stage_records`本身就会自动同步`rag_documents`/`rag_chunks`，不用另写RAG写入逻辑），已注册`hdu-charter-2026`（`collection_method: manual`），**2条valid** |
+| 浙江工商大学专业录取线55条卡`needs_review`（缺位次） | **用已发布的省考试院逐分段表做enrichment，彻底解决**——`data_pipeline.loaders.apply_admission_score_enrichment`（按`subject_type`+`min_score`反查`RankSegmentRecord.cumulative_rank`）已经存在但只在江苏/上海的发布脚本里被调用过，浙江从未跑过。新写`scripts/enrich_zhejiang_scores.py`直接复用，对province=浙江/year=2025全量重跑一遍：**55条zjgsu记录全部转valid**，附带修复了原有zjzs投档线表2025年5条历史needs_review里的4条（原因相同，此前没人跑过这一步），全省2025年admission_score从"375 valid"提升到"588 valid，仅剩1条`浙江大学工科试验班(竺可桢学院图灵班)`（695分，超出分数段表覆盖范围，真实边界情况非bug）" |
+| 温医/浙师大/杭师大专业介绍（微信公众号） | **机制打通，但只采了代表性样本，非全量**——用真实浏览器（Playwright）逐篇打开WeChat文章能完整读到全文（未触发验证墙，`curl`会302到验证页），但**只有`mp.weixin.qq.com/s/短链`这种跳转形式能绕开**，长参数形式的直链（`?__biz=...&mid=...`）实测仍会触发`wappoc_appmsgcaptcha`验证码墙，这是本轮新发现的边界。新写通用脚本`scripts/publish_zhejiang_manual_document.py`（同上，document_type=major_intro）把复制到的正文手工入库，实采：温医5篇（老年医学与健康/健康与医疗保障/智能医学工程/法医学/卫生检验与检疫，温医专业介绍列表共6页约60个专业，只采了第1页部分）、浙师大2篇（初阳学院7个专业合并一篇+小学教育单独一篇）、杭师大2篇（金融工程/数字经济，杭师大有23个学院数十个专业）。**共10条valid chunk**。三校仍有大量专业未采，如需全量覆盖工作量随专业数线性增长，需要更多轮次 |
+
+**代码改动**（均已跑`pytest`全量260条用例验证不回归）：
+- `config.py::SourceConfig`新增`request_method`/`request_body`字段支持POST JSON body请求
+- `collectors/http.py::HttpCollector._request_with_retries`按`request_method`分派GET/POST
+- `parsers/tabular.py`新增`parse_zjnu_admission_score_json`
+- `raw_store.py::_safe_suffix`新增`.txt`/`text/plain`识别（manual文档落盘用）
+- 新脚本`scripts/enrich_zhejiang_scores.py`（复用已有的`apply_admission_score_enrichment`，浙江此前从未调用过）
+- 新脚本`scripts/publish_zhejiang_manual_document.py`（通用manual文档入库工具，把OCR/浏览器抓到的正文按句号重新分句后交给`chunk_document`切块，避免"逐行太碎丢内容"和"整体一大块不分chunk"两种极端；已同时用于OCR章程和微信专业介绍两种场景，后续新的manual来源可以直接复用不用再写专用脚本）
+
+**踩到的坑**：
+- 通过`--persist`往DB里跑通的文档，`PipelineRepository.register_document`按`(source_id, checksum)`去重，**同一份原始内容重复采集会被判定"未变化"直接跳过重新解析**，哪怕解析代码本身在两次采集之间已经修了bug——修复zjnu的`natural_key`撞车问题后，必须先手工`DELETE FROM pipeline_staging_records/pipeline_source_documents WHERE source_id=...`清掉旧记录才能让fix生效，不是脚本没跑对
+- `chunk_document`的`max_chars`截断逻辑只在"追加下一段前"检查累计长度，只有一个"段落"（没有`\n`）时永远不会触发拆分——第一版把OCR/微信正文整段拼接成无换行的一大块，导致产出一个远超1200字的巨型chunk；改成按中文句号重新分句再用`\n`拼接，才能让`chunk_document`按字数正常切成多个大小合理的chunk
 
 ### 2026-08-23 追加：#12 教育部院校/专业标准目录 —— 核实结果
 
@@ -226,7 +246,12 @@ RAG之前卡在Moonshot embedding账户权限（`09_pipeline_run_status.md`#11�
    JSON接口102条），2项确认真实无解（宁波/西湖无官方历年专业录取统计），
    3项确认需要额外工程（杭电章程OCR、3校专业介绍微信抓取、浙商大录取线
    位次enrichment）                                                    ✅ 已完成 2026-08-23（第二轮）
-⑬#10 院校/学院/专业主数据                                                 ← 下一步（未开始）
+⑭第三轮：浙师大专业录取线找到POST JSON接口（66条valid）、杭电章程用macOS
+   Vision OCR解决（2条valid）、浙商大55条位次enrichment跑通全部转valid
+   （连带修复zjzs表历史4条needs_review）、温医/浙师大/杭师大专业介绍微信样本
+   采集（10条valid，非全量）。新增SourceConfig POST支持+两个通用脚本
+   （enrich_zhejiang_scores.py/publish_zhejiang_manual_document.py）      ✅ 已完成 2026-08-24（第三轮）
+⑮#10 院校/学院/专业主数据                                                 ← 下一步（未开始）
 ```
 
 ## 补充说明

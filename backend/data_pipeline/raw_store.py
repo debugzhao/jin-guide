@@ -100,7 +100,7 @@ class RawArtifactStore:
     def _safe_suffix(url: str, content_type: str | None, content: bytes = b"") -> str:
         allowed = {
             ".html", ".htm", ".xlsx", ".xls", ".csv", ".pdf", ".json", ".xml",
-            ".docx", ".doc", ".jpg", ".jpeg", ".png",
+            ".docx", ".doc", ".jpg", ".jpeg", ".png", ".txt",
         }
         parsed = urlparse(url)
         suffix = Path(parsed.path).suffix.lower()
@@ -133,6 +133,7 @@ class RawArtifactStore:
             "application/msword": ".doc",
             "image/jpeg": ".jpg",
             "image/png": ".png",
+            "text/plain": ".txt",
         }
         normalized_type = (content_type or "").split(";", 1)[0].strip().lower()
         return mime_suffixes.get(normalized_type, ".bin")

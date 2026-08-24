@@ -62,9 +62,16 @@ class HttpCollector:
         last_error: Exception | None = None
         for attempt in range(source.max_retries + 1):
             try:
-                response = await client.get(
-                    str(source.entry_url), timeout=source.timeout_seconds
-                )
+                if source.request_method == "POST":
+                    response = await client.post(
+                        str(source.entry_url),
+                        json=source.request_body or {},
+                        timeout=source.timeout_seconds,
+                    )
+                else:
+                    response = await client.get(
+                        str(source.entry_url), timeout=source.timeout_seconds
+                    )
                 response.raise_for_status()
                 return response
             except (httpx.HTTPError, httpx.TimeoutException) as exc:

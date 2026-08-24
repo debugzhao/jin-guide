@@ -47,6 +47,13 @@ class SourceConfig(BaseModel):
     max_download_bytes: int = Field(default=50 * 1024 * 1024, gt=0)
     discovery_title_pattern: str | None = Field(default=None, max_length=500)
     discovery_depth: int = Field(default=1, ge=0, le=2)
+    # 部分JS单页应用背后的查询接口只接受POST+JSON body（已用浙江师范大学
+    # lqcx.zjnu.edu.cn/lqxx/s/api/front/lqxx/getList真实验证：GET同参数返回
+    # HTTP 500 "Request method 'GET' not supported"），Access-Control-Allow-
+    # Origin锁定同源只影响浏览器fetch，httpx等服务端客户端不受CORS限制，
+    # 直接POST能拿到跟浏览器里完全一样的数据，不需要用Playwright采集
+    request_method: Literal["GET", "POST"] = "GET"
+    request_body: dict | None = None
 
 
 class PipelineConfig(BaseModel):

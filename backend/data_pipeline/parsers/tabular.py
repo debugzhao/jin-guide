@@ -1072,3 +1072,64 @@ def parse_wmu_admission_score_json(
             )
         )
     return records
+
+
+def parse_zjnu_admission_score_json(
+    path: Path,
+    *,
+    provenance: Provenance,
+    config: PipelineConfig,
+    target_university_code: str,
+) -> list[AdmissionScoreRecord]:
+    """浙江师范大学"历年分数"栏目是纯前端JS单页应用（`lqcx.zjnu.edu.cn/zsdata/
+    lqxx/#/lnfs`），此前判定"httpx拿不到数据需要浏览器渲染"——这只说对了一半：
+    确实不能直接抓这个URL（`#`后面是前端路由不是真实请求），但页面背后调用的
+    是`POST /lqxx/s/api/front/lqxx/getList`这个JSON接口，已用真实响应验证
+    httpx直接POST同样的body（`{type:"lnfs",sf,nf,zslb,klmc,xqmc}`）能拿到和
+    浏览器里一模一样的数据，不需要Playwright；`Access-Control-Allow-Origin`
+    锁定同源只影响浏览器端`fetch`，不影响服务端HTTP客户端。字段是拼音缩写
+    （zymc=专业名称/lqrs=录取人数/zgf=最高分/pjf=平均分/zdf=最低分/zdfwc=
+    最低位次），`lqrs`这里确实是"实际录取人数"（不是招生计划数），跟
+    `AdmissionScoreRecord.enrollment_count`语义一致，可以直接填。
+    """
+    by_code = {target.university_code: target for target in config.target_universities}
+    target = by_code.get(target_university_code)
+    if target is None:
+        raise ValueError(f"target_university_code {target_university_code!r} not in whitelist")
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    records: list[AdmissionScoreRecord] = []
+    for row in payload.get("list") or []:
+        if row.get("sf") != config.province:
+            continue
+        major_name = str(row.get("zymc") or "").strip()
+        min_score = _integer(str(row.get("zdf") or ""))
+        if not major_name or min_score is None:
+            continue
+        # 艺术类同一专业名称常按主项拆成多条独立招生线（真实数据："音乐学（师范）"
+        # 器乐类/声乐类分数线不同但专业名称字面完全相同），只用major_name当
+        # natural_key会撞车被判定为重复记录而误拒——跟宁波大学"音乐学（师范）"
+        # 器乐/声乐主项在AdmissionPlanRecord.restrictions里遇到的是同一类问题，
+        # 这里没有restrictions字段，改成把类别并进major_group_name本身
+        category = str(row.get("zslb") or "").strip()
+        if category and category != "普通类":
+            major_name = f"{major_name}（{category}）"
+        records.append(
+            AdmissionScoreRecord(
+                province=config.province,
+                year=int(row.get("nf") or provenance.year),
+                batch=str(row.get("pcmc") or "").strip() or "本科批",
+                subject_type="unified",
+                university_code=target.university_code,
+                university_name=target.name,
+                major_group_code=major_name,
+                major_group_name=major_name,
+                min_score=min_score,
+                max_score=_integer(str(row.get("zgf") or "")),
+                avg_score=_integer(str(row.get("pjf") or "")),
+                enrollment_count=_integer(str(row.get("lqrs") or "")),
+                min_rank=_integer(str(row.get("zdfwc") or "")),
+                provenance=provenance,
+            )
+        )
+    return records

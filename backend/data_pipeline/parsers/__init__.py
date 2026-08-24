@@ -9,6 +9,7 @@ from data_pipeline.parsers.tabular import (
     parse_wmu_admission_score_json,
     parse_zhejiang_admission_score_rows,
     parse_zjgsu_admission_score_json,
+    parse_zjnu_admission_score_json,
     read_tabular_document,
 )
 from data_pipeline.parsers.document import (
@@ -29,6 +30,7 @@ __all__ = [
     "parse_wmu_admission_score_json",
     "parse_zhejiang_admission_score_rows",
     "parse_zjgsu_admission_score_json",
+    "parse_zjnu_admission_score_json",
     "read_tabular_document",
     "chunk_document",
     "extract_document_text",

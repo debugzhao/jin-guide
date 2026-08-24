@@ -315,10 +315,22 @@ sources:
     parser: policy_document_v1
     update_frequency: yearly
     discovery_depth: 0
-  # 杭州电子科技大学：章程正文本身是一整张PNG截图（/admin/upload/image/
-  # 20260521111207_43906.png，950x3249px），已用curl+Playwright双重验证不是
-  # JS渲染问题而是真的没有文本版本，需要整页OCR（不是现有tabular.py那套面向
-  # 表格行聚类的OCR，是通用长文本OCR），本轮不做，如实标记缺口。
+  # 杭州电子科技大学（2026-08-24新增）：章程正文本身是一整张PNG截图
+  # （/admin/upload/image/20260521111207_43906.png，实际1587x5428px），不是
+  # JS渲染问题，是真的没有文本版本。用macOS Vision框架（zh-Hans识别，非现有
+  # tabular.py那套仅认数字/面向表格行聚类的OCR配置）在宿主机跑通整页中文OCR，
+  # 16个章程条款全部识别正确、可读；collection_method标记manual是如实反映
+  # "无法用HttpCollector自动跑"，正文通过scripts/publish_zhejiang_manual_
+  # document.py手工注入，不是编造数据。
+  - id: hdu-charter-2026
+    name: 杭州电子科技大学2026年普通高校招生章程
+    entry_url: https://zhaosheng.hdu.edu.cn/admin/upload/image/20260521111207_43906.png
+    data_type: charter
+    year: 2026
+    target_university_code: "10336"
+    collection_method: manual
+    parser: manual_ocr_v1
+    update_frequency: yearly
 
   # 10校专业介绍（RAG，2026-08-23新增）：以下6校有清晰的"专业介绍"列表页，用
   # discovery自动发现列表下的各专业/学院详情页；杭州电子科技大学此前判定"无统一
@@ -387,6 +399,41 @@ sources:
     update_frequency: yearly
     discovery_depth: 1
 
+  # 温医/浙师大/杭师大专业介绍（2026-08-24新增）：三校统一列表页本身能访问，
+  # 但正文最终都指向微信公众号文章（杭师大站内Details页也只是个跳转卡片），
+  # plain httpx访问微信会被重定向到验证页（已用curl验证302），只能用真实
+  # 浏览器逐篇打开+复制正文，再走scripts/publish_zhejiang_manual_document.py
+  # 手工入库；工作量随专业数量线性增长（温医约60个、浙师大/杭师大更多），
+  # 本轮各校只采了一部分作为代表性样本，覆盖度如实记录在状态看板，不冒充
+  # 全量完成。source本身只登记一次，每篇文章各自成一条staging record。
+  - id: wmu-major-intro-2026-wechat
+    name: 温州医科大学专业介绍（微信公众号，部分样本）
+    entry_url: https://zhaosheng.wmu.edu.cn/xyjs/zyjs.htm
+    data_type: major_intro
+    year: 2026
+    target_university_code: "10343"
+    collection_method: manual
+    parser: manual_wechat_v1
+    update_frequency: yearly
+  - id: zjnu-major-intro-2026-wechat
+    name: 浙江师范大学专业介绍（微信公众号，部分样本）
+    entry_url: https://zs.zjnu.edu.cn/zy/list.htm
+    data_type: major_intro
+    year: 2026
+    target_university_code: "10345"
+    collection_method: manual
+    parser: manual_wechat_v1
+    update_frequency: yearly
+  - id: hznu-major-intro-2026-wechat
+    name: 杭州师范大学专业介绍（微信公众号，部分样本）
+    entry_url: https://undergrad.hznu.edu.cn/zyjs_5.html
+    data_type: major_intro
+    year: 2026
+    target_university_code: "10346"
+    collection_method: manual
+    parser: manual_wechat_v1
+    update_frequency: yearly
+
   # 10校专业录取线补充数据（2026-08-23新增，见状态看板#9）：省考试院投档线表
   # 只有分数线+位次，缺平均分/最高分/实际录取人数——杭州师范大学"历年招生"栏目
   # 自己发布了含这些字段的录取情况页，且是2025年（最新），已用真实数据核实过
@@ -432,5 +479,29 @@ sources:
     year: 2025
     target_university_code: "10343"
     parser: wmu_admission_score_json_v1
+    update_frequency: yearly
+    discovery_depth: 0
+
+  # 浙江师范大学（2026-08-24新增，见状态看板"继续执行"小节）：此前判定"历年分数
+  # 栏目已迁移到JS单页应用，httpx拿不到数据"，用Playwright核实后发现背后是
+  # POST /lqxx/s/api/front/lqxx/getList这个JSON接口，httpx直接POST同样的body
+  # 就能拿到（Access-Control-Allow-Origin锁同源只影响浏览器fetch，不影响
+  # 服务端HTTP客户端），不需要浏览器渲染。新增SourceConfig.request_method/
+  # request_body支持POST（HttpCollector此前只支持GET）。
+  - id: zjnu-major-admission-result-2025
+    name: 浙江师范大学2025年浙江省分专业录取情况
+    entry_url: https://lqcx.zjnu.edu.cn/lqxx/s/api/front/lqxx/getList
+    data_type: admission_score
+    year: 2025
+    target_university_code: "10345"
+    request_method: POST
+    request_body:
+      type: lnfs
+      sf: 浙江
+      nf: "2025"
+      zslb: 全部
+      klmc: 全部
+      xqmc: ""
+    parser: zjnu_admission_score_json_v1
     update_frequency: yearly
     discovery_depth: 0

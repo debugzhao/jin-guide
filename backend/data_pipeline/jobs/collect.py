@@ -27,6 +27,7 @@ from data_pipeline.parsers import (
     parse_wmu_admission_score_json,
     parse_zhejiang_admission_score_rows,
     parse_zjgsu_admission_score_json,
+    parse_zjnu_admission_score_json,
     read_tabular_document,
 )
 from data_pipeline.raw_store import RawArtifactStore, StoredArtifact
@@ -228,6 +229,13 @@ class PipelineJob:
                     )
                 elif source.parser == "wmu_admission_score_json_v1":
                     records = parse_wmu_admission_score_json(
+                        node.artifact.content_path,
+                        provenance=provenance,
+                        config=self.config,
+                        target_university_code=source.target_university_code,
+                    )
+                elif source.parser == "zjnu_admission_score_json_v1":
+                    records = parse_zjnu_admission_score_json(
                         node.artifact.content_path,
                         provenance=provenance,
                         config=self.config,
