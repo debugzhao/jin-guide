@@ -32,6 +32,12 @@ RERANK_SCORE_FLOOR = 0.3
 RERANK_TOP_N = 8
 VECTOR_TOP_K = 20
 MAX_CHUNKS_PER_DOC = 3
+# Cohere 不可用（熔断/未配置/调用失败）时的降级门槛：pgvector 余弦相似度和 Cohere
+# cross-encoder 相关性分数不是同一把尺子，这里的 0.55 不是"等价换算"，是从一次真实
+# 案例（东华大学"学费"问题）里标定的经验值——命中学费的正确 chunk 相似度 0.66，
+# 同一份章程里跑题的"志愿投档"段落 0.52，另一份专业介绍文档 0.48，都在这条线以下。
+# 没有这道门槛，降级路径此前是"不管分数多低，硬凑够 top_n 个"，噪声会原样交给用户。
+DEGRADED_SIMILARITY_FLOOR = 0.55
 
 
 # ── 1. vector_search ──────────────────────────────────────────────────────────
@@ -203,6 +209,24 @@ def search_admission_sql(
         return ToolResponse.error("SQL_SEARCH_FAILED", str(exc), {})
 
 
+def _degrade_to_vector_top_n(chunks: list[dict], top_n: int) -> list[dict]:
+    """Cohere 不可用时的降级排序：按相似度过一遍 DEGRADED_SIMILARITY_FLOOR，
+    并复用 MAX_CHUNKS_PER_DOC 限制单文档条数——不然低质量匹配会原样凑数返回。"""
+    above_floor = [c for c in chunks if c.get("similarity", 0) >= DEGRADED_SIMILARITY_FLOOR]
+    ranked = sorted(above_floor, key=lambda c: c.get("similarity", 0), reverse=True)
+
+    doc_counts: dict[str, int] = defaultdict(int)
+    filtered: list[dict] = []
+    for c in ranked:
+        doc_id = c.get("document_id", "")
+        if doc_counts[doc_id] < MAX_CHUNKS_PER_DOC:
+            doc_counts[doc_id] += 1
+            filtered.append(c)
+        if len(filtered) >= top_n:
+            break
+    return filtered
+
+
 # ── 3. rerank_evidence ────────────────────────────────────────────────────────
 
 async def rerank_evidence(
@@ -219,8 +243,8 @@ async def rerank_evidence(
         return ToolResponse.success("no chunks to rerank", {"chunks": []})
 
     if _breaker.is_open("cohere_rerank"):
-        # 降级：按相似度分数取前 top_n 个
-        degraded = sorted(chunks, key=lambda c: c.get("similarity", 0), reverse=True)[:top_n]
+        # 降级：按相似度分数取前 top_n 个（过 DEGRADED_SIMILARITY_FLOOR，见常量注释）
+        degraded = _degrade_to_vector_top_n(chunks, top_n)
         return ToolResponse.partial(
             text="Cohere rerank circuit breaker OPEN — using vector top-N fallback",
             data={"chunks": degraded, "degraded": True},
@@ -228,7 +252,7 @@ async def rerank_evidence(
 
     if not settings.cohere_api_key:
         # 未配置 API key —— 优雅降级
-        degraded = sorted(chunks, key=lambda c: c.get("similarity", 0), reverse=True)[:top_n]
+        degraded = _degrade_to_vector_top_n(chunks, top_n)
         return ToolResponse.partial(
             text="Cohere API key not configured — using vector top-N fallback",
             data={"chunks": degraded, "degraded": True},
@@ -287,7 +311,7 @@ async def rerank_evidence(
         _breaker.record_result("cohere_rerank", err)
         logger.exception("rerank_evidence failed")
         # 降级为按向量相似度取 top_n
-        degraded = sorted(chunks, key=lambda c: c.get("similarity", 0), reverse=True)[:top_n]
+        degraded = _degrade_to_vector_top_n(chunks, top_n)
         return ToolResponse.partial(
             text=f"rerank failed ({exc!s}), using vector top-N fallback",
             data={"chunks": degraded, "degraded": True},

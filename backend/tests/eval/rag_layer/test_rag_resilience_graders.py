@@ -185,26 +185,48 @@ class TestRetrievalDegradesGracefully:
             breaker.record_result("cohere_rerank", _fail())
 
         chunks = [
-            {"content": "低相似度", "similarity": 0.2, "document_id": "d1"},
+            {"content": "较低相似度", "similarity": 0.6, "document_id": "d1"},
             {"content": "高相似度", "similarity": 0.9, "document_id": "d2"},
         ]
         result = await rerank_evidence(query="随便", chunks=chunks, top_n=8)
 
         assert result.is_partial
         assert result.data["degraded"] is True
-        assert [c["content"] for c in result.data["chunks"]] == ["高相似度", "低相似度"]
+        assert [c["content"] for c in result.data["chunks"]] == ["高相似度", "较低相似度"]
+
+    @pytest.mark.asyncio
+    async def test_rerank_evidence_degraded_fallback_still_filters_low_similarity_noise(self):
+        """真实 Cohere 精排不可用时，降级路径此前是"不管分数多低，硬凑够 top_n 个"——
+        2026-08-24 东华大学"学费"问题里，跑题的"专业介绍"片段（相似度 0.48）就是这样
+        原样混进了回答。DEGRADED_SIMILARITY_FLOOR 应该把这类低质量匹配挡在外面，
+        不能因为 Cohere 挂了就把及格线一起放弃。"""
+        from app.engine.retrieval import rerank_evidence
+
+        breaker = get_circuit_breaker()
+        for _ in range(3):
+            breaker.record_result("cohere_rerank", _fail())
+
+        chunks = [
+            {"content": "低相似度噪声", "similarity": 0.48, "document_id": "d1"},
+            {"content": "高相似度正确答案", "similarity": 0.66, "document_id": "d2"},
+        ]
+        result = await rerank_evidence(query="学费标准", chunks=chunks, top_n=8)
+
+        assert result.is_partial
+        assert [c["content"] for c in result.data["chunks"]] == ["高相似度正确答案"]
 
     @pytest.mark.asyncio
     async def test_rerank_evidence_degrades_when_cohere_api_key_missing(self, monkeypatch):
         from app.engine import retrieval as module
 
         monkeypatch.setattr(module.settings, "cohere_api_key", "")
-        chunks = [{"content": "唯一片段", "similarity": 0.5, "document_id": "d1"}]
+        chunks = [{"content": "唯一片段", "similarity": 0.9, "document_id": "d1"}]
 
         result = await module.rerank_evidence(query="随便", chunks=chunks)
 
         assert result.is_partial
         assert result.data["degraded"] is True
+        assert result.data["chunks"] == chunks
 
     @pytest.mark.asyncio
     async def test_rerank_evidence_short_circuits_on_empty_chunks(self):
