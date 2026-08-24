@@ -465,7 +465,7 @@ AI 对话建档页是当前版本的默认首页。它不是聊天框套表单�
 | --- | --- | --- |
 | Chat-first 聊天与建档意图判定 | `POST /api/v1/intake/chat`：IntakeAgent function calling（`intake-agent` 模型） | 是（事实性数据经工具查 SQL，不由 LLM 编数字） |
 | 高校分数/位次/选科要求/学费/多校对比查询 | `lookup_university_score`/`lookup_subject_requirement`/`compare_universities`（纯 SQL 工具） | 否 |
-| 章程/专业介绍原文细节查询（培养方向、转专业规则等） | `search_school_documents`（RAG：`vector_search`+`rerank_evidence`，返回原文片段+来源引用） | 否（检索原文，不由模型生成） |
+| 章程/专业介绍原文细节查询（培养方向、转专业规则等） | `search_school_documents`（RAG：`vector_search`+`rerank_evidence`，命中结果后模型读片段组织语言+标注来源，不是原文直接返回） | 是（组织语言经过 LLM，但数字仍来自检索原文，不由模型记忆生成） |
 | 下一个字段该问什么、是否跳过 | 确定性字段依赖图 | 否 |
 | 单字段矛盾/歧义检测 | `POST /api/v1/profile/field-check` + Rule Engine | 否 |
 | 把规则结果转成自然语言追问、理解自由文本回应 | Profile Agent | 是 |

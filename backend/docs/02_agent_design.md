@@ -433,8 +433,8 @@ sequenceDiagram
         LLM-->>API: tool_calls
         API->>RAG: embed_text → vector_search(限定 university_code) → rerank_evidence
         RAG-->>API: top-3 文档片段（含 source_url 引用）
-        API->>API: 同样直接模板化，不发起第二次流式请求
-        API-->>FE: SSE token 流（摘录 + 来源引用）
+        API->>LLM: 第二次流式请求（不带 tools，检索片段按<br/>tool 角色回填，见 _stream_document_synthesis）
+        LLM-->>FE: SSE token 流（模型读完片段后组织的自然语言，<br/>非原文直接返回；片段没答到的部分模型会如实说明）
     else 命中 start_profile_capture
         LLM-->>API: tool_calls
         API-->>FE: SSE trigger_profile_capture<br/>（前端内联渲染建档表单）
@@ -444,6 +444,8 @@ sequenceDiagram
 ```
 
 `search_school_documents` 复用主图 retrieval_agent 节点同一套 `vector_search`/`rerank_evidence`（pgvector + Cohere rerank，含 CircuitBreaker 熔断），只是按院校名先解析出 `University.code`，再用它限定检索范围——`vector_search` 的按校过滤键是 `university_code`（教育部院校代码），不是 `university_id`，两者不能混用（历史上这里曾经错配成 `university_id`，导致按校过滤的向量检索一直静默返回 0 条，2026-08-24 修复）。
+
+**为什么这个工具命中结果时要发第二次流式请求（跟 SQL 工具不一样）**：最初实现时照搬了 SQL 工具"直接模板化、不发第二次请求"的做法，结果是把 rerank 出来的 3 个 chunk 原文一股脑拼接返回——2026-08-24 实测验证时发现这样会把同一份章程里跑题的段落（比如"顺序志愿投档的批次"）、甚至完全不相关的专业介绍页原样返回给用户，等于只做了 Retrieve，没有 Augment+Generate。SQL 工具能直接模板化是因为查询结果本身就是结构化答案（一个数字就是一个数字，没有歧义）；RAG 检索到的是非结构化原文，"哪几句话真正回答了用户的问题"需要模型读完上下文才能判断，跳过这一步等于让用户自己从原文里找答案。`_stream_document_synthesis` 把片段按标准 function-calling 协议（`assistant.tool_calls` + `role: tool`）回填给模型，发起第二次流式请求（不带 `tools`，避免递归调用），事实性数字依然只来自检索到的文档（prompt 里明确要求"只根据这些片段回答，片段没覆盖的部分如实说明信息不足"），只是多了一步真正的生成。
 
 ### 10.3 ConversationAgent（报告问答）—— 现状：纯流式，无 tool-calling
 

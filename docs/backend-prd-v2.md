@@ -424,7 +424,7 @@ SSE 响应事件：`token`（增量文本）、`trigger_profile_capture`（前�
 | `lookup_university_score` | 查某校在某省的历年录取分/位次，含院校级学费区间（`backend/app/engine/school_lookup.py`） | 否，纯 SQL |
 | `lookup_subject_requirement` | 查某校（某专业）的选科要求/体检限制 | 否，纯 SQL |
 | `compare_universities` | 多校在同一省份的分数/位次/选科要求/学费并排对比，只出结构化数据不含定性介绍 | 否，纯 SQL |
-| `search_school_documents` | 查某校章程/专业介绍原文片段（培养方向、转专业规则、分专业学费细节等 SQL 覆盖不到的内容），复用主图 retrieval_agent 同一套 `vector_search`+`rerank_evidence`（`backend/app/engine/document_search.py`），返回 top-3 片段 + `source_url` 引用 | 否，RAG 检索原文，不由模型生成 |
+| `search_school_documents` | 查某校章程/专业介绍原文片段（培养方向、转专业规则、分专业学费细节等 SQL 覆盖不到的内容），复用主图 retrieval_agent 同一套 `vector_search`+`rerank_evidence`（`backend/app/engine/document_search.py`），命中真实结果时发第二次流式请求（不带 tools）让模型读完片段组织语言并标注来源（`_stream_document_synthesis`），不是原文直接返回 | 事实性数字仍来自检索到的文档原文，不是模型记忆；但组织语言这一步经过 LLM |
 | `start_profile_capture` | 识别到"开始建档/生成报告"意图时调用的信号工具，不返回数据 | — |
 
 系统提示词硬性要求：涉及具体分数/位次/选科等事实性数据必须调用工具查询，禁止凭参数记忆回答数字；工具查不到数据时如实说"暂无该数据"；话题与高考志愿无关时礼貌拒答。这是 CLAUDE.md「确定性系统给结论，Agent 给解释」原则在 Chat-first 场景的延伸——聊天可以自由展开，但事实性数字必须过 SQL，不能由 LLM 现编。
