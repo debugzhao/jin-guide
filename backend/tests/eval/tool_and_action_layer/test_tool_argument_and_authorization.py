@@ -129,6 +129,7 @@ class TestToolAuthorizationBoundary:
             "lookup_university_score",
             "lookup_subject_requirement",
             "compare_universities",
+            "search_school_documents",
             "start_profile_capture",
         }
 

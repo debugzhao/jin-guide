@@ -19,6 +19,17 @@ def _find_university(db: Session, name: str) -> University | None:
     return db.execute(stmt).scalars().first()
 
 
+def format_tuition_range(min_tuition: int | None, max_tuition: int | None) -> str | None:
+    """把学费区间格式化成人类可读文案；无数据时返回 None，交给调用方决定是否提示"暂无"。"""
+    if min_tuition is None and max_tuition is None:
+        return None
+    if min_tuition == max_tuition or max_tuition is None:
+        return f"{min_tuition} 元/年"
+    if min_tuition is None:
+        return f"{max_tuition} 元/年"
+    return f"{min_tuition}-{max_tuition} 元/年"
+
+
 def lookup_university_score(
     db: Session,
     university_name: str,
@@ -42,9 +53,17 @@ def lookup_university_score(
 
     rows = db.execute(stmt).scalars().all()
     if not rows:
+        tuition_text = format_tuition_range(university.annual_tuition_min, university.annual_tuition_max)
+        text = f"{university.name} 在 {province}{batch} 暂无录取分数记录"
+        text += f"；学费：{tuition_text}" if tuition_text else "；学费数据暂缺"
         return ToolResponse.partial(
-            text=f"{university.name} 在 {province}{batch} 暂无录取分数记录",
-            data={"university_name": university.name, "records": []},
+            text=text,
+            data={
+                "university_name": university.name,
+                "annual_tuition_min": university.annual_tuition_min,
+                "annual_tuition_max": university.annual_tuition_max,
+                "records": [],
+            },
         )
 
     records = [
@@ -66,6 +85,8 @@ def lookup_university_score(
             "city": university.city,
             "is_985": university.is_985,
             "is_211": university.is_211,
+            "annual_tuition_min": university.annual_tuition_min,
+            "annual_tuition_max": university.annual_tuition_max,
             "records": records,
         },
     )
@@ -150,6 +171,8 @@ def compare_universities(
                 "city": university.city,
                 "is_985": university.is_985,
                 "is_211": university.is_211,
+                "annual_tuition_min": university.annual_tuition_min,
+                "annual_tuition_max": university.annual_tuition_max,
                 "year": latest.year if latest else None,
                 "min_score": latest.min_score if latest else None,
                 "min_rank": latest.min_rank if latest else None,

@@ -416,18 +416,25 @@ sequenceDiagram
     participant API as intake_chat.py
     participant LLM as LiteLLM(kimi-k2.6)
     participant SQL as school_lookup.py
+    participant RAG as document_search.py
 
     U->>FE: 输入"浙大在河南多少分"
     FE->>API: POST /intake/chat {message, conversation_id}
     API->>LLM: 第一次流式请求（带 tools）
     alt 模型直接输出文本
         LLM-->>FE: SSE token 流
-    else 模型命中 lookup_university_score
+    else 命中 lookup_university_score/lookup_subject_requirement/compare_universities
         LLM-->>API: tool_calls
         API->>SQL: 执行 SQL 查询（不过 LLM）
         SQL-->>API: 结构化结果
-        API->>LLM: 第二次流式请求（结果塞回messages，不带tools）
-        LLM-->>FE: SSE token 流（基于查询结果的自然语言）
+        API->>API: 直接模板化成自然语言（不发起第二次流式请求，<br/>见 _format_tool_result_text 注释：避免重复付出<br/>kimi-k2.6 隐藏思维链开销）
+        API-->>FE: SSE token 流（模板化文本）
+    else 命中 search_school_documents（章程/专业介绍等 SQL 查不到的细节）
+        LLM-->>API: tool_calls
+        API->>RAG: embed_text → vector_search(限定 university_code) → rerank_evidence
+        RAG-->>API: top-3 文档片段（含 source_url 引用）
+        API->>API: 同样直接模板化，不发起第二次流式请求
+        API-->>FE: SSE token 流（摘录 + 来源引用）
     else 命中 start_profile_capture
         LLM-->>API: tool_calls
         API-->>FE: SSE trigger_profile_capture<br/>（前端内联渲染建档表单）
@@ -435,6 +442,8 @@ sequenceDiagram
     API->>API: done 前持久化（懒创建会话+<br/>后台任务升级标题，见 §9.3/§9.4）
     API-->>FE: SSE done {conversation_id}
 ```
+
+`search_school_documents` 复用主图 retrieval_agent 节点同一套 `vector_search`/`rerank_evidence`（pgvector + Cohere rerank，含 CircuitBreaker 熔断），只是按院校名先解析出 `University.code`，再用它限定检索范围——`vector_search` 的按校过滤键是 `university_code`（教育部院校代码），不是 `university_id`，两者不能混用（历史上这里曾经错配成 `university_id`，导致按校过滤的向量检索一直静默返回 0 条，2026-08-24 修复）。
 
 ### 10.3 ConversationAgent（报告问答）—— 现状：纯流式，无 tool-calling
 

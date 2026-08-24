@@ -389,7 +389,7 @@ AI 对话建档页是当前版本的默认首页。它不是聊天框套表单�
 #### Chat-first 建档入口（IntakeAgent）
 
 - 首屏是空态欢迎语（"你好，我是问津"）+ 建议 prompt（"开始志愿建档""浙江大学在河南大概多少分""对比一下浙大和南大在河南的选科要求"）+ 底部输入框，不预置任何表单。
-- 用户发送消息后，前端调 `POST /api/v1/intake/chat`（SSE 流式）。这不是一次分类判断，而是一段完整的多轮对话：IntakeAgent 通过 function calling 按需查询高校分数线（`lookup_university_score`）、选科要求（`lookup_subject_requirement`）、多校对比（`compare_universities`），事实性数据一律来自这些确定性 SQL 工具，不由模型凭记忆回答；话题与高考志愿无关时礼貌拒答并引导回志愿相关问题。
+- 用户发送消息后，前端调 `POST /api/v1/intake/chat`（SSE 流式）。这不是一次分类判断，而是一段完整的多轮对话：IntakeAgent 通过 function calling 按需查询高校分数线（`lookup_university_score`）、选科要求（`lookup_subject_requirement`）、多校对比（`compare_universities`），事实性数据一律来自这些确定性 SQL 工具，不由模型凭记忆回答；章程/专业介绍原文细节（培养方向、转专业规则等 SQL 工具覆盖不到的内容）改用 `search_school_documents` 做 RAG 检索，同样不由模型凭记忆回答；话题与高考志愿无关时礼貌拒答并引导回志愿相关问题。
 - 命中建档意图时，模型调用 `start_profile_capture` 工具（不返回数据，纯信号），前端收到 SSE `trigger_profile_capture` 事件后在对话流内联渲染下方的「结构化建档卡片」，聊天历史保留在其上方，形成一条连续对话，而不是切换到另一个页面；用户也可以直接点"开始志愿建档"CTA 跳过模型判断。
 - 聊天历史持久化（Redis 热层 + PostgreSQL `intake_conversations` 冷层），刷新页面后对话内容会恢复，但当前处于建档表单还是纯聊天阶段不持久化（见 §6.1 交互规则）。
 
@@ -464,7 +464,8 @@ AI 对话建档页是当前版本的默认首页。它不是聊天框套表单�
 | 环节 | 实现方式 | 是否调用 LLM |
 | --- | --- | --- |
 | Chat-first 聊天与建档意图判定 | `POST /api/v1/intake/chat`：IntakeAgent function calling（`intake-agent` 模型） | 是（事实性数据经工具查 SQL，不由 LLM 编数字） |
-| 高校分数/位次/选科要求/多校对比查询 | `lookup_university_score`/`lookup_subject_requirement`/`compare_universities`（纯 SQL 工具） | 否 |
+| 高校分数/位次/选科要求/学费/多校对比查询 | `lookup_university_score`/`lookup_subject_requirement`/`compare_universities`（纯 SQL 工具） | 否 |
+| 章程/专业介绍原文细节查询（培养方向、转专业规则等） | `search_school_documents`（RAG：`vector_search`+`rerank_evidence`，返回原文片段+来源引用） | 否（检索原文，不由模型生成） |
 | 下一个字段该问什么、是否跳过 | 确定性字段依赖图 | 否 |
 | 单字段矛盾/歧义检测 | `POST /api/v1/profile/field-check` + Rule Engine | 否 |
 | 把规则结果转成自然语言追问、理解自由文本回应 | Profile Agent | 是 |

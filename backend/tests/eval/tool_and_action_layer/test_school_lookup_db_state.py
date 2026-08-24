@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.engine.school_lookup import (
     compare_universities,
+    format_tuition_range,
     lookup_subject_requirement,
     lookup_university_score,
 )
@@ -43,9 +44,15 @@ def db() -> Session:
 
 @pytest.fixture()
 def seeded(db: Session) -> dict[str, University]:
-    zzu = University(name="郑州大学", city="郑州", is_985=False, is_211=True)
+    zzu = University(
+        name="郑州大学", city="郑州", is_985=False, is_211=True,
+        annual_tuition_min=5000, annual_tuition_max=5000,
+    )
     henu = University(name="河南大学", city="开封", is_985=False, is_211=False)
-    zju = University(name="浙江大学", city="杭州", is_985=True, is_211=True)
+    zju = University(
+        name="浙江大学", city="杭州", is_985=True, is_211=True,
+        annual_tuition_min=5300, annual_tuition_max=10000,
+    )
     db.add_all([zzu, henu, zju])
     db.flush()
 
@@ -119,6 +126,25 @@ class TestLookupUniversityScoreState:
         assert result.is_partial
         assert result.data["records"] == []
 
+    def test_success_response_includes_tuition_fields(self, db, seeded):
+        result = lookup_university_score(db, "浙江大学", "河南")
+
+        assert result.data["annual_tuition_min"] == 5300
+        assert result.data["annual_tuition_max"] == 10000
+
+    def test_partial_response_still_includes_tuition_fields(self, db, seeded):
+        """河南大学没有录取分数记录（PARTIAL），但学费是院校级字段，跟有没有分数记录无关，
+        不该因为 records 为空就被一并丢弃。"""
+        henu = seeded["河南大学"]
+        henu.annual_tuition_min = 4500
+        henu.annual_tuition_max = 4500
+        db.commit()
+
+        result = lookup_university_score(db, "河南大学", "河南")
+
+        assert result.is_partial
+        assert result.data["annual_tuition_min"] == 4500
+
     def test_wrong_province_yields_no_records_even_if_university_has_scores_elsewhere(
         self, db, seeded
     ):
@@ -170,6 +196,8 @@ class TestCompareUniversitiesState:
         assert by_name["郑州大学"]["min_score"] == 598
         # 河南大学存在但没有录取记录，字段应为 None 而不是被静默丢弃
         assert by_name["河南大学"]["min_score"] is None
+        assert by_name["郑州大学"]["annual_tuition_min"] == 5000
+        assert by_name["郑州大学"]["annual_tuition_max"] == 5000
 
     def test_reports_not_found_universities_as_partial(self, db, seeded):
         result = compare_universities(db, ["郑州大学", "不存在的大学"], "河南")
@@ -183,3 +211,19 @@ class TestCompareUniversitiesState:
 
         assert result.is_error
         assert result.error_info["code"] == "NO_UNIVERSITY_FOUND"
+
+
+# ── format_tuition_range ──────────────────────────────────────────────────────
+
+class TestFormatTuitionRange:
+    def test_no_data_returns_none(self):
+        assert format_tuition_range(None, None) is None
+
+    def test_equal_min_max_renders_single_value(self):
+        assert format_tuition_range(5000, 5000) == "5000 元/年"
+
+    def test_range_renders_as_min_dash_max(self):
+        assert format_tuition_range(5300, 10000) == "5300-10000 元/年"
+
+    def test_only_min_known_falls_back_to_min(self):
+        assert format_tuition_range(6500, None) == "6500 元/年"

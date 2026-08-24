@@ -39,7 +39,7 @@ MAX_CHUNKS_PER_DOC = 3
 async def vector_search(
     query_vector: list[float],
     province: str | None = None,
-    university_id: str | None = None,
+    university_code: str | None = None,
     doc_type: str | None = None,
     top_k: int = VECTOR_TOP_K,
     db: AsyncSession = None,
@@ -76,9 +76,15 @@ async def vector_search(
             query = query.where(
                 Chunk.metadata_json["province"].as_string() == province
             )
-        if university_id:
+        if university_code:
+            # 采集流水线写入 rag_chunks.metadata_json 用的键名是 university_code
+            # （教育部院校代码，如"10335"），不是 university_id（内部 UUID）——
+            # 之前这里错用 university_id 作为过滤键，导致按校过滤的向量检索
+            # 一直静默返回 0 条结果（已用真实数据核实：731 条 rag_chunks 的
+            # metadata_json 里只有 university_code 这个键，没有任何一条有
+            # university_id）。
             query = query.where(
-                Chunk.metadata_json["university_id"].as_string() == university_id
+                Chunk.metadata_json["university_code"].as_string() == university_code
             )
         if doc_type:
             query = query.join(Document, Chunk.document_id == Document.id).where(

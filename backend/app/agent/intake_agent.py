@@ -53,7 +53,7 @@ _TOOLS = [
         "type": "function",
         "function": {
             "name": "lookup_university_score",
-            "description": "查询某所高校在某个省份的历年高考录取分数线和位次，用于回答'XX大学在XX省多少分能上'这类问题。",
+            "description": "查询某所高校在某个省份的历年高考录取分数线、位次和学费标准，用于回答'XX大学在XX省多少分能上'、'XX大学学费多少'这类问题。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -85,7 +85,7 @@ _TOOLS = [
         "type": "function",
         "function": {
             "name": "compare_universities",
-            "description": "对比多所高校在同一省份的录取分数、位次和选科要求，用于'A和B哪个好考/怎么选'这类对比问题。只返回结构化数据，不含培养方向/师资等定性介绍。",
+            "description": "对比多所高校在同一省份的录取分数、位次、选科要求和学费标准，用于'A和B哪个好考/怎么选'这类对比问题。只返回结构化数据，不含培养方向/师资等定性介绍。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -98,6 +98,22 @@ _TOOLS = [
                     "batch": {"type": "string", "description": "批次，不传默认本科批"},
                 },
                 "required": ["university_names", "province"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_school_documents",
+            "description": "检索某所高校的招生章程/专业介绍原文片段，用于回答培养方向、专业特色、"
+            "转专业规则、分专业学费标准等结构化数据库查不到、需要看文档原文才能回答的问题。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "university_name": {"type": "string", "description": "高校名称，如'东华大学'"},
+                    "query": {"type": "string", "description": "用户想了解的具体内容，如'各专业学费标准'"},
+                },
+                "required": ["university_name", "query"],
             },
         },
     },
@@ -148,11 +164,21 @@ class _CompareArguments(_ToolArguments):
         return normalized
 
 
+class _DocumentSearchArguments(_ToolArguments):
+    university_name: str = Field(min_length=1, max_length=100)
+    query: str = Field(min_length=1, max_length=200)
+
+
 _TOOL_ARGUMENT_MODELS: dict[str, type[_ToolArguments]] = {
     "lookup_university_score": _ScoreLookupArguments,
     "lookup_subject_requirement": _SubjectLookupArguments,
     "compare_universities": _CompareArguments,
+    "search_school_documents": _DocumentSearchArguments,
 }
+
+# 需要走异步 RAG 检索（vector_search/embed_text/rerank_evidence 本身是 async）的工具，
+# 跟其余纯 SQL 工具（_run_lookup_tool，扔进 asyncio.to_thread 跑同步 Session）分开处理。
+_ASYNC_TOOL_NAMES = {"search_school_documents"}
 
 
 def _trim_history(messages: list[dict]) -> list[dict]:
@@ -259,6 +285,8 @@ def _format_tool_result_text(name: str, args: dict, tool_result: dict) -> str:
     非 SUCCESS 状态（ERROR/PARTIAL）直接用工具自带的 text，已经是人类可读的
     提示（比如"未找到院校「XXX」"），不需要模板化。
     """
+    from app.engine.school_lookup import format_tuition_range
+
     status = tool_result.get("status")
     data = tool_result.get("data") or {}
 
@@ -278,6 +306,9 @@ def _format_tool_result_text(name: str, args: dict, tool_result: dict) -> str:
                 f"- {r.get('year')}年：最低分 {r.get('min_score')} 分（位次 {r.get('min_rank')}），"
                 f"平均分 {r.get('avg_score')} 分（位次 {r.get('avg_rank')}）"
             )
+        tuition_line = format_tuition_range(data.get("annual_tuition_min"), data.get("annual_tuition_max"))
+        if tuition_line:
+            lines.append(f"- 学费：{tuition_line}")
         return "\n".join(lines)
 
     if name == "lookup_subject_requirement":
@@ -303,12 +334,25 @@ def _format_tool_result_text(name: str, args: dict, tool_result: dict) -> str:
         for u in data.get("universities", []):
             tags = "、".join(t for t, on in (("985", u.get("is_985")), ("211", u.get("is_211"))) if on)
             required = "、".join(u.get("required_subjects") or []) or "无必选科目"
+            tuition_line = format_tuition_range(u.get("annual_tuition_min"), u.get("annual_tuition_max"))
             lines.append(
                 f"- {u.get('university_name')}（{u.get('city', '')}{'，' + tags if tags else ''}）："
                 f"{u.get('year')}年最低分 {u.get('min_score')} 分/位次 {u.get('min_rank')}，选科要求：{required}"
+                + (f"，学费：{tuition_line}" if tuition_line else "")
             )
         if data.get("not_found"):
             lines.append(f"未找到：{'、'.join(data['not_found'])}")
+        return "\n".join(lines)
+
+    if name == "search_school_documents":
+        lines = [f"{data.get('university_name', '')} 相关文档摘录："]
+        for c in data.get("chunks", []):
+            title = c.get("title") or ""
+            section = c.get("section_title")
+            heading = f"{title}" + (f"·{section}" if section else "")
+            lines.append(f"- 【{heading}】{c.get('excerpt', '')}")
+            if c.get("source_url"):
+                lines.append(f"  来源：{c['source_url']}")
         return "\n".join(lines)
 
     return tool_result.get("text", "")
@@ -332,6 +376,17 @@ def _run_lookup_tool(name: str, args: dict) -> dict:
             result = compare_universities(db, **args)
         else:
             return {"status": "ERROR", "text": f"未知工具 {name}", "data": {}}
+
+    return {"status": result.status.value, "text": result.text, "data": result.data}
+
+
+async def _run_document_search(args: dict) -> dict:
+    """异步执行 RAG 文档检索（embedding + pgvector + rerank 全是 async，不需要 to_thread）。"""
+    from app.database import async_session_maker
+    from app.engine.document_search import search_school_documents
+
+    async with async_session_maker() as db:
+        result = await search_school_documents(db, **args)
 
     return {"status": result.status.value, "text": result.text, "data": result.data}
 
@@ -369,7 +424,10 @@ async def _execute_tool_call(name: str, arguments_json: str) -> dict:
         return {"status": "ERROR", "text": f"工具 {name} 不能作为查询工具执行", "data": {}}
 
     try:
-        result = await asyncio.to_thread(_run_lookup_tool, name, args)
+        if name in _ASYNC_TOOL_NAMES:
+            result = await _run_document_search(args)
+        else:
+            result = await asyncio.to_thread(_run_lookup_tool, name, args)
         if result.get("status") not in {"SUCCESS", "PARTIAL", "ERROR"}:
             return {"status": "ERROR", "text": "工具返回了未知状态", "data": {}}
         if not isinstance(result.get("data"), dict) or not isinstance(result.get("text"), str):

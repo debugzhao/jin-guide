@@ -138,7 +138,7 @@ async def retrieval_agent(state: VolunteerPlanState) -> dict:
             v_result = await vector_search(
                 query_vector=query_vector,
                 province=province,
-                university_id=None,
+                university_code=None,
                 doc_type=None,
                 top_k=20,
                 db=db,
