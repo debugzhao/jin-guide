@@ -944,3 +944,131 @@ def parse_admission_plan_rows(
             )
         )
     return records
+
+
+def parse_zjgsu_admission_score_json(
+    path: Path,
+    *,
+    provenance: Provenance,
+    config: PipelineConfig,
+    target_university_code: str,
+) -> list[AdmissionScoreRecord]:
+    """浙江工商大学"历年分数"页背后是`POST /_api/zsfs/ action=getAllData`这个公开
+    JSON接口（已用真实响应验证，CORS开放、无需鉴权），一次性返回全部省份/年份数据，
+    不是省考试院投档线那种扁平表。真实字段是`province/category/type/major/
+    planNumber/zdscore(最低)/zgscore(最高)/pjscore(平均)`（拼音缩写，非编造）。
+
+    只保留`category=="综合"`里三类真正落在750分制平行志愿口径的`type`：
+    "普通类平行"（含中外合作办学变体）和"地方专项计划"；显式排除"普通类提前"
+    （三位一体综合评价的100分制折算分，跟750分制混在同一个min_score字段会
+    误导下游）和"艺术类统考"（艺术类评分规则不同），已用真实数据核实这两类
+    分数量级（80-90分/570-590分）跟普通类平行（600+分）明显不是同一把尺子。
+    """
+    by_code = {target.university_code: target for target in config.target_universities}
+    target = by_code.get(target_university_code)
+    if target is None:
+        raise ValueError(f"target_university_code {target_university_code!r} not in whitelist")
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    rows = payload.get("data") or []
+
+    type_mapping = {
+        "普通类平行": ("平行志愿", "普通"),
+        "普通类平行(中外合作办学)": ("平行志愿", "中外合作办学"),
+        "地方专项计划": ("地方专项计划", "地方专项"),
+    }
+
+    records: list[AdmissionScoreRecord] = []
+    for row in rows:
+        if row.get("province") != config.province or row.get("category") != "综合":
+            continue
+        mapping = type_mapping.get(row.get("type"))
+        if mapping is None:
+            continue
+        batch, admission_type = mapping
+        major_name = str(row.get("major") or "").strip()
+        min_score = _integer(str(row.get("zdscore") or ""))
+        if not major_name or min_score is None:
+            continue
+        records.append(
+            AdmissionScoreRecord(
+                province=config.province,
+                year=int(row.get("year") or provenance.year),
+                batch=batch,
+                subject_type="unified",
+                university_code=target.university_code,
+                university_name=target.name,
+                major_group_code=major_name,
+                major_group_name=major_name,
+                admission_type=admission_type,
+                min_score=min_score,
+                max_score=_integer(str(row.get("zgscore") or "")),
+                avg_score=_integer(str(row.get("pjscore") or "")),
+                # planNumber是招生计划数，不是实际录取人数，两者语义不同不能混填
+                # enrollment_count（AdmissionPlanRecord.quota才是计划数该去的地方）
+                provenance=provenance,
+            )
+        )
+    return records
+
+
+def parse_wmu_admission_score_json(
+    path: Path,
+    *,
+    provenance: Provenance,
+    config: PipelineConfig,
+    target_university_code: str,
+    batch: str = "本科批",
+) -> list[AdmissionScoreRecord]:
+    """温州医科大学"历年录取成绩"页背后是第三方招生数据服务商jobpi.cn托管的公开
+    JSON接口（已用真实响应验证，无需鉴权），按`filter_column={A:年份,B:省份,C:类型}`
+    筛选，字段名是脱敏后的字母代号，真实含义由响应里的`head`数组自描述（如
+    "年份--80"，"--"后是列宽不是字段的一部分），改用动态映射而不是硬编码字母
+    顺序，避免字段顺序变化时静默错位。
+    """
+    by_code = {target.university_code: target for target in config.target_universities}
+    target = by_code.get(target_university_code)
+    if target is None:
+        raise ValueError(f"target_university_code {target_university_code!r} not in whitelist")
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    data = payload.get("data") or {}
+    head = (data.get("head") or [{}])[0]
+    label_to_key = {
+        str(label).split("--", 1)[0]: key
+        for key, label in head.items()
+        if key != "_id"
+    }
+    required = ("年份", "省份", "类型", "专业", "计划数", "最高分", "最低分", "平均分", "最低分位次")
+    if not all(label in label_to_key for label in required):
+        return []
+
+    def cell(row: dict, label: str) -> str:
+        return str(row.get(label_to_key[label], "") or "").strip()
+
+    records: list[AdmissionScoreRecord] = []
+    for row in data.get("list") or []:
+        if cell(row, "省份") != config.province or cell(row, "类型") != batch:
+            continue
+        major_name = cell(row, "专业")
+        min_score = _integer(cell(row, "最低分"))
+        if not major_name or min_score is None:
+            continue
+        records.append(
+            AdmissionScoreRecord(
+                province=config.province,
+                year=int(cell(row, "年份") or provenance.year),
+                batch=batch,
+                subject_type="unified",
+                university_code=target.university_code,
+                university_name=target.name,
+                major_group_code=major_name,
+                major_group_name=major_name,
+                min_score=min_score,
+                max_score=_integer(cell(row, "最高分")),
+                avg_score=_integer(cell(row, "平均分")),
+                min_rank=_integer(cell(row, "最低分位次")),
+                provenance=provenance,
+            )
+        )
+    return records

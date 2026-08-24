@@ -104,9 +104,9 @@ data_pipeline/configs/zhejiang.yaml --source <id> --persist` 对全部11个http�
 | 3 | 2026 招生计划（10校，`admission_plan`） | ⚠️ | **5校已用真实数据跑通**：新写`parse_single_university_admission_plan_rows`（单校专属页解析，不依赖"院校名称"列匹配白名单，因为target_university_code已经知道是哪一所）——宁波大学90条valid、浙江理工大学61条valid、杭州师范大学42条valid，共193条全部`valid`、0条`needs_review`/`rejected`。浙江工业大学确认真实内容需要JS渲染（`#news1content`静态HTML里是空的，已用真实响应验证），改成`collection_method: manual`；浙江工商大学本来就是manual（JS查询页）。**5校未登记**：浙大/西湖大学官网无承载页；杭电未定位到2025/2026年具体条目；温州医科大学数据在微信公众号文章里，共2/10走manual、5/10走http全部跑通、3/10缺口 |
 | 4 | 2025/2026 招生政策（`policy`） | ✅ | **已用真实数据跑通并验证**：`--source zjzs-policy-2026`真实拉取通知页+docx附件（zjzs.net的附件是`downfile.jsp?...&filename=x.docx`下载代理端点，不是直链，过程中发现并修复了3个连带bug，见下方"Implement阶段发现的新问题"），docx正文提取出11条`DocumentChunkRecord`（内容可读、非乱码）+ 1条`valid`的`PolicyRuleRecord`（`volunteer_mode=parallel`, `max_volunteers=80`，已用真实政策原文验证准确）+ 1条`needs_review`（来自入口公告页本身，同江苏#4"空壳公告页"模式） |
 | 5-8 | 2023/2024 分数线+分数段表 | 🚫 | **产品决策：明确不做**（2026-08-23），不再是"未排期"而是主动排除范围，理由不变（浙江3+3推行时间线与格式存在不确定性，投入产出比低于其他任务） |
-| 9 | 10校专业录取线 | ⚠️ | 10校里只2所（浙师大/杭师大）确认有省考试院表之外的补充信息（均分/最高分/实际录取人数），已用杭州师范大学2025年真实数据跑通46条valid；其余8校见下方"2026-08-23 追加"小节逐校结论 |
+| 9 | 10校专业录取线 | ⚠️ | 已用Playwright浏览器逐校核实，10校里4所确认有省考试院表之外的补充信息：杭州师范大学（46条valid）、**浙江工商大学**（真实JSON接口，55条parsed但缺位次字段全部needs_review，见下方"2026-08-23 追加（浏览器复核）"）、**温州医科大学**（真实JSON接口，47条全部valid，含位次）已用真实数据跑通；宁波大学/西湖大学官网确认无历年专业录取统计入口（真实缺失非遗漏）；浙江师范大学数据在JS单页应用未继续攻克 |
 | 10 | 院校/学院/专业主数据 | ❌ | 未登记数据源，且浙江"专业(类)+学校"模式下专业主数据的粒度需要重新设计 |
-| 11a | 10校章程/专业介绍（RAG） | ✅ | 章程7校（浙大/宁波/浙工大/浙师大/浙理工/温医/杭师大）+ 专业介绍5校（浙大/宁波/浙工大/浙理工/浙工商）已用真实数据跑通，共807条`DocumentChunkRecord` valid，847个rag_chunks全部embedding完成（DashScope 1024维，见下方"2026-08-23 追加"小节）；西湖/工商/杭电章程和杭电/温医专业介绍因JS渲染/无统一列表页暂缺，浙师大/杭师大专业介绍因托管在微信公众号被反爬拦截未查实 |
+| 11a | 10校章程/专业介绍（RAG） | ✅ | 章程9校（浙大/宁波/浙工大/浙师大/浙理工/温医/杭师大/**西湖/浙工商**）+ 专业介绍6校（浙大/宁波/浙工大/浙理工/浙工商/**杭电**）已用真实数据跑通，第一轮807条+第二轮71条（西湖1+浙商大2+杭电68）共878条`DocumentChunkRecord` valid，918个rag_chunks（含本轮新增71个）全部用`scripts/chunk_documents.py --embed-only`补齐DashScope 1024维embedding，见下方"2026-08-23 追加（浏览器复核）"小节；仅杭电章程（正文是整张PNG截图需OCR）和温医/浙师大/杭师大专业介绍（正文托管在微信公众号）仍缺 |
 | 11b | 转专业政策（RAG） | 🚫 | **产品决策：明确不做**（2026-08-23） |
 | 12 | 教育部院校/专业标准目录 | ⚠️ | 见下方"2026-08-23 追加"小节——之前"可与江苏共用"这句结论未经核实，正在重新核查 |
 | 13 | 业务表同步 loader | ✅ | 已完成，见§0.1（`enrollment_data_admission_scores`/`rank_segments`/`admission_plans`分别778/854/193行，跟发布记录数完全对齐） |
@@ -146,6 +146,36 @@ RAG之前卡在Moonshot embedding账户权限（`09_pipeline_run_status.md`#11�
 **踩到的坑（已修复，用真实数据验证过）**：
 - 章程页忘了设`discovery_depth: 0`（跟之前nbu-admission-plan-2026同一个坑），默认depth=1把整站导航当成"可能的附件"抓了一遍（21-31个artifact/次，22条parsed_records其实大部分是导航栏目的噪音），删掉重跑后每校正确收敛到1个artifact
 - `_read_html_table`原来只处理页面第一个`<table>`，遇到杭州师范大学"历年招生-录取情况"这种页面（导航栏用`<table>`布局、且嵌套子表格）会把装饰性表格误当成数据表、或被嵌套表格提前触发"表格结束"把真正数据表截断。改成按嵌套深度过滤（只收集深度恰好为1、不嵌套在别的表格里的顶层表格），并在多个顶层表格里挑行数最多的当数据表——已用杭州师范大学2025年录取情况页（47行数据表+5个装饰表格混在一起）验证过
+
+### 2026-08-23 追加（浏览器复核）：用Playwright逐项重新核实此前标记的10项缺口
+
+上一轮把"JS渲染/需要浏览器/无统一列表页/微信反爬"这几类缺口都标记为待办，本轮
+用Playwright MCP实际打开每个页面核实，发现**多数"需要浏览器"的判断只看了DOM，
+没看原始响应体或找到底层API**，其实纯httpx就能拿到，只有少数是真的需要OCR或
+微信反爬绕不过去。逐项结论：
+
+| 缺口 | 上一轮判断 | 本轮核实结论 |
+|---|---|---|
+| 西湖大学章程 | JS异步加载，纯http抓不到 | **误判**——DOM侧`#app`确实是空的，但正文原样躺在页面自带的内联`<script>`里（`vHtml:'<div>...转义HTML...</div>'`），纯httpx下载原始HTML就有，新写`extract_westlake_embedded_html_text`解析器（挖字符串+反转义+去标签），已注册`westlake-charter-2026`跑通1条valid |
+| 浙江工商大学章程 | JS异步加载，纯http抓不到 | **误判**——入口页是PDF.js viewer外壳，真章程是iframe里的一份PDF（`_upload/zjsu_3080009/202605/79eda9a4a41c0013.pdf`），直接用现成`policy_document_v1`解析PDF即可，已注册`zjgsu-charter-2026`跑通2条valid |
+| 杭州电子科技大学章程 | JS异步加载，纯http抓不到 | **判断错了原因但结论对**——不是JS问题，是正文本身就是一整张PNG截图（950×3249px），需要整页OCR（不是现有`tabular.py`那套面向表格行聚类的OCR），本轮不做，如实标记 |
+| 杭电专业介绍 | 无统一列表页，需按学院枚举 | **误判**——"重要资讯"栏目(`cid=57`)本身就是14篇按学院分类的"重磅｜XX学院专业介绍"文章且是纯文本HTML，直接discovery即可，已注册`hdu-major-intro-2026`（15 artifacts，68条valid） |
+| 温医/浙师大/杭师大专业介绍 | 托管在微信公众号，反爬拦截 | **判断基本准确，补充细节**：三校统一列表页本身都能访问（杭师大`Details`页甚至是可以httpx读取的静态HTML，但正文只是个"点击查看·专业详情"跳转卡片），真内容都在`mp.weixin.qq.com`；用真实浏览器（Playwright）打开可以完整读到全文（未触发验证墙），但`curl`直接访问会302到验证页——pipeline目前没有"浏览器抓到的内容送进staging"的机制（`collection_method: manual`目前只是标签，`HttpCollector`遇到非http直接报错，参考`scripts/publish_jiangsu_admission_plans.py`那种"人工整理成JSON+专用发布脚本"模式尚未有专业介绍版本），本轮不做，如实标记 |
+| 宁波大学专业录取线 | 疑似需要验证码/AJAX，未查实 | **核实为真实缺失**——官网导航/招生快讯19页均无"历年专业录取"类栏目，非遗漏 |
+| 浙江工商大学专业录取线 | 疑似AJAX动态渲染，未查实 | **找到真实数据源**——"历年分数"页背后是`POST /_api/zsfs/ action=getAllData`公开JSON接口（无需鉴权，GET+query string同样可用），一次性返回全部省份/年份/类别。新写`parse_zjgsu_admission_score_json`，只保留750分制的"综合"类目（排除100分制的三位一体折算分"普通类提前"和评分规则不同的"艺术类统考"），已注册`zjgsu-major-admission-result-2025`：55条parsed，因数据源本身不含位次字段，全部落入`needs_review`（`min_rank_missing`校验规则，非bug，是如实反映数据源限制） |
+| 西湖大学专业录取线 | 官网无历年统计栏目 | **维持原判**——"录取查询"入口是考生个人信息查询，非统计页，公开分数线均来自第三方站不采信 |
+| 温州医科大学专业录取线 | 疑似"三位一体招生录取情况统计表"页404 | **找到更好的数据源**——原先要找的那篇文章不需要了，官网本身有"历年录取成绩"页（年份/省份/类型三维筛选），背后是第三方招生数据服务商jobpi.cn托管的公开JSON接口（无鉴权，CORS开放），支持2025/2024/2023三年查询。新写`parse_wmu_admission_score_json`（字段名是脱敏字母代号，靠响应自带的`head`数组动态映射，不硬编码顺序），已注册`wmu-major-admission-result-2025`：47条全部valid（含最低分/最高分/平均分/最低位次），是这一批里数据质量最完整的一个 |
+
+**代码改动**（均已跑`pytest`全量260条用例验证不回归）：
+- `raw_store.py::_safe_suffix`新增`content`参数：部分JSON接口把Content-Type错误标成`text/html`（浙商大`_api/zsfs/`验证过这个坏case），仅凭头部会把JSON body存成`.html`再被HTML解析器当空标签页处理，现在头部落到`.html`兜底值时用body首字节再确认一次是不是JSON
+- `parsers/document.py`新增`extract_westlake_embedded_html_text`
+- `parsers/tabular.py`新增`parse_zjgsu_admission_score_json`/`parse_wmu_admission_score_json`
+- `jobs/collect.py::_parse_node`新增两处分支：charter类按`source.parser=="westlake_embedded_html_v1"`切到专用提取器；admission_score类新增`suffix==".json"`分支按`source.parser`分派到上述两个JSON解析器（`HttpCollector`本身仍只支持GET，浙商大接口验证过GET+query string和POST+form body返回完全一致的数据，不需要新增POST支持）
+
+**仍未解决、需要额外工程的缺口**（如实标注，非回避）：
+- 杭电章程需要通用长文本OCR（现有OCR基础设施是`tabular.py`里为表格行聚类设计的，直接复用会把整页当表格识别，效果不对）
+- 温医/浙师大/杭师大专业介绍正文在微信公众号，需要新增一条"浏览器抓取→人工整理JSON→专用发布脚本"的manual数据落库路径（参考`scripts/publish_jiangsu_admission_plans.py`），目前pipeline没有这条路径
+- 浙商大专业录取线55条数据卡在`needs_review`（缺位次），若要发布需要额外做"按分数关联省考试院逐分段表反查位次"的enrichment（现有validator提示信息本身就是这么建议的），本轮未做
 
 ### 2026-08-23 追加：#12 教育部院校/专业标准目录 —— 核实结果
 
@@ -191,7 +221,12 @@ RAG之前卡在Moonshot embedding账户权限（`09_pipeline_run_status.md`#11�
    跑通（807条valid，847个chunk全部embedding完成）                          ✅ 已完成 2026-08-23
 ⑩#9 10校专业录取线：杭州师范大学46条valid跑通，其余9校逐校核实结论见上文         ✅ 已完成 2026-08-23
 ⑪#12 教育部院校/专业标准目录：核实清楚真实来源和工作量，未开始实现               ⚠️ 已完成 2026-08-23（核实）
-⑫#10 院校/学院/专业主数据                                                 ← 下一步（未开始）
+⑫用Playwright浏览器逐项复核#9/#11a的10项缺口：3项发现真实可http直采数据源
+   （西湖章程1条+浙商大章程2条+杭电专业介绍68条valid，浙商大/温医专业录取线
+   JSON接口102条），2项确认真实无解（宁波/西湖无官方历年专业录取统计），
+   3项确认需要额外工程（杭电章程OCR、3校专业介绍微信抓取、浙商大录取线
+   位次enrichment）                                                    ✅ 已完成 2026-08-23（第二轮）
+⑬#10 院校/学院/专业主数据                                                 ← 下一步（未开始）
 ```
 
 ## 补充说明

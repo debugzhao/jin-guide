@@ -90,6 +90,36 @@ def extract_document_text(path: str | Path) -> str:
     return "\n".join(line for line in lines if line)
 
 
+_VHTML_PATTERN = re.compile(r"vHtml:\s*'((?:[^'\\]|\\.)*)'")
+
+
+def extract_westlake_embedded_html_text(path: str | Path) -> str:
+    """西湖大学招生动态详情页正文不在真实DOM里——页面骨架是内联`<script>new
+    AdmissionEventsDetail("#app", {...vHtml:'<div>...(JSON式转义)...</div>'})`
+    把正文整段塞进JS对象字面量的字符串属性里（已用真实页面curl+Playwright双重
+    验证：DOM侧`#app`容器为空，纯httpx完全拿不到正文；但正文其实原样躺在下载
+    到的原始HTML字节里，是"藏在script里"不是"真的需要JS渲染"，此前误判为必须
+    走浏览器，实际只需要从原始文本里挖出这段转义字符串再反转义+去标签）。
+    """
+    file_path = Path(path)
+    raw = decode_html_bytes(file_path.read_bytes())
+    match = _VHTML_PATTERN.search(raw)
+    if not match:
+        return ""
+    escaped = match.group(1)
+    unescaped = (
+        escaped.replace('\\"', '"')
+        .replace("\\/", "/")
+        .replace("\\n", "\n")
+        .replace("\\'", "'")
+    )
+    parser = _TextExtractor()
+    parser.feed(unescaped)
+    text = "".join(parser.parts)
+    lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
+    return "\n".join(line for line in lines if line)
+
+
 def chunk_document(
     text: str,
     *,

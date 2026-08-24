@@ -6,10 +6,17 @@ from data_pipeline.parsers.tabular import (
     parse_shmeea_admission_score_rows,
     parse_single_university_admission_plan_rows,
     parse_single_university_admission_result_rows,
+    parse_wmu_admission_score_json,
     parse_zhejiang_admission_score_rows,
+    parse_zjgsu_admission_score_json,
     read_tabular_document,
 )
-from data_pipeline.parsers.document import chunk_document, extract_document_text, extract_policy_rule
+from data_pipeline.parsers.document import (
+    chunk_document,
+    extract_document_text,
+    extract_policy_rule,
+    extract_westlake_embedded_html_text,
+)
 
 __all__ = [
     "TabularDocument",
@@ -19,9 +26,12 @@ __all__ = [
     "parse_shmeea_admission_score_rows",
     "parse_single_university_admission_plan_rows",
     "parse_single_university_admission_result_rows",
+    "parse_wmu_admission_score_json",
     "parse_zhejiang_admission_score_rows",
+    "parse_zjgsu_admission_score_json",
     "read_tabular_document",
     "chunk_document",
     "extract_document_text",
     "extract_policy_rule",
+    "extract_westlake_embedded_html_text",
 ]

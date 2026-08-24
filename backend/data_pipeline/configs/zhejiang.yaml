@@ -217,10 +217,11 @@ sources:
     parser: manual_playwright_v1
     update_frequency: yearly
 
-  # 10校招生章程（RAG，2026-08-23新增）：西湖大学/浙江工商大学/杭州电子科技大学
-  # 三校官网章程正文是JS异步加载，纯http抓不到，暂不注册（见状态看板），其余7校
-  # 已用curl验证200且为静态HTML正文。浙大官网未见独立发布2026年版，退而用2025年
-  # （已在Discover阶段确认，非偷懒漏检）。
+  # 10校招生章程（RAG，2026-08-23新增）：其余7校已用curl验证200且为静态HTML正文，
+  # 浙大官网未见独立发布2026年版，退而用2025年（已在Discover阶段确认，非偷懒漏检）。
+  # 西湖大学/浙江工商大学/杭州电子科技大学三校此前判定"JS异步加载纯http抓不到"，
+  # 用Playwright浏览器逐校核实后发现只有杭电是真的（章程正文本身是一整张PNG截图，
+  # 需要OCR，本轮不做，见状态看板），西湖大学和浙江工商大学其实都能纯http拿到：
   - id: zju-charter-2025
     name: 浙江大学2025年普通本科招生章程
     entry_url: https://zdzsc.zju.edu.cn/2025/0605/c87333a3058818/page.htm
@@ -287,11 +288,58 @@ sources:
     parser: policy_document_v1
     discovery_depth: 0
     update_frequency: yearly
+  - id: westlake-charter-2026
+    name: 西湖大学2026年普通高校招生章程
+    entry_url: https://zh-ugadmissions.westlake.edu.cn/Admissions/AdmissionEvents/news/202606/t20260610_67755.shtml
+    data_type: charter
+    year: 2026
+    target_university_code: "14626"
+    # 页面骨架是纯JS单页应用（DOM侧#app容器为空），但正文其实原样躺在页面自带的
+    # 内联<script>里（`new AdmissionEventsDetail("#app", {vHtml:'<div>...转义
+    # HTML...</div>'})`），已用真实curl验证纯httpx就能拿到这段转义字符串，不需要
+    # 浏览器渲染——此前判定"JS异步加载纯http抓不到"只看了DOM，没看原始响应体。
+    # extract_westlake_embedded_html_text专门做"挖出转义字符串再反转义"这一步。
+    parser: westlake_embedded_html_v1
+    update_frequency: yearly
+    discovery_depth: 0
+  - id: zjgsu-charter-2026
+    name: 浙江工商大学2026年普通高校招生章程
+    # 入口页(?news/315.html)本身是个PDF.js viewer外壳，真正的章程是iframe里的
+    # 一份PDF，已用curl验证PDF直链200且Content-Type是application/pdf——不用
+    # 走浏览器，直接把entry_url指向PDF本体即可复用现有policy_document_v1
+    # （extract_document_text已支持.pdf后缀）。
+    entry_url: https://zhaoban.zjgsu.edu.cn/_upload/zjsu_3080009/202605/79eda9a4a41c0013.pdf
+    data_type: charter
+    year: 2026
+    target_university_code: "10353"
+    parser: policy_document_v1
+    update_frequency: yearly
+    discovery_depth: 0
+  # 杭州电子科技大学：章程正文本身是一整张PNG截图（/admin/upload/image/
+  # 20260521111207_43906.png，950x3249px），已用curl+Playwright双重验证不是
+  # JS渲染问题而是真的没有文本版本，需要整页OCR（不是现有tabular.py那套面向
+  # 表格行聚类的OCR，是通用长文本OCR），本轮不做，如实标记缺口。
 
-  # 10校专业介绍（RAG，2026-08-23新增）：以下5校有清晰的"专业介绍"列表页，用
-  # discovery自动发现列表下的各专业/学院详情页；浙师大官网正文外链到微信公众号
-  # 会被反爬拦截，杭师大同样，暂不注册；杭电/温医没有统一列表页（逐学院分散），
-  # 需要按学院枚举，本轮先不做，见状态看板。
+  # 10校专业介绍（RAG，2026-08-23新增）：以下6校有清晰的"专业介绍"列表页，用
+  # discovery自动发现列表下的各专业/学院详情页；杭州电子科技大学此前判定"无统一
+  # 列表页需要按学院枚举"，用Playwright核实后发现"重要资讯"栏目(cid=57)本身就是
+  # 14篇按学院分类的专业介绍文章且是纯文本HTML（已用curl验证），直接可用discovery
+  # 采；浙师大/杭师大/温州医科大学专业介绍正文最终都指向微信公众号文章（杭师大
+  # 站内Details页只是个"点击查看专业详情"的跳转卡片，真内容仍在微信），plain
+  # httpx访问微信会被重定向到验证页（已用curl验证302），Playwright真实浏览器
+  # 可以正常读到全文，但pipeline目前没有"浏览器抓取内容送入staging"的现成机制
+  # （需要新增类似scripts/publish_jiangsu_admission_plans.py的人工整理+专用发布
+  # 脚本），本轮不做，如实标记缺口，不强行注册成http source（会直接采集失败）。
+  - id: hdu-major-intro-2026
+    name: 杭州电子科技大学专业介绍（分学院，"重磅"系列）
+    entry_url: https://zhaosheng.hdu.edu.cn/list.php?cid=57
+    data_type: major_intro
+    year: 2026
+    target_university_code: "10336"
+    parser: policy_document_v1
+    update_frequency: yearly
+    discovery_title_pattern: 专业介绍
+    discovery_depth: 1
   - id: zju-major-intro-2026
     name: 浙江大学专业介绍（创新班）
     entry_url: http://zdzsc.zju.edu.cn/cxb/list.htm
@@ -352,5 +400,37 @@ sources:
     year: 2025
     target_university_code: "10346"
     parser: hznu_major_admission_result_v1
+    update_frequency: yearly
+    discovery_depth: 0
+
+  # 浙江工商大学/温州医科大学（2026-08-23新增，见状态看板#9"逐校核实"小节的
+  # 更新）：此前判定"疑似AJAX动态渲染/需要浏览器"，用Playwright核实后发现两校
+  # "历年分数"页背后都是公开JSON接口（无需鉴权，已用curl验证），不是表格文件，
+  # 走parsers/tabular.py新写的parse_zjgsu_admission_score_json/
+  # parse_wmu_admission_score_json两个专用解析器（数据结构和省考试院表完全
+  # 不同，字段名甚至是拼音缩写/字母代号，不能复用现有tabular解析路径）。
+  - id: zjgsu-major-admission-result-2025
+    name: 浙江工商大学2025年浙江省历年分数（平行志愿+地方专项）
+    # 真实接口是POST /_api/zsfs/ action=getAllData，一次性返回全部省份/年份，
+    # 已用curl验证同一接口GET+query string也能拿到完全一样的响应（HttpCollector
+    # 目前只支持GET，不需要为这一个source单独加POST支持）
+    entry_url: https://zhaoban.zjgsu.edu.cn/_api/zsfs/?action=getAllData
+    data_type: admission_score
+    year: 2025
+    target_university_code: "10353"
+    parser: zjgsu_admission_score_json_v1
+    update_frequency: yearly
+    discovery_depth: 0
+  - id: wmu-major-admission-result-2025
+    name: 温州医科大学2025年浙江省本科批历年录取成绩
+    # 真实接口托管在第三方招生数据服务商jobpi.cn（已用curl验证CORS开放、无需
+    # 鉴权），filter_column里的year/province/type在URL里已经写死成"2025/浙江/
+    # 本科批"，不需要discovery
+    entry_url: >-
+      https://job-web-api.jobpi.cn/enroll/3273?sch_school_id=37820&page=1&page_size=9999&filter_column=%7B%22A%22%3A2025%2C%22B%22%3A%22%E6%B5%99%E6%B1%9F%22%2C%22C%22%3A%22%E6%9C%AC%E7%A7%91%E6%89%B9%22%7D
+    data_type: admission_score
+    year: 2025
+    target_university_code: "10343"
+    parser: wmu_admission_score_json_v1
     update_frequency: yearly
     discovery_depth: 0

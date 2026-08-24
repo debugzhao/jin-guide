@@ -45,7 +45,7 @@ class RawArtifactStore:
         artifact_dir = self.root / province / year / source.id
         artifact_dir.mkdir(parents=True, exist_ok=True)
 
-        suffix = self._safe_suffix(final_url, content_type)
+        suffix = self._safe_suffix(final_url, content_type, content)
         content_path = artifact_dir / f"{checksum}{suffix}"
         metadata_path = artifact_dir / f"{checksum}.metadata.json"
         changed = not content_path.exists()
@@ -97,7 +97,7 @@ class RawArtifactStore:
         os.replace(temp_path, path)
 
     @staticmethod
-    def _safe_suffix(url: str, content_type: str | None) -> str:
+    def _safe_suffix(url: str, content_type: str | None, content: bytes = b"") -> str:
         allowed = {
             ".html", ".htm", ".xlsx", ".xls", ".csv", ".pdf", ".json", ".xml",
             ".docx", ".doc", ".jpg", ".jpeg", ".png",
@@ -115,6 +115,13 @@ class RawArtifactStore:
             candidate = Path(value).suffix.lower()
             if candidate in allowed:
                 return candidate
+        # 部分第三方JSON接口（如浙江工商大学"历年分数"背后的_api/zsfs/）把
+        # Content-Type错误标成text/html——已用真实响应头验证过这个坏case确实
+        # 存在，仅凭头部会把JSON body错误存成.html再被HTML解析器当成空标签页
+        # 处理，所以头部落到".html"这个通用兜底值时，用body首字节再确认一次是
+        # 不是JSON，比盲信一个已知会出错的头部更可靠
+        if content.lstrip()[:1] in (b"{", b"["):
+            return ".json"
         mime_suffixes = {
             "text/html": ".html",
             "text/csv": ".csv",

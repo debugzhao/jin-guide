@@ -17,13 +17,16 @@ from data_pipeline.parsers import (
     chunk_document,
     extract_policy_rule,
     extract_document_text,
+    extract_westlake_embedded_html_text,
     parse_admission_score_rows,
     parse_admission_plan_rows,
     parse_rank_segment_rows,
     parse_shmeea_admission_score_rows,
     parse_single_university_admission_plan_rows,
     parse_single_university_admission_result_rows,
+    parse_wmu_admission_score_json,
     parse_zhejiang_admission_score_rows,
+    parse_zjgsu_admission_score_json,
     read_tabular_document,
 )
 from data_pipeline.raw_store import RawArtifactStore, StoredArtifact
@@ -194,7 +197,10 @@ class PipelineJob:
             if source.data_type in {"policy", "charter", "major_intro", "transfer_policy"}:
                 if suffix not in {".html", ".htm", ".pdf", ".docx"}:
                     return []
-                text = extract_document_text(node.artifact.content_path)
+                if source.parser == "westlake_embedded_html_v1":
+                    text = extract_westlake_embedded_html_text(node.artifact.content_path)
+                else:
+                    text = extract_document_text(node.artifact.content_path)
                 records = chunk_document(
                     text,
                     document_type=source.data_type,
@@ -208,6 +214,30 @@ class PipelineJob:
                             text, provenance=provenance, province=self.config.province
                         )
                     )
+            elif source.data_type == "admission_score" and suffix == ".json":
+                # 浙江工商大学/温州医科大学"历年分数"页背后都是公开JSON接口而不是
+                # 表格文件（见parsers/tabular.py::parse_zjgsu_admission_score_json/
+                # parse_wmu_admission_score_json的docstring），不走`read_tabular_
+                # document`这条表格解析路径，按`source.parser`分派到各自专用解析器
+                if source.parser == "zjgsu_admission_score_json_v1":
+                    records = parse_zjgsu_admission_score_json(
+                        node.artifact.content_path,
+                        provenance=provenance,
+                        config=self.config,
+                        target_university_code=source.target_university_code,
+                    )
+                elif source.parser == "wmu_admission_score_json_v1":
+                    records = parse_wmu_admission_score_json(
+                        node.artifact.content_path,
+                        provenance=provenance,
+                        config=self.config,
+                        target_university_code=source.target_university_code,
+                    )
+                else:
+                    report.messages.append(
+                        f"manual review: unknown json parser {source.parser!r} for {source.id!r}"
+                    )
+                    return []
             elif source.data_type in {"rank_segment", "admission_score", "admission_plan"}:
                 if suffix not in {
                     ".csv", ".xlsx", ".xls", ".pdf", ".jpg", ".jpeg", ".png", ".html", ".htm",
