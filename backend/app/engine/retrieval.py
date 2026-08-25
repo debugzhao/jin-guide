@@ -151,6 +151,12 @@ async def vector_search(
 
 # ── 2. search_admission_sql ───────────────────────────────────────────────────
 
+def _process_sql_search_inputs(inputs: dict) -> dict:
+    # db 是 Session，不可序列化也不该出现在 trace 里
+    return {k: v for k, v in inputs.items() if k != "db"}
+
+
+@traceable(run_type="tool", name="search_admission_sql", process_inputs=_process_sql_search_inputs)
 def search_admission_sql(
     province: str,
     batch: str,
