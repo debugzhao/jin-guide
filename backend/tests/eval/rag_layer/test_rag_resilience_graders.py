@@ -12,6 +12,7 @@ vector_search/rerank_evidence 用的是全局单例（get_circuit_breaker()）�
 """
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from app.agent.circuit_breaker import BreakerState, CircuitBreaker, get_circuit_breaker
@@ -243,6 +244,7 @@ class TestRetrievalDegradesGracefully:
 class _FakeRerankResponse:
     def __init__(self, results: list[dict]) -> None:
         self._results = results
+        self.status_code = 200
 
     def raise_for_status(self) -> None:
         return None
@@ -328,3 +330,123 @@ class TestRerankFilteringRules:
 
         assert len(result.data["chunks"]) == 2
         assert [c["content"] for c in result.data["chunks"]] == ["c0", "c1"]
+
+
+# ── 11. Cohere 调用的错误分类与重试 ───────────────────────────────────────────────
+
+class _FakeStatusResponse:
+    """按指定 status_code 模拟一次 httpx 响应；>=400 时 raise_for_status() 真的抛
+    httpx.HTTPStatusError，行为和真实 httpx.Response 一致。"""
+
+    def __init__(self, status_code: int, results: list[dict] | None = None) -> None:
+        self.status_code = status_code
+        self._results = results or []
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            request = httpx.Request("POST", "https://api.cohere.ai/v1/rerank")
+            response = httpx.Response(self.status_code, request=request)
+            raise httpx.HTTPStatusError(f"HTTP {self.status_code}", request=request, response=response)
+
+    def json(self) -> dict:
+        return {"results": self._results}
+
+
+class _SequencedFakeClient:
+    """每次 post() 按顺序消费一个预设的响应/异常，用于验证重试次数和顺序。"""
+
+    def __init__(self, responses: list) -> None:
+        self._responses = list(responses)
+        self.call_count = 0
+
+    def __call__(self, *args, **kwargs) -> "_SequencedFakeClient":
+        return self
+
+    async def __aenter__(self) -> "_SequencedFakeClient":
+        return self
+
+    async def __aexit__(self, *args) -> bool:
+        return False
+
+    async def post(self, *args, **kwargs):
+        self.call_count += 1
+        response = self._responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
+class TestCohereErrorHandlingAndRetry:
+    """
+    2026-08-25 加固：之前任何 Cohere 调用失败都被同一个 except Exception 兜住，
+    日志里看不出是鉴权失败还是网络抖动——这次排查 .env 内联注释污染 COHERE_API_KEY
+    的 bug 时吃了这个亏。现在 401/403 单独识别并立刻放弃（重试不会让坏 key 变好），
+    429/5xx/超时这类瞬时故障重试一次。
+    """
+
+    @pytest.mark.asyncio
+    async def test_auth_failure_does_not_retry_and_degrades_immediately(self, monkeypatch):
+        from app.engine import retrieval as module
+
+        monkeypatch.setattr(module.settings, "cohere_api_key", "bad-key")
+        client = _SequencedFakeClient([_FakeStatusResponse(401)])
+        monkeypatch.setattr(module.httpx, "AsyncClient", client)
+
+        chunks = [{"content": "c0", "document_id": "doc-0", "similarity": 0.9}]
+        result = await module.rerank_evidence(query="随便", chunks=chunks, top_n=8)
+
+        assert client.call_count == 1, "401 鉴权失败不应该重试"
+        assert result.is_partial
+        assert result.data["degraded"] is True
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_retries_once_then_succeeds(self, monkeypatch):
+        from app.engine import retrieval as module
+
+        monkeypatch.setattr(module.settings, "cohere_api_key", "fake-key-for-test")
+        monkeypatch.setattr(module, "_COHERE_RETRY_BACKOFF_SECONDS", 0)
+        client = _SequencedFakeClient([
+            _FakeStatusResponse(429),
+            _FakeStatusResponse(200, [{"index": 0, "relevance_score": 0.9}]),
+        ])
+        monkeypatch.setattr(module.httpx, "AsyncClient", client)
+
+        chunks = [{"content": "c0", "document_id": "doc-0", "similarity": 0.9}]
+        result = await module.rerank_evidence(query="随便", chunks=chunks, top_n=8)
+
+        assert client.call_count == 2, "429 限流应该重试一次"
+        assert result.is_success
+        assert result.data["chunks"][0]["rerank_score"] == 0.9
+
+    @pytest.mark.asyncio
+    async def test_persistent_timeout_exhausts_retries_then_degrades(self, monkeypatch):
+        from app.engine import retrieval as module
+
+        monkeypatch.setattr(module.settings, "cohere_api_key", "fake-key-for-test")
+        monkeypatch.setattr(module, "_COHERE_RETRY_BACKOFF_SECONDS", 0)
+        timeout_exc = httpx.TimeoutException("timed out")
+        client = _SequencedFakeClient([timeout_exc, timeout_exc])
+        monkeypatch.setattr(module.httpx, "AsyncClient", client)
+
+        chunks = [{"content": "c0", "document_id": "doc-0", "similarity": 0.9}]
+        result = await module.rerank_evidence(query="随便", chunks=chunks, top_n=8)
+
+        assert client.call_count == 2, "超时应该重试一次，两次都超时后放弃"
+        assert result.is_partial
+        assert result.data["degraded"] is True
+
+    @pytest.mark.asyncio
+    async def test_other_client_error_does_not_retry(self, monkeypatch):
+        """比如请求体格式错这类 4xx（非 401/403/429），重试不会成功，不该浪费一次调用。"""
+        from app.engine import retrieval as module
+
+        monkeypatch.setattr(module.settings, "cohere_api_key", "fake-key-for-test")
+        client = _SequencedFakeClient([_FakeStatusResponse(400)])
+        monkeypatch.setattr(module.httpx, "AsyncClient", client)
+
+        chunks = [{"content": "c0", "document_id": "doc-0", "similarity": 0.9}]
+        result = await module.rerank_evidence(query="随便", chunks=chunks, top_n=8)
+
+        assert client.call_count == 1
+        assert result.is_partial
+        assert result.data["degraded"] is True

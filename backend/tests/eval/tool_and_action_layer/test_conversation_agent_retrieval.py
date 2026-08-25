@@ -17,6 +17,17 @@ from app.agent.conversation_agent import _infer_province, _retrieve_extra_contex
 from app.agent.tool_response import ToolResponse
 
 
+class _DummyAsyncClient:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return False
+
+
 class TestInferProvince:
     def test_returns_province_from_first_matching_evidence_item(self):
         evidence = [

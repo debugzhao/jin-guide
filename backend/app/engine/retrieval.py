@@ -9,6 +9,7 @@ RAG 检索工具 (PRD §9.2, §10.4)
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections import defaultdict
 
@@ -32,6 +33,12 @@ RERANK_SCORE_FLOOR = 0.3
 RERANK_TOP_N = 8
 VECTOR_TOP_K = 20
 MAX_CHUNKS_PER_DOC = 3
+_COHERE_RERANK_URL = "https://api.cohere.ai/v1/rerank"
+# 只对"重试可能有用"的瞬时故障（超时/连接失败/429 限流/5xx）重试一次；401/403
+# 鉴权失败和其他 4xx 客户端错误不重试——key 不对不会因为多试一次就突然对了，
+# 白白浪费一次调用额度还多等一轮延迟。
+_COHERE_MAX_ATTEMPTS = 2
+_COHERE_RETRY_BACKOFF_SECONDS = 0.5
 # Cohere 不可用（熔断/未配置/调用失败）时的降级门槛：pgvector 余弦相似度和 Cohere
 # cross-encoder 相关性分数不是同一把尺子，这里的 0.55 不是"等价换算"，是从一次真实
 # 案例（东华大学"学费"问题）里标定的经验值——命中学费的正确 chunk 相似度 0.66，
@@ -227,6 +234,66 @@ def _degrade_to_vector_top_n(chunks: list[dict], top_n: int) -> list[dict]:
     return filtered
 
 
+class CohereAuthError(Exception):
+    """Cohere 返回 401/403——key 缺失/失效，重试没有意义，直接让调用方降级。"""
+
+
+async def _call_cohere_rerank(query: str, documents: list[str]) -> list[dict]:
+    """
+    真正发起 Cohere Rerank API 调用，按错误类型分类处理：
+    - 401/403：鉴权失败，记一条明确日志方便定位（2026-08-24 那次 .env 内联注释
+      污染 COHERE_API_KEY 的 bug，排查耗时长的一部分原因就是这里当时只有一句
+      笼统的 "RERANK_FAILED"，看不出到底是鉴权问题还是别的），不重试直接抛出。
+    - 429/5xx/超时/连接失败：瞬时故障，重试一次（带短暂退避）后仍失败才抛出。
+    - 其他 4xx（比如请求体格式错）：不重试，直接抛出。
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, _COHERE_MAX_ATTEMPTS + 1):
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    _COHERE_RERANK_URL,
+                    headers={
+                        "Authorization": f"Bearer {settings.cohere_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": RERANK_MODEL,
+                        "query": query,
+                        "documents": documents,
+                        "top_n": len(documents),
+                        "return_documents": False,
+                    },
+                )
+            if resp.status_code in (401, 403):
+                logger.error(
+                    "Cohere rerank 鉴权失败（HTTP %s）——请检查 COHERE_API_KEY 是否正确配置",
+                    resp.status_code,
+                )
+                raise CohereAuthError(f"Cohere rerank auth failed: HTTP {resp.status_code}")
+            if resp.status_code == 429:
+                logger.warning("Cohere rerank 触发限流（HTTP 429），第 %s/%s 次尝试", attempt, _COHERE_MAX_ATTEMPTS)
+            resp.raise_for_status()
+            return resp.json()["results"]
+
+        except CohereAuthError:
+            raise
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status < 500 and status != 429:
+                # 其他 4xx（请求本身有问题）重试也不会成功
+                raise
+            last_exc = exc
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            last_exc = exc
+
+        if attempt < _COHERE_MAX_ATTEMPTS:
+            await asyncio.sleep(_COHERE_RETRY_BACKOFF_SECONDS)
+
+    assert last_exc is not None
+    raise last_exc
+
+
 # ── 3. rerank_evidence ────────────────────────────────────────────────────────
 
 async def rerank_evidence(
@@ -261,23 +328,7 @@ async def rerank_evidence(
     documents = [c.get("content", "") for c in chunks]
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                "https://api.cohere.ai/v1/rerank",
-                headers={
-                    "Authorization": f"Bearer {settings.cohere_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": RERANK_MODEL,
-                    "query": query,
-                    "documents": documents,
-                    "top_n": len(documents),
-                    "return_documents": False,
-                },
-            )
-            resp.raise_for_status()
-        results = resp.json()["results"]
+        results = await _call_cohere_rerank(query, documents)
 
         # 把 rerank 分数附加到原始 chunk 上
         scored = []
