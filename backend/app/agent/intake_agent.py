@@ -118,7 +118,11 @@ _TOOLS = [
                 "type": "object",
                 "properties": {
                     "university_name": {"type": "string", "description": "高校名称，如'东华大学'"},
-                    "query": {"type": "string", "description": "用户想了解的具体内容，如'各专业学费标准'"},
+                    "query": {
+                        "type": "string",
+                        "description": "用户想了解的具体内容，用完整自然语句描述，如'各专业学费标准是多少'，"
+                        "不要写成关键词堆砌（如'学费 标准 专业'）",
+                    },
                 },
                 "required": ["university_name", "query"],
             },
@@ -383,13 +387,15 @@ def _run_lookup_tool(name: str, args: dict) -> dict:
     return {"status": result.status.value, "text": result.text, "data": result.data}
 
 
-async def _run_document_search(args: dict) -> dict:
-    """异步执行 RAG 文档检索（embedding + pgvector + rerank 全是 async，不需要 to_thread）。"""
+async def _run_document_search(args: dict, fallback_query: str | None = None) -> dict:
+    """异步执行 RAG 文档检索（embedding + pgvector + rerank 全是 async，不需要 to_thread）。
+    `fallback_query` 是用户原始提问，精排对模型自己拼的 query 措辞很敏感，见
+    `document_search.search_school_documents` 的注释。"""
     from app.database import async_session_maker
     from app.engine.document_search import search_school_documents
 
     async with async_session_maker() as db:
-        result = await search_school_documents(db, **args)
+        result = await search_school_documents(db, fallback_query=fallback_query, **args)
 
     return {"status": result.status.value, "text": result.text, "data": result.data}
 
@@ -420,7 +426,7 @@ def _validate_tool_arguments(name: str, arguments_json: str) -> tuple[dict | Non
 
 
 @traceable(run_type="tool", name="intake_tool_call")
-async def _execute_tool_call(name: str, arguments_json: str) -> dict:
+async def _execute_tool_call(name: str, arguments_json: str, user_message: str | None = None) -> dict:
     args, validation_error = _validate_tool_arguments(name, arguments_json)
     if validation_error:
         return {"status": "ERROR", "text": validation_error, "data": {}}
@@ -429,7 +435,7 @@ async def _execute_tool_call(name: str, arguments_json: str) -> dict:
 
     try:
         if name in _ASYNC_TOOL_NAMES:
-            result = await _run_document_search(args)
+            result = await _run_document_search(args, fallback_query=user_message)
         else:
             result = await asyncio.to_thread(_run_lookup_tool, name, args)
         if result.get("status") not in {"SUCCESS", "PARTIAL", "ERROR"}:
@@ -649,7 +655,7 @@ async def stream_intake_response(
                     assistant_lead_in = full_response
                     for c in calls:
                         args, _ = _validate_tool_arguments(c["name"], c["arguments"])
-                        tool_result = await _execute_tool_call(c["name"], c["arguments"])
+                        tool_result = await _execute_tool_call(c["name"], c["arguments"], user_message=user_message)
 
                         chunks = (tool_result.get("data") or {}).get("chunks") or []
                         if c["name"] == "search_school_documents" and tool_result.get("status") == "SUCCESS" and chunks:

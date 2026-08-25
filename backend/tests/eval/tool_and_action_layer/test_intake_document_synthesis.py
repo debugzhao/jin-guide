@@ -77,7 +77,7 @@ async def _fake_stream(client, messages, *, use_tools, conversation_id=None):
         yield {"choices": [{"delta": {"content": _SYNTHESIZED_ANSWER}, "finish_reason": "stop"}]}
 
 
-async def _fake_execute_tool_call(name: str, arguments_json: str) -> dict:
+async def _fake_execute_tool_call(name: str, arguments_json: str, user_message: str | None = None) -> dict:
     assert name == "search_school_documents"
     return {
         "status": "SUCCESS",
@@ -115,7 +115,7 @@ async def test_search_school_documents_partial_result_still_uses_deterministic_t
     monkeypatch.setattr(intake_agent.httpx, "AsyncClient", _DummyAsyncClient)
     monkeypatch.setattr(intake_agent, "_stream_chat", _fake_stream)
 
-    async def _fake_no_hit(name: str, arguments_json: str) -> dict:
+    async def _fake_no_hit(name: str, arguments_json: str, user_message: str | None = None) -> dict:
         return {
             "status": "PARTIAL",
             "text": "东华大学 暂无与「学费标准」相关的文档记录",

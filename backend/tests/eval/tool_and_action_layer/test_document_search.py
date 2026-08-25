@@ -129,3 +129,150 @@ class TestSearchSchoolDocuments:
         assert chunk["section_title"] == "第二十一条"
         # 摘录必须被截断，不能把整个 chunk 内容（可能超过 1200 字符）原样怼给模型
         assert len(chunk["excerpt"]) <= 400
+
+
+class TestEntityAnchorFusion:
+    """
+    2026-08-25 东华大学"学费"问题真实复现过：query 里没提校名时，Cohere 对同一个
+    chunk 的打分能从 0.5+ 掉到 0.004，比明显无关内容还低——根因是 SQL 已经把候选
+    限定在这所学校范围内这件事，Cohere 精排并不知道，chunk 原文自己也经常不会
+    重复"这段属于哪所学校"。这里验证 query 和候选文档在送去 rerank_evidence 之前
+    都被强制拼上了校名，且最终呈现给用户的摘录里不能带着这个人工拼接的前缀。
+    """
+
+    @pytest.mark.asyncio
+    async def test_rerank_evidence_receives_query_and_content_anchored_with_university_name(self):
+        db = _make_db(university_row=_university(name="东华大学"))
+        raw_chunks = [{"chunk_id": "c1", "document_id": "d1", "content": "学费标准为6500元", "similarity": 0.6}]
+        captured = {}
+
+        async def _capture_rerank(query, chunks, top_n=3):
+            captured["query"] = query
+            captured["chunks"] = chunks
+            return ToolResponse.success("ok", {"chunks": []})
+
+        with (
+            patch("app.engine.document_search.embed_text", new=AsyncMock(return_value=[0.1, 0.2])),
+            patch(
+                "app.engine.document_search.vector_search",
+                new=AsyncMock(return_value=ToolResponse.success("ok", {"chunks": raw_chunks})),
+            ),
+            patch("app.engine.document_search.rerank_evidence", new=_capture_rerank),
+        ):
+            await search_school_documents(db, "东华大学", "学费标准是多少")
+
+        assert captured["query"] == "东华大学学费标准是多少"
+        assert captured["chunks"][0]["content"] == "东华大学：学费标准为6500元"
+
+    @pytest.mark.asyncio
+    async def test_final_excerpt_does_not_leak_the_injected_university_prefix(self):
+        db = _make_db(university_row=_university(name="东华大学"), document_title_rows=[])
+        raw_chunks = [{"chunk_id": "c1", "document_id": "d1", "content": "学费标准为6500元", "similarity": 0.6}]
+        # 模拟 rerank_evidence 真实返回时，content 字段带着我们拼进去的前缀
+        reranked = {**raw_chunks[0], "content": "东华大学：学费标准为6500元", "rerank_score": 0.9, "metadata": {}}
+
+        with (
+            patch("app.engine.document_search.embed_text", new=AsyncMock(return_value=[0.1, 0.2])),
+            patch(
+                "app.engine.document_search.vector_search",
+                new=AsyncMock(return_value=ToolResponse.success("ok", {"chunks": raw_chunks})),
+            ),
+            patch(
+                "app.engine.document_search.rerank_evidence",
+                new=AsyncMock(return_value=ToolResponse.success("ok", {"chunks": [reranked]})),
+            ),
+        ):
+            result = await search_school_documents(db, "东华大学", "学费标准是多少")
+
+        assert result.is_success
+        assert result.data["chunks"][0]["excerpt"] == "学费标准为6500元"
+        assert "东华大学：" not in result.data["chunks"][0]["excerpt"]
+
+
+class TestFallbackQueryRetry:
+    """精排对 query 措辞敏感——模型自己拼的 query 有时打不出分（这次真实案例：
+    "2026年本科学费标准"没提校名，Cohere 打了 0.0045 分，全部被 0.3 下限挡掉），
+    用调用方传入的用户原始提问再试一次，不需要重新跑 embedding/向量检索。"""
+
+    @pytest.mark.asyncio
+    async def test_retries_with_fallback_query_when_primary_query_yields_nothing(self):
+        db = _make_db(
+            university_row=_university(name="东华大学"),
+            document_title_rows=[MagicMock(id="d1", title="东华大学2026年本科招生章程")],
+        )
+        raw_chunks = [{"chunk_id": "c1", "document_id": "d1", "content": "学费标准为6500元", "similarity": 0.6}]
+        reranked_hit = {**raw_chunks[0], "rerank_score": 0.7, "metadata": {}}
+
+        call_queries = []
+
+        async def _rerank_side_effect(query, chunks, top_n=3):
+            call_queries.append(query)
+            if len(call_queries) == 1:
+                return ToolResponse.success("ok", {"chunks": []})  # 第一次（模型拼的query）打不出分
+            return ToolResponse.success("ok", {"chunks": [reranked_hit]})  # 第二次（原始提问）命中
+
+        with (
+            patch("app.engine.document_search.embed_text", new=AsyncMock(return_value=[0.1, 0.2])),
+            patch(
+                "app.engine.document_search.vector_search",
+                new=AsyncMock(return_value=ToolResponse.success("ok", {"chunks": raw_chunks})),
+            ),
+            patch("app.engine.document_search.rerank_evidence", new=_rerank_side_effect),
+        ):
+            result = await search_school_documents(
+                db, "东华大学", "2026年本科学费标准",
+                fallback_query="东华大学2026年本科学费标准是多少？",
+            )
+
+        assert len(call_queries) == 2, "第一次打不出分应该用 fallback_query 再试一次"
+        assert result.is_success
+        assert result.data["chunks"][0]["excerpt"] == "学费标准为6500元"
+
+    @pytest.mark.asyncio
+    async def test_no_retry_when_fallback_query_same_as_query(self):
+        """fallback_query 和 query 完全一样时再试一次没有意义，不该多打一次 API。"""
+        db = _make_db(university_row=_university())
+        raw_chunks = [{"chunk_id": "c1", "document_id": "d1", "content": "内容", "similarity": 0.6}]
+        call_count = 0
+
+        async def _rerank_always_empty(query, chunks, top_n=3):
+            nonlocal call_count
+            call_count += 1
+            return ToolResponse.success("ok", {"chunks": []})
+
+        with (
+            patch("app.engine.document_search.embed_text", new=AsyncMock(return_value=[0.1, 0.2])),
+            patch(
+                "app.engine.document_search.vector_search",
+                new=AsyncMock(return_value=ToolResponse.success("ok", {"chunks": raw_chunks})),
+            ),
+            patch("app.engine.document_search.rerank_evidence", new=_rerank_always_empty),
+        ):
+            result = await search_school_documents(db, "东华大学", "学费", fallback_query="学费")
+
+        assert call_count == 1
+        assert result.is_partial
+
+    @pytest.mark.asyncio
+    async def test_no_retry_when_fallback_query_not_provided(self):
+        db = _make_db(university_row=_university())
+        raw_chunks = [{"chunk_id": "c1", "document_id": "d1", "content": "内容", "similarity": 0.6}]
+        call_count = 0
+
+        async def _rerank_always_empty(query, chunks, top_n=3):
+            nonlocal call_count
+            call_count += 1
+            return ToolResponse.success("ok", {"chunks": []})
+
+        with (
+            patch("app.engine.document_search.embed_text", new=AsyncMock(return_value=[0.1, 0.2])),
+            patch(
+                "app.engine.document_search.vector_search",
+                new=AsyncMock(return_value=ToolResponse.success("ok", {"chunks": raw_chunks})),
+            ),
+            patch("app.engine.document_search.rerank_evidence", new=_rerank_always_empty),
+        ):
+            result = await search_school_documents(db, "东华大学", "学费")
+
+        assert call_count == 1
+        assert result.is_partial

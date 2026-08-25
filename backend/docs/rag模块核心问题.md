@@ -1,8 +1,42 @@
 切块、召回、排序、查找（查询的准确）
 
+### 线上 bug
 
+#### bug 1：query 里缺少院校名时，Cohere 精排会把正确答案打成"不相关"
 
+**现象**
 
+真实用户对话（`intake_conversation_id=a175916c-b6e0-4778-8561-3ab8861f29e5`）：用户问"东华大学2026年本科学费标准是多少？"，`search_school_documents` 命中 `lookup_university_score` 之外的分支去查章程原文，但最终回复是"东华大学 暂无与「2026年本科学费标准」高度相关的文档内容"——数据库里明明有这条数据（章程原文写着"文科类学费标准为6500元/生·学年…"），却被判定为查不到。
+
+**原因**
+
+排查时用当次真实用到的 query（"2026年本科学费标准"，模型自己拼的，没带"东华大学"这几个字）复现整条链路：
+
+1. `vector_search` 召回完全正常——正确的 chunk（学费标准原文）排在 top-20 候选池第一名，相似度 0.5647，没有被漏检、没有被切断
+2. 但真实调用 Cohere 精排后，这条正确 chunk 的 `relevance_score` 只有 **0.0045**，比好几条明显无关的学院导航页（0.01 左右）还低，远低于 `RERANK_SCORE_FLOOR=0.3`，20 条候选全军覆没
+
+对比同一个 chunk 在不同 query 措辞下的真实 Cohere 分数：
+
+| query 措辞 | 是否含校名 | Cohere 分数 |
+|---|---|---|
+| "各专业学费标准" | 否（但是自然短语） | 0.9647 |
+| "东华大学2026年本科学费标准是多少？各专业有区别吗？" | 是（完整问句） | 0.5065 |
+| "2026年本科学费标准 各专业学费"（关键词拼接） | 否 | 0.0234 |
+| **"2026年本科学费标准"（这次真实触发 bug 的 query）** | **否** | **0.0045** |
+
+根因：`search_school_documents` 工具把 `university_name` 和 `query` 设计成两个独立参数（这个拆分本身没问题，`university_name` 要拿去做 SQL 精确过滤，必须是干净的标识符，不能是自由文本）。但 `vector_search` 用 SQL 过滤候选范围之后，`rerank_evidence` 只是把裸的 `query` 字符串和候选 chunk 原文孤立地拿去比对——Cohere 精排模型并不知道"这些候选已经被 SQL 筛过是这所学校的"，chunk 原文本身也经常不会重复"这段属于哪所学校"（这条 chunk 就是直接写"文科类学费标准为6500元…"，没有主语）。一旦 query 里也没有校名、又是短语而非自然问句，精排就彻底失去了判断"这段内容和这个问题搭不搭"的锚点，打分直接崩到接近 0。
+
+**解决方案**
+
+不依赖模型自己记得在 query 里写校名，而是在代码里强制把已经拆分出去的校名重新拼回语义比对需要的地方（`backend/app/engine/document_search.py`）：
+
+1. **给 query 和候选文档都补上校名再送去精排**：新增 `_rerank_with_entity_anchor()`，调用 `rerank_evidence` 前把 query 改成 `f"{university_name}{query}"`，候选 chunk 的 content 也临时拼上 `f"{university_name}：{content}"`；精排完成后再用 `chunk_id` 把内容换回原始版本，不让这个人工前缀泄露到最终呈现给用户的摘录里
+2. **精排结果为空时，用用户原始提问再兜底重试一次**：`search_school_documents` 新增 `fallback_query` 参数，由 `intake_agent.py` 把用户原始提问一路传下来；第一次（模型拼的 `query`）精排为空时，复用同一批已召回的 chunks，改用用户原始提问再试一次精排，不需要重新跑 embedding/向量检索
+3. **收紧 `search_school_documents` 的 `query` 参数描述**：要求"用完整自然语句描述，不要写成关键词堆砌"，降低模型生成差 query 的概率（辅助措施，不单独依赖）
+
+**验证**
+
+用当次真实触发 bug 的 query（"东华大学"+"2026年本科学费标准"）直接调用修复后的 `search_school_documents`，无需 fallback 即返回 `status=SUCCESS`，命中正确 chunk；再用完整的原始用户问题跑一遍 `/intake/chat` 端到端，正确返回分专业学费明细 + 来源引用。新增 6 个测试覆盖"query/文档被正确拼上校名""最终摘录不泄露人工前缀""fallback 命中时正确重试""fallback 与 query 相同时不重复调用""未提供 fallback 时不重试"等分支，全量 292 项测试通过。
 
 ### 1. 什么是 RAG？它解决了哪些问题？
 
