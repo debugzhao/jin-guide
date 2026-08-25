@@ -4,13 +4,22 @@ ConversationAgent — 报告问答 AI 助手
 职责：
 - 接收用户针对某份具体报告提出的问题。
 - 在约 20K token 预算内，从报告（plan_json、evidence_json、profile）构建上下文。
-- 执行范围受限的 RAG：vector_search 限定在同一省份+年份内检索。
+- 执行范围受限的 RAG：vector_search 限定在报告所在省份内检索（不额外按年份限定，
+  见 `_retrieve_extra_context` 注释）。
 - 调用 LiteLLM 流式接口并逐个产出 token。
 - 对最终拼装完成的回复做正则合规检查。
 - 绝不做过度承诺；始终引用证据的 source ID。
 
 每条消息的处理流程：
-    load_report_context → [可选] vector_search → LLM 流式生成 → compliance_check → 逐段产出
+    load_report_context → 补充 vector_search（命中才注入，未命中不影响后续流程）
+    → LLM 流式生成 → compliance_check → 逐段产出
+
+2026-08-25 之前这里的 vector_search 是死代码：`extra_context` 参数存在、
+`_build_messages` 也确实会把它包装成 untrusted-data 注入 messages，但唯一调用方
+`chat.py` 从未传过这个参数，检索永远不会真正发生。现在由 `stream_conversation_response`
+在调用方没有显式传 `extra_context` 时自己发起检索——retrieve 到的原文只会被喂给
+下面唯一一次的 LLM 流式生成去消化、组织语言，不会有任何代码路径把检索片段原样
+发给用户，天然不会重蹈 IntakeAgent 那次"原文直接返回"的覆辙。
 """
 from __future__ import annotations
 
@@ -164,6 +173,69 @@ def _build_messages(
     return messages
 
 
+def _infer_province(evidence_json: list | None) -> str | None:
+    """从报告证据链里取第一条带 province 字段的记录，作为补充检索的省份范围——
+    避免额外查一次 StudentProfile，evidence_json 本来就是本次请求已经带上的参数。"""
+    for item in evidence_json or []:
+        if isinstance(item, dict) and item.get("province"):
+            return item["province"]
+    return None
+
+
+_EXTRA_RETRIEVAL_EXCERPT_CHARS = 400
+_EXTRA_RETRIEVAL_TOP_N = 3
+
+
+async def _retrieve_extra_context(user_message: str, evidence_json: list | None) -> str:
+    """
+    报告问答场景的补充检索：限定在报告所在省份内找相关文档片段（章程/政策类
+    原文，覆盖 plan_json/evidence_json 这些结构化数据本身没有的定性内容），
+    命中结果时格式化成文本交给下面唯一一次的流式生成去读、去组织语言——
+    不直接把片段发给用户，天然符合 retrieve -> augment -> generate。
+
+    只按省份限定，不按年份限定：evidence_json 里不同证据项的 year 可能来自
+    不同年份的历年分数线，RAG 文档（章程/专业介绍）通常只有当年一份快照，
+    两者语义不是同一个"年份"，强行按 year 做等值过滤有重蹈 university_id
+    覆辙的风险（之前那次就是过度收窄过滤条件导致静默返回 0 条）——不确定
+    收益能不能盖过这个风险之前，宁可只按省份收窄。
+
+    任何异常（embedding/pgvector/rerank 故障）都吞掉降级为空字符串，不能因为
+    这一步补充检索失败就让整个问答请求跟着失败——`extra_context` 本来就是
+    可选的补充材料，不是回答用户问题的必要前提。
+    """
+    province = _infer_province(evidence_json)
+    if not province:
+        return ""
+
+    try:
+        from app.database import async_session_maker
+        from app.engine.embedding import embed_text
+        from app.engine.retrieval import rerank_evidence, vector_search
+
+        query_vector = await embed_text(user_message)
+        async with async_session_maker() as db:
+            search_result = await vector_search(query_vector, province=province, db=db)
+        chunks = search_result.data.get("chunks", []) if search_result.is_usable else []
+        if not chunks:
+            return ""
+
+        rerank_result = await rerank_evidence(user_message, chunks, top_n=_EXTRA_RETRIEVAL_TOP_N)
+        top_chunks = rerank_result.data.get("chunks", [])
+        if not top_chunks:
+            return ""
+
+        lines = []
+        for c in top_chunks:
+            metadata = c.get("metadata") or {}
+            source_url = metadata.get("source_url") or "未知"
+            excerpt = c.get("content", "")[:_EXTRA_RETRIEVAL_EXCERPT_CHARS]
+            lines.append(f"{excerpt}（来源：{source_url}）")
+        return "\n\n".join(lines)
+    except Exception:
+        logger.warning("ConversationAgent 补充检索失败，降级为不注入额外上下文", exc_info=True)
+        return ""
+
+
 def _compliance_check(text: str) -> tuple[bool, list[str]]:
     """对生成的回复文本做一次快速的正则合规检查。"""
     issues = check_compliance(text)
@@ -202,6 +274,12 @@ async def stream_conversation_response(
     context_block, context_breakdown, context_truncated = _build_context_block(plan_json, evidence_json)
     summary_block = _build_summary_block(summary)
     trimmed_history = _trim_history(history)
+
+    # 调用方没有显式传 extra_context 时，自己发起一次范围受限的补充检索——见模块
+    # docstring 和 _retrieve_extra_context 的注释。传了就尊重调用方（目前没有
+    # 调用方会传，保留这个参数只是为了测试时可以绕过真实检索直接注入固定内容）。
+    if not extra_context:
+        extra_context = await _retrieve_extra_context(user_message, evidence_json)
 
     # P3 第一阶段：只统计、不裁剪（见 docs/memory-architecture.md 第六节 P3、
     # docs/疑问杂项.md 关于 LangSmith 分工的说明）。
