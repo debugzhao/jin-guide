@@ -14,6 +14,7 @@ import logging
 from collections import defaultdict
 
 import httpx
+from langsmith import traceable
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -49,6 +50,16 @@ DEGRADED_SIMILARITY_FLOOR = 0.55
 
 # ── 1. vector_search ──────────────────────────────────────────────────────────
 
+def _process_vector_search_inputs(inputs: dict) -> dict:
+    # db 是 AsyncSession，不可序列化也不该出现在 trace 里；query_vector 是 1024
+    # 维浮点数组，记完整值对排查没帮助，只留维度
+    safe = {k: v for k, v in inputs.items() if k != "db"}
+    if safe.get("query_vector") is not None:
+        safe["query_vector"] = f"<{len(safe['query_vector'])}-dim vector>"
+    return safe
+
+
+@traceable(run_type="tool", name="vector_search", process_inputs=_process_vector_search_inputs)
 async def vector_search(
     query_vector: list[float],
     province: str | None = None,
@@ -296,6 +307,7 @@ async def _call_cohere_rerank(query: str, documents: list[str]) -> list[dict]:
 
 # ── 3. rerank_evidence ────────────────────────────────────────────────────────
 
+@traceable(run_type="tool", name="rerank_evidence")
 async def rerank_evidence(
     query: str,
     chunks: list[dict],

@@ -33,6 +33,8 @@ from datetime import datetime
 from html import escape
 
 import httpx
+from langsmith import traceable
+from langsmith.run_helpers import trace
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from app.agent.context_budget import log_context_budget
@@ -417,6 +419,7 @@ def _validate_tool_arguments(name: str, arguments_json: str) -> tuple[dict | Non
     return validated.model_dump(exclude_none=True), None
 
 
+@traceable(run_type="tool", name="intake_tool_call")
 async def _execute_tool_call(name: str, arguments_json: str) -> dict:
     args, validation_error = _validate_tool_arguments(name, arguments_json)
     if validation_error:
@@ -532,147 +535,166 @@ async def stream_intake_response(
         {"type": "done", "full_response": "..."}
         {"type": "error", "message": "..."}
     """
-    messages = _build_messages(history, user_message, summary)
-    full_response = ""
-    output_guard = StreamingOutputGuard()
-    reasoning_guard = StreamingOutputGuard() if reasoning_display_enabled else None
-    reasoning_chars_emitted = 0
-    reasoning_truncated = False
-    compliance_issues: list[str] = []
+    # session_id 是 LangSmith Threads 分组用的标准 key：同一个 conversation_id 的
+    # 多轮对话会被聚合成一条 thread，而不是散成互不相关的独立 trace；conversation_id
+    # 再重复存一份方便直接按会话搜索。没有 conversation_id（极早期兜底路径）时不设
+    # metadata，trace 仍会生成，只是不会被归到任何 thread。
+    trace_metadata = (
+        {"session_id": conversation_id, "conversation_id": conversation_id}
+        if conversation_id
+        else {}
+    )
 
-    try:
-        async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as client:
-            tool_calls_acc: dict[int, dict] = {}
-            finish_reason: str | None = None
+    async with trace(
+        name="intake_chat_turn",
+        run_type="chain",
+        inputs={"user_message": user_message},
+        metadata=trace_metadata,
+    ) as turn_run:
+        messages = _build_messages(history, user_message, summary)
+        full_response = ""
+        output_guard = StreamingOutputGuard()
+        reasoning_guard = StreamingOutputGuard() if reasoning_display_enabled else None
+        reasoning_chars_emitted = 0
+        reasoning_truncated = False
+        compliance_issues: list[str] = []
 
-            stream_kwargs = {"use_tools": True}
-            if conversation_id is not None:
-                stream_kwargs["conversation_id"] = conversation_id
-            async for chunk in _stream_chat(client, messages, **stream_kwargs):
-                choice = (chunk.get("choices") or [{}])[0]
-                delta = choice.get("delta", {})
-                finish_reason = choice.get("finish_reason") or finish_reason
+        try:
+            async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as client:
+                tool_calls_acc: dict[int, dict] = {}
+                finish_reason: str | None = None
 
-                reasoning = delta.get("reasoning_content")
-                if reasoning_guard is not None and reasoning and not reasoning_truncated:
-                    safe_reasoning = reasoning_guard.feed(reasoning)
-                    remaining = MAX_REASONING_DISPLAY_CHARS - reasoning_chars_emitted
-                    if safe_reasoning and remaining > 0:
-                        visible_reasoning = safe_reasoning[:remaining]
-                        reasoning_chars_emitted += len(visible_reasoning)
-                        if visible_reasoning:
-                            yield {"type": "thinking", "content": visible_reasoning}
-                    if len(safe_reasoning) > remaining:
-                        reasoning_truncated = True
-                        yield {"type": "thinking", "content": "\n\n（推理过程过长，已截断）"}
+                stream_kwargs = {"use_tools": True}
+                if conversation_id is not None:
+                    stream_kwargs["conversation_id"] = conversation_id
+                async for chunk in _stream_chat(client, messages, **stream_kwargs):
+                    choice = (chunk.get("choices") or [{}])[0]
+                    delta = choice.get("delta", {})
+                    finish_reason = choice.get("finish_reason") or finish_reason
 
-                token = delta.get("content")
-                if token:
-                    safe_token = output_guard.feed(token)
-                    if safe_token:
-                        full_response += safe_token
-                        yield {"type": "token", "content": safe_token}
+                    reasoning = delta.get("reasoning_content")
+                    if reasoning_guard is not None and reasoning and not reasoning_truncated:
+                        safe_reasoning = reasoning_guard.feed(reasoning)
+                        remaining = MAX_REASONING_DISPLAY_CHARS - reasoning_chars_emitted
+                        if safe_reasoning and remaining > 0:
+                            visible_reasoning = safe_reasoning[:remaining]
+                            reasoning_chars_emitted += len(visible_reasoning)
+                            if visible_reasoning:
+                                yield {"type": "thinking", "content": visible_reasoning}
+                        if len(safe_reasoning) > remaining:
+                            reasoning_truncated = True
+                            yield {"type": "thinking", "content": "\n\n（推理过程过长，已截断）"}
 
-                for tc in delta.get("tool_calls") or []:
-                    idx = tc.get("index", 0)
-                    acc = tool_calls_acc.setdefault(idx, {"id": "", "name": "", "arguments": ""})
-                    if tc.get("id"):
-                        acc["id"] = tc["id"]
-                    fn = tc.get("function") or {}
-                    if fn.get("name"):
-                        acc["name"] = fn["name"]
-                    if fn.get("arguments"):
-                        acc["arguments"] += fn["arguments"]
-
-            if reasoning_guard is not None and not reasoning_truncated:
-                remaining_reasoning = reasoning_guard.flush()
-                remaining_capacity = MAX_REASONING_DISPLAY_CHARS - reasoning_chars_emitted
-                if remaining_reasoning and remaining_capacity > 0:
-                    visible_reasoning = remaining_reasoning[:remaining_capacity]
-                    if visible_reasoning:
-                        yield {"type": "thinking", "content": visible_reasoning}
-                if len(remaining_reasoning) > remaining_capacity:
-                    yield {"type": "thinking", "content": "\n\n（推理过程过长，已截断）"}
-
-            remaining_output = output_guard.flush()
-            if remaining_output:
-                full_response += remaining_output
-                yield {"type": "token", "content": remaining_output}
-            compliance_issues.extend(output_guard.compliance_issues)
-
-            if finish_reason == "tool_calls" and tool_calls_acc:
-                calls = list(tool_calls_acc.values())
-
-                valid_profile_trigger = any(
-                    c["name"] == "start_profile_capture"
-                    and _validate_tool_arguments(c["name"], c["arguments"])[1] is None
-                    for c in calls
-                )
-                if valid_profile_trigger:
-                    # 模型有时会在同一轮里既输出一句话又调用工具；已经有话就不再叠加固定文案，
-                    # 避免出现"模型的话 + 写死的话"重复两句。
-                    if not full_response:
-                        full_response = _START_PROFILE_ACK
-                        yield {"type": "token", "content": full_response}
-                    if compliance_issues:
-                        yield {"type": "compliance_warning", "issues": compliance_issues}
-                    yield {"type": "trigger_profile_capture"}
-                    yield {"type": "done", "full_response": full_response}
-                    return
-
-                # SQL 工具的结果直接模板化成自然语言，不再发起第二次完整流式请求让
-                # 模型复述——第二次调用会重新付出一遍 kimi-k2.6 的隐藏思维链开销，是
-                # 工具调用场景耗时接近翻倍的主因，见 _format_tool_result_text 的注释。
-                # search_school_documents 命中真实检索结果时是例外：检索到的是非结构化
-                # 原文，不做一次真正的生成就等于把原始 chunk 原样怼给用户，见
-                # _stream_document_synthesis 的注释。
-                assistant_lead_in = full_response
-                for c in calls:
-                    args, _ = _validate_tool_arguments(c["name"], c["arguments"])
-                    tool_result = await _execute_tool_call(c["name"], c["arguments"])
-
-                    chunks = (tool_result.get("data") or {}).get("chunks") or []
-                    if c["name"] == "search_school_documents" and tool_result.get("status") == "SUCCESS" and chunks:
-                        separator = "\n\n" if full_response else ""
-                        if separator:
-                            full_response += separator
-                            yield {"type": "token", "content": separator}
-                        async for safe_token in _stream_document_synthesis(
-                            client, messages, assistant_lead_in, c, chunks, output_guard, conversation_id
-                        ):
+                    token = delta.get("content")
+                    if token:
+                        safe_token = output_guard.feed(token)
+                        if safe_token:
                             full_response += safe_token
                             yield {"type": "token", "content": safe_token}
-                        remaining = output_guard.flush()
-                        if remaining:
-                            full_response += remaining
-                            yield {"type": "token", "content": remaining}
-                        for issue in output_guard.compliance_issues:
+
+                    for tc in delta.get("tool_calls") or []:
+                        idx = tc.get("index", 0)
+                        acc = tool_calls_acc.setdefault(idx, {"id": "", "name": "", "arguments": ""})
+                        if tc.get("id"):
+                            acc["id"] = tc["id"]
+                        fn = tc.get("function") or {}
+                        if fn.get("name"):
+                            acc["name"] = fn["name"]
+                        if fn.get("arguments"):
+                            acc["arguments"] += fn["arguments"]
+
+                if reasoning_guard is not None and not reasoning_truncated:
+                    remaining_reasoning = reasoning_guard.flush()
+                    remaining_capacity = MAX_REASONING_DISPLAY_CHARS - reasoning_chars_emitted
+                    if remaining_reasoning and remaining_capacity > 0:
+                        visible_reasoning = remaining_reasoning[:remaining_capacity]
+                        if visible_reasoning:
+                            yield {"type": "thinking", "content": visible_reasoning}
+                    if len(remaining_reasoning) > remaining_capacity:
+                        yield {"type": "thinking", "content": "\n\n（推理过程过长，已截断）"}
+
+                remaining_output = output_guard.flush()
+                if remaining_output:
+                    full_response += remaining_output
+                    yield {"type": "token", "content": remaining_output}
+                compliance_issues.extend(output_guard.compliance_issues)
+
+                if finish_reason == "tool_calls" and tool_calls_acc:
+                    calls = list(tool_calls_acc.values())
+
+                    valid_profile_trigger = any(
+                        c["name"] == "start_profile_capture"
+                        and _validate_tool_arguments(c["name"], c["arguments"])[1] is None
+                        for c in calls
+                    )
+                    if valid_profile_trigger:
+                        # 模型有时会在同一轮里既输出一句话又调用工具；已经有话就不再叠加固定文案，
+                        # 避免出现"模型的话 + 写死的话"重复两句。
+                        if not full_response:
+                            full_response = _START_PROFILE_ACK
+                            yield {"type": "token", "content": full_response}
+                        if compliance_issues:
+                            yield {"type": "compliance_warning", "issues": compliance_issues}
+                        yield {"type": "trigger_profile_capture"}
+                        turn_run.add_outputs({"full_response": full_response, "triggered_profile_capture": True})
+                        yield {"type": "done", "full_response": full_response}
+                        return
+
+                    # SQL 工具的结果直接模板化成自然语言，不再发起第二次完整流式请求让
+                    # 模型复述——第二次调用会重新付出一遍 kimi-k2.6 的隐藏思维链开销，是
+                    # 工具调用场景耗时接近翻倍的主因，见 _format_tool_result_text 的注释。
+                    # search_school_documents 命中真实检索结果时是例外：检索到的是非结构化
+                    # 原文，不做一次真正的生成就等于把原始 chunk 原样怼给用户，见
+                    # _stream_document_synthesis 的注释。
+                    assistant_lead_in = full_response
+                    for c in calls:
+                        args, _ = _validate_tool_arguments(c["name"], c["arguments"])
+                        tool_result = await _execute_tool_call(c["name"], c["arguments"])
+
+                        chunks = (tool_result.get("data") or {}).get("chunks") or []
+                        if c["name"] == "search_school_documents" and tool_result.get("status") == "SUCCESS" and chunks:
+                            separator = "\n\n" if full_response else ""
+                            if separator:
+                                full_response += separator
+                                yield {"type": "token", "content": separator}
+                            async for safe_token in _stream_document_synthesis(
+                                client, messages, assistant_lead_in, c, chunks, output_guard, conversation_id
+                            ):
+                                full_response += safe_token
+                                yield {"type": "token", "content": safe_token}
+                            remaining = output_guard.flush()
+                            if remaining:
+                                full_response += remaining
+                                yield {"type": "token", "content": remaining}
+                            for issue in output_guard.compliance_issues:
+                                if issue not in compliance_issues:
+                                    compliance_issues.append(issue)
+                            continue
+
+                        text = _format_tool_result_text(c["name"], args or {}, tool_result)
+                        for issue in check_compliance(text):
                             if issue not in compliance_issues:
                                 compliance_issues.append(issue)
-                        continue
+                        text = sanitize_text(text)
+                        separator = "\n\n" if full_response else ""
+                        full_response += separator + text
+                        yield {"type": "token", "content": separator + text}
 
-                    text = _format_tool_result_text(c["name"], args or {}, tool_result)
-                    for issue in check_compliance(text):
-                        if issue not in compliance_issues:
-                            compliance_issues.append(issue)
-                    text = sanitize_text(text)
-                    separator = "\n\n" if full_response else ""
-                    full_response += separator + text
-                    yield {"type": "token", "content": separator + text}
+                if not full_response:
+                    # 推理模型可能把预算耗在内部 reasoning_content 上而没有正式正文；
+                    # 不论诊断展示是否开启，都必须用安全的固定文案明确结束本轮。
+                    full_response = "这个问题有点复杂，我还没组织完答案就到达长度上限了，可以换个更具体的问法，或者拆成几个小问题分别问我～"
+                    yield {"type": "token", "content": full_response}
 
-            if not full_response:
-                # 推理模型可能把预算耗在内部 reasoning_content 上而没有正式正文；
-                # 不论诊断展示是否开启，都必须用安全的固定文案明确结束本轮。
-                full_response = "这个问题有点复杂，我还没组织完答案就到达长度上限了，可以换个更具体的问法，或者拆成几个小问题分别问我～"
-                yield {"type": "token", "content": full_response}
+                if compliance_issues:
+                    yield {"type": "compliance_warning", "issues": compliance_issues}
 
-            if compliance_issues:
-                yield {"type": "compliance_warning", "issues": compliance_issues}
+                turn_run.add_outputs({"full_response": full_response, "compliance_issues": compliance_issues})
+                yield {"type": "done", "full_response": full_response}
 
-            yield {"type": "done", "full_response": full_response}
-
-    except Exception as exc:
-        logger.warning("IntakeAgent LLM call failed: %s", exc)
-        fallback = "抱歉，AI 助手暂时无法响应，请稍后重试。"
-        yield {"type": "token", "content": fallback}
-        yield {"type": "done", "full_response": fallback}
+        except Exception as exc:
+            logger.warning("IntakeAgent LLM call failed: %s", exc)
+            fallback = "抱歉，AI 助手暂时无法响应，请稍后重试。"
+            turn_run.add_outputs({"full_response": fallback, "error": str(exc)})
+            yield {"type": "token", "content": fallback}
+            yield {"type": "done", "full_response": fallback}
