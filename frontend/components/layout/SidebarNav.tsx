@@ -6,7 +6,7 @@ import Button from '@/components/ui/Button'
 import Modal from '@/components/ui/Modal'
 import UserMenu from '@/components/ui/UserMenu'
 import { intakeChatApi, type IntakeConversationListItem } from '@/lib/api'
-import { useAppStore } from '@/lib/store'
+import { useAppStore, type CurrentUser } from '@/lib/store'
 
 interface SidebarNavProps {
   onNewConversation: () => void
@@ -15,6 +15,9 @@ interface SidebarNavProps {
   onLoginClick: () => void
   /** 桌面端收起整个侧栏；不传则不渲染收起按钮（移动端抽屉场景用不到） */
   onToggleSidebar?: () => void
+  /** 服务端首屏已经解析出的登录态，避免等待客户端 hydration 后才渲染登录区。 */
+  initialUser?: CurrentUser | null
+  initialAuthChecked?: boolean
 }
 
 interface ConversationRowProps {
@@ -126,8 +129,17 @@ function ConversationRow({ conversation, active, onSelect, onRename, onRequestDe
 }
 
 /** 左侧持久导航栏（对齐千问式布局）：新建对话 + 建档前聊天的历史会话列表（可重命名/删除）。 */
-export default function SidebarNav({ onNewConversation, onSelectConversation, onLoginClick, onToggleSidebar }: SidebarNavProps) {
+export default function SidebarNav({
+  onNewConversation,
+  onSelectConversation,
+  onLoginClick,
+  onToggleSidebar,
+  initialUser = null,
+  initialAuthChecked = false,
+}: SidebarNavProps) {
   const { user, authChecked, currentIntakeConversationId, conversationListVersion } = useAppStore()
+  const displayedUser = authChecked ? user : initialUser
+  const displayedAuthChecked = authChecked || initialAuthChecked
   const [conversations, setConversations] = useState<IntakeConversationListItem[]>([])
   const [loading, setLoading] = useState(true)
   const [nextCursor, setNextCursor] = useState<string | null>(null)
@@ -243,11 +255,11 @@ export default function SidebarNav({ onNewConversation, onSelectConversation, on
       </div>
 
       <div className="px-3 py-3 border-t border-[#E2E8F0] flex-shrink-0">
-        {authChecked && (
-          user ? (
+        {displayedAuthChecked && (
+          displayedUser ? (
             <div className="flex items-center gap-2">
-              <UserMenu />
-              <span className="text-xs text-[#64748B] truncate">{user.email}</span>
+              <UserMenu initialUser={initialUser} />
+              <span className="text-xs text-[#64748B] truncate">{displayedUser.email}</span>
             </div>
           ) : (
             <Button variant="ghost" size="sm" className="w-full" onClick={onLoginClick}>

@@ -104,6 +104,8 @@ else
   if [[ "$SYNC_FRONTEND" == "1" ]]; then
     echo "    - frontend/"
     rsync -az --delete $DRY_RUN "${EXCLUDES[@]}" ./frontend/ "${REMOTE_HOST}:${REMOTE_DIR}/frontend/"
+    echo "    - docker-compose.prod.yml"
+    rsync -az $DRY_RUN ./docker-compose.prod.yml "${REMOTE_HOST}:${REMOTE_DIR}/docker-compose.prod.yml"
   fi
   if [[ "$SYNC_BACKEND" == "1" ]]; then
     echo "    - backend/"
@@ -120,9 +122,9 @@ echo "==> 2/3 远程构建并重启容器：${SERVICES[*]:-(全部服务)}"
 # -V/--renew-anon-volumes：frontend 服务用匿名卷隔离 node_modules/.next 做热重载，
 # recreate 容器时 docker compose 默认会复用旧容器的匿名卷内容而不是新镜像装好的依赖，
 # 不加这个参数的话，新增 npm 包后线上会报 Module not found（backend/worker 无匿名卷，不受影响）。
-ssh "${REMOTE_HOST}" "cd ${REMOTE_DIR} && docker compose build ${SERVICES[*]:-} && docker compose up -d -V ${SERVICES[*]:-}"
+ssh "${REMOTE_HOST}" "cd ${REMOTE_DIR} && docker compose -f docker-compose.yml -f docker-compose.prod.yml build ${SERVICES[*]:-} && docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d -V ${SERVICES[*]:-}"
 
 echo "==> 3/3 容器状态"
-ssh "${REMOTE_HOST}" "cd ${REMOTE_DIR} && docker compose ps"
+ssh "${REMOTE_HOST}" "cd ${REMOTE_DIR} && docker compose -f docker-compose.yml -f docker-compose.prod.yml ps"
 
 echo "✅ 部署完成"

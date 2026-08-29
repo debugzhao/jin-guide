@@ -1,0 +1,9 @@
+services:
+  frontend:
+    build:
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        NEXT_BASE_PATH: ${NEXT_BASE_PATH:-}
+    environment:
+      NODE_ENV: production
+    command: npm run start

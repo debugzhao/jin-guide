@@ -79,7 +79,7 @@ docker compose exec backend python -m pytest -q
 
 ### 部署
 
-`scripts/deploy.sh` 一键部署到远程 jdy_server（rsync 同步 + 远程 `docker compose build/up`）：
+`scripts/deploy.sh` 一键部署到远程 jdy_server（rsync 同步 + 远程 `docker compose build/up`）。部署脚本会叠加 `docker-compose.prod.yml`，前端使用 `next start`；本地直接运行 `docker compose up` 仍使用 `next dev`：
 
 ```bash
 ./scripts/deploy.sh                 # 全量：整仓库 + 重建全部服务

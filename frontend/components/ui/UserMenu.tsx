@@ -3,10 +3,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { LogOut } from 'lucide-react'
 import { api } from '@/lib/api'
-import { useAppStore } from '@/lib/store'
+import { useAppStore, type CurrentUser } from '@/lib/store'
 
-export default function UserMenu() {
-  const user = useAppStore((s) => s.user)
+export default function UserMenu({ initialUser = null }: { initialUser?: CurrentUser | null }) {
+  const storeUser = useAppStore((s) => s.user)
+  const authChecked = useAppStore((s) => s.authChecked)
+  const user = authChecked ? storeUser : initialUser
   const clearUser = useAppStore((s) => s.clearUser)
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
