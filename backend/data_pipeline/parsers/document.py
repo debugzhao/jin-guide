@@ -197,6 +197,15 @@ def _select_paragraphs(paragraphs: list[str], document_type: str) -> list[str]:
     return [paragraph for paragraph, kept in zip(paragraphs, keep) if kept]
 
 
+_SECTION_BOUNDARY_PATTERN = re.compile(r"^第[一二三四五六七八九十百零〇0-9]+[条章]")
+# 只要当前 chunk 已经攒够预算的一半，遇到新的"第N条/第N章"就提前切一刀，哪怕还没
+# 到字符上限——纯粹按字符数贪心拼接会把物理上相邻但主题无关的条款也拼进同一个
+# chunk（实测东华大学章程"体检色觉异常要求"和"学费标准"紧挨着排在一起，硬拼进
+# 同一个 chunk 会稀释语义、拖累 rerank 命中率），优先在条款边界切能让每个 chunk
+# 更贴近一个独立的语义单元。
+_SECTION_BOUNDARY_SOFT_MIN_RATIO = 0.5
+
+
 def _tail_overlap(text: str, overlap_chars: int) -> str:
     """取上一个 chunk 结尾的一小段作为下一个 chunk 的开头（overlap）。
 
@@ -231,7 +240,13 @@ def split_into_chunks(
     chunks: list[str] = []
     current = ""
     for paragraph in selected:
-        if current and len(current) + len(paragraph) + 1 > budget_chars:
+        would_overflow = current and len(current) + len(paragraph) + 1 > budget_chars
+        at_section_boundary = (
+            current
+            and len(current) >= budget_chars * _SECTION_BOUNDARY_SOFT_MIN_RATIO
+            and _SECTION_BOUNDARY_PATTERN.match(paragraph)
+        )
+        if current and (would_overflow or at_section_boundary):
             chunks.append(current)
             overlap = _tail_overlap(current, budget_overlap)
             current = f"{overlap}\n{paragraph}".strip() if overlap else paragraph
