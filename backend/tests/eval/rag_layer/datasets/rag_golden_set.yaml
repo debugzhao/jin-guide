@@ -1,0 +1,27 @@
+# RAG 检索层评测标注集，供 test_retrieval_quality.py 消费。
+# 格式对应 backend/docs/rag模块评测方案.md §4.3 的设计，按业务 case 分组：
+# 一个 case = 一个真实场景 + N 个真实/仿真 query 变体，共享同一批标准 chunk_id。
+#
+# standard_chunk_ids：命中即算召回成功的必要证据 chunk。
+# distractor_chunk_ids：容易被误判为命中的相邻/同主题 chunk（仅供人工核对，不参与自动判定，
+#   因为判定逻辑只看 standard_chunk_ids 是否出现，distractor 天然不会被误计为命中）。
+# min_top3_hit_ratio：5 个 query 变体里至少要有多少比例在重排后进入 Top3。
+cases:
+  - id: rag_case_001_dhu_tuition
+    university_name: 东华大学
+    university_code: "10255"
+    document_type: charter
+    document_year: 2026
+    source_url: "https://zs.dhu.edu.cn/2026/0528/c9563a376561/page.htm"
+    query: "东华大学2026年本科各专业学费标准是多少？"
+    query_variants:
+      - "东华大学学费一年多少钱？"
+      - "这个学校不同专业学费有区别吗？"
+      - "2026年本科学费标准"
+      - "服装设计中外合作一年多少钱？"
+    standard_chunk_ids:
+      - "c735eab2-1f60-4cba-9cc0-11a3e55db746"
+    distractor_chunk_ids:
+      # 相邻 chunk，末尾只有"1.学费标准"标题、无具体金额，不能单独算召回成功
+      - "9904ade2-a5c3-47bb-bad3-1edcadcf6474"
+    min_top3_hit_ratio: 0.8
