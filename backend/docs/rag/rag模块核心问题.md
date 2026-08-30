@@ -31,9 +31,11 @@
 - 离线索引：原始文档 → 清洗/提取正文 → 切分成 chunk → 生成 embedding → 写入向量库（连同来源、时间、类型等 metadata）
 - 在线查询：用户 query → （可选）query 改写/实体抽取 → embedding 化 → 向量检索召回候选（top-k，粗排）→（可选）精排/rerank → 过滤/去重/预算裁剪 → 拼装成 context → 注入 LLM prompt → 生成带引用的回答
 
-本项目在这个标准链路之上做了一个关键的架构升级——**双路并行检索**：结构化 SQL 精确检索（高权威、结构化事实）和向量语义检索（非结构化、解释性内容）并行跑，再合并成统一的 `evidence_list`。这是因为把所有知识都塞进 RAG 是一种偷懒设计：能用规则/SQL 100% 准确回答的问题（比如某校某专业组的投档线），不应该交给"可能检索错、可能生成幻觉"的向量检索+生成链路去处理。SQL 检索结果直接标记 `authority_level=official` 注入 evidence_list，不参与向量检索的排序融合——因为 SQL 结果已经是确定性正确的，跟"可能不准"的向量检索结果做加权融合反而会稀释它本应有的确定性权重。
+本项目在这个标准链路之上做了一个关键的架构升级——**双路并行检索**：结构化 SQL 精确检索（高权威、结构化事实）和向量语义检索（非结构化、解释性内容）并行跑，再合并成统一的 `evidence_list`。
 
-完整链路（见 `backend/docs/04_rag_pipeline.md`）：Retrieval Agent 用 LLM 做 query rewrite 提取实体（省份/年份/专业/大学）→ 两路并行检索 → 向量检索这一路还要经过 chunk 去重 → Cohere Rerank 精排（top-20→top-8）→ Evidence Filter（年份时效/省份匹配/rerank 分数下限/单 source 上限）→ 与 SQL 结果合并 → 按 6K token 预算打包成 Context Pack（超预算按 authority_level 降序截断）→ 注入 Report Agent 生成带引用报告。
+这是因为把所有知识都塞进 RAG 是一种偷懒设计：能用规则/SQL 100% 准确回答的问题（比如某校某专业组的投档线），不应该交给"可能检索错、可能生成幻觉"的向量检索+生成链路去处理。SQL 检索结果直接标记 `authority_level=official` 注入 evidence_list，不参与向量检索的排序融合——因为 SQL 结果已经是确定性正确的，跟"可能不准"的向量检索结果做加权融合反而会稀释它本应有的确定性权重。
+
+> 完整链路（见 `backend/docs/04_rag_pipeline.md`）：Retrieval Agent 用 LLM 做 query rewrite 提取实体（省份/年份/专业/大学）→ 两路并行检索 → 向量检索这一路还要经过 chunk 去重 → Cohere Rerank 精排（top-20→top-8）→ Evidence Filter（年份时效/省份匹配/rerank 分数下限/单 source 上限）→ 与 SQL 结果合并 → 按 6K token 预算打包成 Context Pack（超预算按 authority_level 降序截断）→ 注入 Report Agent 生成带引用报告。
 
 #### 2.2 为什么要做 chunk？解决了什么问题？
 
