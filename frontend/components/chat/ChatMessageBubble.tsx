@@ -208,7 +208,7 @@ export function ChatStreamingBubble({
             <span className="w-1.5 h-1.5 rounded-full bg-[#94A3B8] animate-bounce [animation-delay:300ms]" />
           </div>
         ) : null}
-        <span className="inline-block w-0.5 h-4 bg-[#1E40AF] animate-pulse ml-0.5 align-text-bottom" />
+        <span className="inline-block w-0.5 h-4 bg-[#1E40AF] wj-cursor-blink ml-0.5 align-text-bottom" />
       </div>
     </div>
   )

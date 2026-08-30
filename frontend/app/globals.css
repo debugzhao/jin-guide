@@ -74,3 +74,20 @@ body {
 .wj-stream-fade-in {
   animation: wj-stream-fade-in 180ms ease-out;
 }
+
+/* ── Streaming chat bubble: blinking cursor ──
+   用 step-end 硬切换透明度（而不是 animate-pulse 的 ease-in-out 渐隐渐现），
+   模拟真实文本光标"亮灭分明"的闪烁感——模型长时间思考、内容还没吐字时，
+   这根光标是页面上唯一持续变化的元素，弱对比的呼吸动画容易被看成"没在动"。 */
+@keyframes wj-cursor-blink {
+  0%, 49% {
+    opacity: 1;
+  }
+  50%, 100% {
+    opacity: 0;
+  }
+}
+
+.wj-cursor-blink {
+  animation: wj-cursor-blink 1s step-end infinite;
+}
