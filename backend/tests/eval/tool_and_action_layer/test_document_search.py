@@ -11,7 +11,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.agent.tool_response import ToolResponse
-from app.engine.document_search import search_school_documents
+from app.engine.document_search import (
+    EXCERPT_MAX_CHARS,
+    _truncate_at_sentence_boundary,
+    search_school_documents,
+)
 
 
 def _make_db(university_row, document_title_rows: list | None = None):
@@ -34,6 +38,36 @@ def _university(code: str | None = "10255", name: str = "东华大学"):
     university.code = code
     university.name = name
     return university
+
+
+class TestExcerptTruncation:
+    """回归宁波大学"临床医学拔尖人才创新班"case：学制/学位/专业特色排在 chunk
+    第 400 字符之后，旧的 EXCERPT_MAX_CHARS=400 硬截断会把这些字段整段砍掉，
+    还会在词中间切断产生转写错字（"精神病学"被砍成"精神医学"）。
+    见 rag模块核心问题.md「线上 bug 2」。"""
+
+    def test_short_content_is_not_truncated(self):
+        content = "学 制：五年\n授予学位：医学学士学位"
+        assert _truncate_at_sentence_boundary(content, EXCERPT_MAX_CHARS) == content
+
+    def test_truncates_at_last_sentence_boundary_not_mid_word(self):
+        content = "第一句话结束。第二句被硬切开还没完"
+        truncated = _truncate_at_sentence_boundary(content, 10)
+        assert truncated == "第一句话结束。"
+
+    def test_falls_back_to_hard_cut_when_no_sentence_boundary(self):
+        content = "无标点连续文本" * 100
+        truncated = _truncate_at_sentence_boundary(content, 50)
+        assert truncated == content[:50]
+
+    def test_field_beyond_old_400_char_limit_now_survives(self):
+        """关键字段起始位置故意超过旧阈值 400，新阈值下必须完整出现在 excerpt 里。"""
+        noise = "培养目标：" + "详情内容" * 100 + "。"
+        assert len(noise) > 400
+        content = noise + "学 制：五年。授予学位：医学学士学位。"
+        truncated = _truncate_at_sentence_boundary(content, EXCERPT_MAX_CHARS)
+        assert "学 制：五年" in truncated
+        assert "授予学位：医学学士学位" in truncated
 
 
 class TestSearchSchoolDocuments:
@@ -101,7 +135,7 @@ class TestSearchSchoolDocuments:
             university_row=university,
             document_title_rows=[MagicMock(id="d1", title="东华大学2026年本科招生章程")],
         )
-        raw_chunks = [{"chunk_id": "c1", "document_id": "d1", "content": "学费" * 300, "similarity": 0.9}]
+        raw_chunks = [{"chunk_id": "c1", "document_id": "d1", "content": "学费" * 700, "similarity": 0.9}]
         reranked_chunk = {
             **raw_chunks[0],
             "rerank_score": 0.95,
@@ -127,8 +161,8 @@ class TestSearchSchoolDocuments:
         assert chunk["title"] == "东华大学2026年本科招生章程"
         assert chunk["source_url"] == "https://dhu.example/charter.htm"
         assert chunk["section_title"] == "第二十一条"
-        # 摘录必须被截断，不能把整个 chunk 内容（可能超过 1200 字符）原样怼给模型
-        assert len(chunk["excerpt"]) <= 400
+        # 摘录必须被截断，不能把整个 chunk 内容（可能远超 1200 字符）原样怼给模型
+        assert len(chunk["excerpt"]) <= 1200
 
 
 class TestEntityAnchorFusion:

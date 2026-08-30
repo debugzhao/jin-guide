@@ -17,8 +17,26 @@ from app.engine.retrieval import rerank_evidence, vector_search
 from app.models.admission import University
 from app.models.document import Document
 
+# 上游 chunk_documents.py 已把每个 chunk 控制在 1200 字符以内（全库 P95 长度
+# 1185~1198），这里的上限只是"这一层最后兜底"，不该比分片阶段更严——历史上设成
+# 400 曾经把"学制/学位/专业特色"这类排在 chunk 后半段的字段整段砍掉（宁波大学
+# 临床医学拔尖班 case，见 rag模块核心问题.md「线上 bug 2」），提到 1200 后基本
+# 等于不截断。
 RESULT_TOP_N = 3
-EXCERPT_MAX_CHARS = 400
+EXCERPT_MAX_CHARS = 1200
+# 硬截断如果砍在词/句中间会产生转写错字（如"精神病学"被砍成"精神医学"）；
+# 优先找截断点前最近的句子边界收尾，找不到再退化成硬切。
+_SENTENCE_BOUNDARY_CHARS = "。！？\n"
+
+
+def _truncate_at_sentence_boundary(content: str, max_chars: int) -> str:
+    if len(content) <= max_chars:
+        return content
+    window = content[:max_chars]
+    boundary = max(window.rfind(ch) for ch in _SENTENCE_BOUNDARY_CHARS)
+    if boundary == -1:
+        return window
+    return window[: boundary + 1]
 
 
 async def _find_university(db: AsyncSession, name: str) -> University | None:
@@ -112,7 +130,7 @@ async def search_school_documents(
     results = [
         {
             "title": titles.get(c["document_id"], ""),
-            "excerpt": c["content"][:EXCERPT_MAX_CHARS],
+            "excerpt": _truncate_at_sentence_boundary(c["content"], EXCERPT_MAX_CHARS),
             "source_url": (c.get("metadata") or {}).get("source_url"),
             "section_title": (c.get("metadata") or {}).get("section_title"),
         }
