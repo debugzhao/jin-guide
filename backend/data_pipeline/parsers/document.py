@@ -23,6 +23,26 @@ KEY_SECTION_TERMS = (
     "投档",
 )
 
+# 按 document_type 分级的 (预算字符数, overlap字符数)。charter 条款长、逐条列举，
+# 需要更大窗口保留完整语义；major_intro/policy 语义单元更短，小窗口检索更精准。
+# 数值仍以字符数计量（保持跟历史生产数据同一套量纲，避免额外引入 token 估算误差）。
+_CHUNK_BUDGET: dict[str, tuple[int, int]] = {
+    "charter": (1400, 200),
+    "policy": (900, 150),
+    "transfer_policy": (900, 150),
+    "major_intro": (900, 120),
+}
+_DEFAULT_CHUNK_BUDGET = (1200, 150)
+
+# 导航/菜单类噪声段落的判定：真实招生页面里"首页/学院介绍/联系我们/网站导航"这类
+# 菜单项通常连续密集出现（一次抓取往往会拿到十几个相邻菜单项），而真正的短标题
+# （如"第四章 招生录取"、"十一、录取规则"）在正文里是孤立出现、后面紧跟长段正文。
+# 用"连续 N 个短且无终止标点的段落"这个结构特征识别导航块，而不是维护一份不断
+# 增长、容易漏检的菜单词表——每换一个学校官网模板，词表就要重新补一批。
+_NAV_LINE_MAX_CHARS = 12
+_NAV_RUN_MIN_LENGTH = 3
+_TERMINAL_PUNCTUATION = ("。", "！", "？", "：", ":")
+
 
 class _TextExtractor(HTMLParser):
     BLOCK_TAGS = {"p", "div", "li", "h1", "h2", "h3", "h4", "tr", "br"}
@@ -55,6 +75,10 @@ def extract_document_text(path: str | Path) -> str:
         parser = _TextExtractor()
         parser.feed(decode_html_bytes(file_path.read_bytes()))
         text = "".join(parser.parts)
+    elif file_path.suffix.lower() == ".txt":
+        # 人工从图片/微信公众号文章转录的正文（`*.manual.txt`），已经是纯文本，
+        # 不需要走任何格式还原，直接读取即可。
+        text = file_path.read_text(encoding="utf-8")
     elif file_path.suffix.lower() == ".pdf":
         try:
             import pdfplumber
@@ -120,6 +144,104 @@ def extract_westlake_embedded_html_text(path: str | Path) -> str:
     return "\n".join(line for line in lines if line)
 
 
+def _strip_navigation_noise(paragraphs: list[str]) -> list[str]:
+    """剔除导航/菜单类噪声段落。
+
+    两步处理：①去掉连续重复的段落（同一导航栏在页面里常常原样出现两遍）；
+    ②识别"连续 N 个短且无终止标点"的段落块，视为导航菜单整体剔除（见上方
+    `_NAV_LINE_MAX_CHARS`/`_NAV_RUN_MIN_LENGTH` 的判定依据）。
+    """
+    deduped: list[str] = []
+    for paragraph in paragraphs:
+        if deduped and deduped[-1] == paragraph:
+            continue
+        deduped.append(paragraph)
+
+    def _is_nav_like(paragraph: str) -> bool:
+        return len(paragraph) <= _NAV_LINE_MAX_CHARS and not paragraph.endswith(_TERMINAL_PUNCTUATION)
+
+    keep = [True] * len(deduped)
+    i = 0
+    while i < len(deduped):
+        if not _is_nav_like(deduped[i]):
+            i += 1
+            continue
+        j = i
+        while j < len(deduped) and _is_nav_like(deduped[j]):
+            j += 1
+        if j - i >= _NAV_RUN_MIN_LENGTH:
+            for k in range(i, j):
+                keep[k] = False
+        i = j
+    return [paragraph for paragraph, kept in zip(deduped, keep) if kept]
+
+
+def _select_paragraphs(paragraphs: list[str], document_type: str) -> list[str]:
+    """policy/charter/transfer_policy 按关键词过滤段落，但保留命中段落的前后各一段。
+
+    纯粹按关键词命中与否二选一会把条款正文之间的过渡句/子项一并连根拔起——
+    实测某高校章程因此丢了近一半条款（第1/2/3/5/6/7/9/10/21/23/25/27条等
+    完整消失，不是切分边界问题，是根本没进候选池）。保留紧邻的前后段落能捞回
+    大部分"夹在两条命中条款中间"的短间隔，同时仍然丢弃真正大段无关的行政性
+    文字（离最近一次关键词命中有 2 段以上距离的内容）。
+    """
+    if document_type not in {"policy", "charter", "transfer_policy"}:
+        return paragraphs
+    matched = [any(term in paragraph for term in KEY_SECTION_TERMS) for paragraph in paragraphs]
+    keep = [
+        matched[i]
+        or (i > 0 and matched[i - 1])
+        or (i < len(matched) - 1 and matched[i + 1])
+        for i in range(len(paragraphs))
+    ]
+    return [paragraph for paragraph, kept in zip(paragraphs, keep) if kept]
+
+
+def _tail_overlap(text: str, overlap_chars: int) -> str:
+    """取上一个 chunk 结尾的一小段作为下一个 chunk 的开头（overlap）。
+
+    尽量从句子边界之后开始截取，避免 overlap 本身就是从半句话开始。
+    """
+    if overlap_chars <= 0 or not text:
+        return ""
+    tail = text[-overlap_chars:]
+    boundary = re.search(r"[。！？\n]", tail)
+    return tail[boundary.end():] if boundary else tail
+
+
+def split_into_chunks(
+    text: str,
+    *,
+    document_type: str,
+    max_chars: int | None = None,
+    overlap_chars: int | None = None,
+) -> list[str]:
+    """纯文本切分逻辑：导航噪声过滤 → 关键词过滤（保留上下文）→ 分级预算 + overlap 贪心拼接。
+
+    不依赖 Provenance，供 `chunk_document`（在线采集）和离线重切分脚本共用。
+    """
+    default_max, default_overlap = _CHUNK_BUDGET.get(document_type, _DEFAULT_CHUNK_BUDGET)
+    budget_chars = max_chars if max_chars is not None else default_max
+    budget_overlap = overlap_chars if overlap_chars is not None else default_overlap
+
+    paragraphs = [part.strip() for part in re.split(r"\n+", text) if part.strip()]
+    paragraphs = _strip_navigation_noise(paragraphs)
+    selected = _select_paragraphs(paragraphs, document_type)
+
+    chunks: list[str] = []
+    current = ""
+    for paragraph in selected:
+        if current and len(current) + len(paragraph) + 1 > budget_chars:
+            chunks.append(current)
+            overlap = _tail_overlap(current, budget_overlap)
+            current = f"{overlap}\n{paragraph}".strip() if overlap else paragraph
+        else:
+            current = f"{current}\n{paragraph}".strip() if current else paragraph
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 def chunk_document(
     text: str,
     *,
@@ -127,25 +249,15 @@ def chunk_document(
     provenance: Provenance,
     province: str,
     university_code: str | None = None,
-    max_chars: int = 1200,
+    max_chars: int | None = None,
+    overlap_chars: int | None = None,
 ) -> list[DocumentChunkRecord]:
-    paragraphs = [part.strip() for part in re.split(r"\n+", text) if part.strip()]
-    if document_type in {"policy", "charter", "transfer_policy"}:
-        selected = [
-            paragraph for paragraph in paragraphs if any(term in paragraph for term in KEY_SECTION_TERMS)
-        ]
-    else:
-        selected = paragraphs
-    chunks: list[str] = []
-    current = ""
-    for paragraph in selected:
-        if current and len(current) + len(paragraph) + 1 > max_chars:
-            chunks.append(current)
-            current = paragraph
-        else:
-            current = f"{current}\n{paragraph}".strip()
-    if current:
-        chunks.append(current)
+    chunks = split_into_chunks(
+        text,
+        document_type=document_type,
+        max_chars=max_chars,
+        overlap_chars=overlap_chars,
+    )
     return [
         DocumentChunkRecord(
             province=province,
