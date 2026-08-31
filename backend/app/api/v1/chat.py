@@ -124,8 +124,32 @@ async def chat_with_report(
         )
 
     # ── 加载历史 ────────────────────────────────────────────────────────────
+    db_user_id = identity.user.id if identity.user else None
+    db_anonymous_id = identity.anonymous_id if not identity.user else None
+
     redis_key = store.history_key(_NAMESPACE, report_id, owner_key)
     history = await store.load_history_from_redis(redis_key)
+
+    if not history and report_id != "demo-report":
+        # Redis 未命中（TTL 过期/重启/故障）时回退到 DB，和 GET /chat/history
+        # 的回退逻辑一致（见下面 get_chat_history）。不做这一步不只是本轮
+        # 对话答不上上下文——下面的 append_history_to_redis 会在这个空 key 上
+        # 只追加本轮 2 条消息，之后 GET /chat/history 会因为 Redis「非空」而
+        # 永远不再回源，更早的历史会被这个残缺 key 永久盖住，直到 7 天 TTL
+        # 到期。所以这里拿到 DB 历史后要把它写回 Redis，而不只是本地使用。
+        conv_result = await db.execute(
+            select(ReportConversation).where(
+                ReportConversation.report_id == report_id,
+                *_db_owner_filter(db_user_id, db_anonymous_id),
+            )
+        )
+        existing_conv = conv_result.scalar_one_or_none()
+        if existing_conv:
+            history = await store.load_recent_messages_from_db(
+                db, parent_kind="report", parent_id=existing_conv.id
+            )
+            if history:
+                await store.append_history_to_redis(redis_key, history)
 
     # ── 重复/相似问题去重：命中且历史回答已完整就复用，不重新调用 LLM ──────────
     # （docs/backend-prd-v2.md §11.4）
@@ -139,8 +163,6 @@ async def chat_with_report(
     # ── 加载结构化摘要（best-effort；覆盖已经滑出原始历史窗口的消息——见 P2）──
     summary_json: dict | None = None
     if report_id != "demo-report":
-        db_user_id = identity.user.id if identity.user else None
-        db_anonymous_id = identity.anonymous_id if not identity.user else None
         try:
             async with async_session_maker() as summary_db:
                 conv_result = await summary_db.execute(
@@ -179,8 +201,6 @@ async def chat_with_report(
     conversation_row_id: str | None = None
     assistant_message_id: str | None = None
     if report_id != "demo-report":
-        db_user_id = identity.user.id if identity.user else None
-        db_anonymous_id = identity.anonymous_id if not identity.user else None
         async with async_session_maker() as persist_db:
             conversation_row_id = await store.get_or_create_conversation_row(
                 persist_db,

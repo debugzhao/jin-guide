@@ -336,6 +336,20 @@ async def intake_chat(
     redis_key = store.history_key(_NAMESPACE, owner_key, conversation_id)
     history = await store.load_history_from_redis(redis_key)
 
+    if not history and not is_new_conversation:
+        # Redis 未命中（TTL 过期/重启/故障）时回退到 DB，和
+        # GET /intake/chat/history 的回退逻辑一致（见 get_intake_chat_history）。
+        # 不做这一步不只是本轮答不上上下文——下面的 append_history_to_redis
+        # 会在这个空 key 上只追加本轮 2 条消息，之后 GET 历史会因为 Redis
+        # 「非空」而永远不再回源，更早的历史被这个残缺 key 永久盖住，直到
+        # 7 天 TTL 到期。所以这里拿到 DB 历史后要把它写回 Redis。
+        async with async_session_maker() as fallback_db:
+            history = await store.load_recent_messages_from_db(
+                fallback_db, parent_kind="intake", parent_id=conversation_id
+            )
+        if history:
+            await store.append_history_to_redis(redis_key, history)
+
     # 重复/相似问题去重：命中且历史回答已完整（非仍在生成中的占位消息）就复用，
     # 不重新调用 LLM（docs/backend-prd-v2.md §11.4）。
     cached = store.find_cached_answer(
