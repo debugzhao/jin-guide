@@ -34,26 +34,20 @@ export default function ProfileChatFlow({ profileId, onReady, onCancel, submitti
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-2 items-start justify-between">
-        <div className="flex gap-2 items-start">
-          <Bot className="w-5 h-5 text-[#1E40AF] flex-shrink-0 mt-0.5" />
-          <p className="text-sm text-[#0F172A]">
-            我会用对话方式帮你完成建档。左侧收集信息，右侧实时渲染志愿报告；后续补充城市、专业或学费偏好时，右侧报告会继续更新。
-          </p>
-        </div>
-        {!capturedValues && onCancel && (
-          <button
-            type="button"
-            onClick={onCancel}
-            className="text-xs text-[#64748B] hover:text-[#0F172A] hover:underline flex-shrink-0"
-          >
-            不建档，继续问答
-          </button>
-        )}
+      <div className="flex gap-2 items-start">
+        <Bot className="w-5 h-5 text-[#1E40AF] flex-shrink-0 mt-0.5" />
+        <p className="text-sm text-[#0F172A]">
+          我会用对话方式帮你完成建档。左侧收集信息，右侧实时渲染志愿报告；后续补充城市、专业或学费偏好时，右侧报告会继续更新。
+        </p>
       </div>
 
       {!capturedValues && (
-        <ProfileCaptureCard profileId={profileId} onSubmit={handleCaptureSubmit} submitting={submitting} />
+        <ProfileCaptureCard
+          profileId={profileId}
+          onSubmit={handleCaptureSubmit}
+          onCancel={onCancel}
+          submitting={submitting}
+        />
       )}
 
       {capturedValues && (

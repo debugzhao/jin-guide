@@ -14,6 +14,8 @@ import {
 interface ProfileCaptureCardProps {
   profileId?: string
   onSubmit: (values: Record<string, unknown>) => void
+  /** 用户放弃建档、退回聊天阶段；不传则不展示该入口 */
+  onCancel?: () => void
   submitting?: boolean
 }
 
@@ -42,7 +44,7 @@ const pillClass = (active: boolean) =>
  * 不是逐条对话气泡。字段跳过/依赖仍是纯本地判断，矛盾检测（位次/选科）
  * 在点击确认按钮时统一调用一次 `/profile/field-check`。
  */
-export default function ProfileCaptureCard({ profileId, onSubmit, submitting }: ProfileCaptureCardProps) {
+export default function ProfileCaptureCard({ profileId, onSubmit, onCancel, submitting }: ProfileCaptureCardProps) {
   const [values, setValues] = useState<Record<string, unknown>>({})
   const [subjectPrimary, setSubjectPrimary] = useState<'物理' | '历史' | ''>('')
   const [subjectOthers, setSubjectOthers] = useState<string[]>([])
@@ -246,9 +248,21 @@ export default function ProfileCaptureCard({ profileId, onSubmit, submitting }: 
 
         <p className="text-xs text-[#94A3B8]">分数和位次至少填一个；同时填写时，匹配会优先使用位次。</p>
 
-        <Button className="w-full" onClick={handleSubmit} disabled={!requiredFilled || checking || submitting}>
-          {checking ? '校验中...' : submitting ? '生成中...' : '确认基础信息并渲染报告'}
-        </Button>
+        <div className="flex gap-2">
+          {onCancel && (
+            <Button
+              variant="outline"
+              className="flex-1"
+              onClick={onCancel}
+              disabled={checking || submitting}
+            >
+              不建档，继续问答
+            </Button>
+          )}
+          <Button className="flex-[2]" onClick={handleSubmit} disabled={!requiredFilled || checking || submitting}>
+            {checking ? '校验中...' : submitting ? '生成中...' : '确认基础信息并渲染报告'}
+          </Button>
+        </div>
       </div>
 
       {clarification && (
