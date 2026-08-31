@@ -98,11 +98,21 @@ export default function ConversationStream({ onReportReady, onStageChange }: Con
     if (lastAnswers) handleProfileReady(lastAnswers)
   }
 
+  const handleCancelProfile = () => {
+    setStage('idle')
+  }
+
   return (
     <div className="flex-1 flex flex-col gap-4">
       <IntakeChat onStartProfile={() => setStage('profile')} locked={stage !== 'idle'} />
 
-      {stage !== 'idle' && <ProfileChatFlow onReady={handleProfileReady} submitting={submitting} />}
+      {stage !== 'idle' && (
+        <ProfileChatFlow
+          onReady={handleProfileReady}
+          onCancel={stage === 'profile' ? handleCancelProfile : undefined}
+          submitting={submitting}
+        />
+      )}
 
       {stage !== 'idle' && stage !== 'profile' && runId && (
         <InlineGenerationCard

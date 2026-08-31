@@ -12,6 +12,8 @@ interface ProfileChatFlowProps {
   profileId?: string
   /** 必填字段全部收集完成后由用户点击触发，携带目前已收集的全部字段值 */
   onReady: (values: Record<string, unknown>) => void
+  /** 用户在建档表单提交前点击「不建档，继续问答」，退回聊天阶段 */
+  onCancel?: () => void
   submitting?: boolean
 }
 
@@ -21,7 +23,7 @@ interface ProfileChatFlowProps {
  * 语言输入框补充偏好（docs/wenjin-agent-prototype.html 第 1039-1131 行是
  * 当前交互事实源）。
  */
-export default function ProfileChatFlow({ profileId, onReady, submitting }: ProfileChatFlowProps) {
+export default function ProfileChatFlow({ profileId, onReady, onCancel, submitting }: ProfileChatFlowProps) {
   const [capturedValues, setCapturedValues] = useState<Record<string, unknown> | null>(null)
   const [preferenceLog, setPreferenceLog] = useState<PreferenceEntry[]>([])
 
@@ -32,11 +34,22 @@ export default function ProfileChatFlow({ profileId, onReady, submitting }: Prof
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-2 items-start">
-        <Bot className="w-5 h-5 text-[#1E40AF] flex-shrink-0 mt-0.5" />
-        <p className="text-sm text-[#0F172A]">
-          我会用对话方式帮你完成建档。左侧收集信息，右侧实时渲染志愿报告；后续补充城市、专业或学费偏好时，右侧报告会继续更新。
-        </p>
+      <div className="flex gap-2 items-start justify-between">
+        <div className="flex gap-2 items-start">
+          <Bot className="w-5 h-5 text-[#1E40AF] flex-shrink-0 mt-0.5" />
+          <p className="text-sm text-[#0F172A]">
+            我会用对话方式帮你完成建档。左侧收集信息，右侧实时渲染志愿报告；后续补充城市、专业或学费偏好时，右侧报告会继续更新。
+          </p>
+        </div>
+        {!capturedValues && onCancel && (
+          <button
+            type="button"
+            onClick={onCancel}
+            className="text-xs text-[#64748B] hover:text-[#0F172A] hover:underline flex-shrink-0"
+          >
+            不建档，继续问答
+          </button>
+        )}
       </div>
 
       {!capturedValues && (
