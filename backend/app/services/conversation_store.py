@@ -543,6 +543,28 @@ async def load_recent_messages_from_db(
     return messages
 
 
+async def hydrate_history_from_db(
+    db: AsyncSession, redis_key: str, *, parent_kind: str, parent_id: str
+) -> list[dict]:
+    """
+    Redis 回源策略的共享实现：从权威 DB 读取历史并回填 Redis 热层。
+
+    chat.py/intake_chat.py 此前各自独立实现了 4 份几乎相同的"Redis 未命中→
+    查 DB→回填 Redis"分支，其中两个只读接口（GET /chat/history、
+    GET /intake/chat/history）甚至遗漏了回填这一步——只读访问永远无法预热
+    热层，每次都要重新查一次 DB，直到某次用户发消息触发的写路径顺带把它
+    填上。统一到这里后，四个入口共享同一次回填，不会再有入口漏掉。
+
+    调用方仍自行判断 Redis 是否命中、以及父行 id 如何按各自 schema 解析
+    （ReportConversation 还是 IntakeConversation 行 id）——这部分本模块
+    有意不接管，见文件头注释。
+    """
+    history = await load_recent_messages_from_db(db, parent_kind=parent_kind, parent_id=parent_id)
+    if history:
+        await append_history_to_redis(redis_key, history)
+    return history
+
+
 # ── ConversationSummary（结构化增量摘要，P2）────────────────────────────────
 
 async def load_summary(

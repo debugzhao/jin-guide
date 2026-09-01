@@ -10,6 +10,7 @@ Endpoints:
   GET  /admin/runs/{id}                     — 单个 run 的完整调试元数据
   GET  /admin/runs/{id}/debug-events        — Admin SSE：完整事件流 + 历史回放
   GET  /admin/metrics/summary               — 实时系统指标快照
+  GET  /admin/summaries/health              — 结构化对话摘要落后窗口数只读汇总
   GET  /admin/data-pipeline/runs            — [需 admin] 数据采集运行列表
   GET  /admin/data-pipeline/review          — [需 admin] 人工审核队列
   POST /admin/data-pipeline/review/{id}     — [需 admin] 审核决定
@@ -26,13 +27,14 @@ import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import require_admin_role
 from app.config import settings
 from app.database import get_db
 from app.models.agent_run import AgentRun
+from app.models.conversation import ConversationMessage, ConversationSummary
 from app.models.data_pipeline import CollectionRun, DatasetVersion, StagingRecord
 
 router = APIRouter()
@@ -93,6 +95,24 @@ class ReviewDecision(BaseModel):
     reviewer: str
 
 
+class SummaryLagBucket(BaseModel):
+    parent_kind: str
+    window_size: int
+    total_conversations: int
+    # 消息数已经达到至少一个窗口、但从来没有生成过摘要的会话数——比"落后
+    # 了几个窗口"更严重，说明摘要机制对这个会话可能从未成功跑起来过一次。
+    never_summarized_but_due: int
+    # 按"落后了几个完整窗口"分桶：0 = 摘要覆盖已跟上（或还没攒够一个窗口，
+    # 天然不需要摘要）；"3+" 合并显示，避免单个异常会话把分布拉得很长。
+    lag_windows_distribution: dict[str, int]
+
+
+class SummaryHealthOut(BaseModel):
+    report: SummaryLagBucket
+    intake: SummaryLagBucket
+    generated_at: str
+
+
 # ── 辅助函数 ────────────────────────────────────────────────────────────────────
 
 def _extract_debug_summary(run: AgentRun) -> dict:
@@ -113,6 +133,64 @@ def _extract_debug_summary(run: AgentRun) -> dict:
 def _get_degraded_agents(run: AgentRun) -> list[str]:
     summary = run.debug_summary_json or {}
     return summary.get("degraded_agents", [])
+
+
+_MESSAGE_PARENT_COLUMNS = {
+    "report": ConversationMessage.report_conversation_id,
+    "intake": ConversationMessage.intake_conversation_id,
+}
+_SUMMARY_PARENT_COLUMNS = {
+    "report": ConversationSummary.report_conversation_id,
+    "intake": ConversationSummary.intake_conversation_id,
+}
+
+
+async def _summary_lag_bucket(
+    db: AsyncSession, *, parent_kind: str, window_size: int
+) -> SummaryLagBucket:
+    """
+    对每个有过消息的会话，用"最新消息 seq - 摘要已覆盖到的 seq"推算摘要是否
+    落后，而不是依赖额外的失败计数器——现有摘要生成失败/冲突目前只落
+    structlog（见 conversation_summary.py 的 conversation_summary_llm_failed
+    等日志事件），不落库，这里能看到的是"结果性"落后，看不到具体失败原因；
+    需要按原因排查时仍要去查应用日志。
+    """
+    message_parent_col = _MESSAGE_PARENT_COLUMNS[parent_kind]
+    summary_parent_col = _SUMMARY_PARENT_COLUMNS[parent_kind]
+
+    latest_seq_subq = (
+        select(
+            message_parent_col.label("parent_id"),
+            func.max(ConversationMessage.seq).label("latest_seq"),
+        )
+        .where(message_parent_col.is_not(None))
+        .group_by(message_parent_col)
+        .subquery()
+    )
+
+    result = await db.execute(
+        select(latest_seq_subq.c.latest_seq, ConversationSummary.covered_through_seq)
+        .select_from(latest_seq_subq)
+        .outerjoin(ConversationSummary, summary_parent_col == latest_seq_subq.c.parent_id)
+    )
+    rows = result.all()
+
+    distribution = {"0": 0, "1": 0, "2": 0, "3+": 0}
+    never_summarized_but_due = 0
+    for latest_seq, covered_through_seq in rows:
+        covered = covered_through_seq or 0
+        lag_windows = max(latest_seq - covered, 0) // window_size
+        distribution["3+" if lag_windows >= 3 else str(lag_windows)] += 1
+        if covered == 0 and latest_seq >= window_size:
+            never_summarized_but_due += 1
+
+    return SummaryLagBucket(
+        parent_kind=parent_kind,
+        window_size=window_size,
+        total_conversations=len(rows),
+        never_summarized_but_due=never_summarized_but_due,
+        lag_windows_distribution=distribution,
+    )
 
 
 @pipeline_router.get("/data-pipeline/runs")
@@ -422,6 +500,26 @@ async def get_metrics_summary(
         total_cost_usd_24h=round(float(total_cost), 4),
         active_runs=active_runs,
         timestamp=time.time(),
+    )
+
+
+@router.get("/summaries/health", response_model=SummaryHealthOut)
+async def get_summary_health(db: AsyncSession = Depends(get_db)):
+    """
+    结构化对话摘要的只读健康度汇总——回答"当前有多少会话的摘要落后了几个
+    窗口"，对应 backend/docs/context/上下文模块评审.md §8.4/§8.5 提到的
+    "摘要失败、冲突、积压缺少可观测性"。不含 PII——只统计计数和 seq 差值，
+    不返回摘要内容或对话原文。
+    """
+    from app.agent.conversation_agent import MAX_HISTORY_MESSAGES as REPORT_WINDOW
+    from app.agent.intake_agent import MAX_HISTORY_MESSAGES as INTAKE_WINDOW
+
+    report_bucket = await _summary_lag_bucket(db, parent_kind="report", window_size=REPORT_WINDOW)
+    intake_bucket = await _summary_lag_bucket(db, parent_kind="intake", window_size=INTAKE_WINDOW)
+    return SummaryHealthOut(
+        report=report_bucket,
+        intake=intake_bucket,
+        generated_at=datetime.now(UTC).isoformat(),
     )
 
 

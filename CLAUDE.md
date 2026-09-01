@@ -126,7 +126,7 @@ docker compose exec backend python -m pytest -q
 
 ### 可观测性 / Admin Debug Console
 
-`backend/app/api/v1/admin.py` 提供 `/admin/runs`、`/admin/runs/{id}`、`/admin/runs/{id}/debug-events`（SSE）、`/admin/metrics/summary`，**无鉴权、对所有访客开放**（数据本身不含 PII）。前端 `components/admin/debug/` 渲染 LangGraph 拓扑图和节点耗时时间线。调试事件由 `backend/app/agent/debug_events.py` 的 `emit_debug_event` 写入 **与用户 SSE 共用的同一条 Redis Stream**（`sse:{run_id}`），事件类型加 `debug:` 前缀区分，用户侧 SSE 生成器按前缀过滤掉，Admin SSE 端点则回放全部历史（`XREAD` 从 `0-0` 开始）再续接实时流。
+`backend/app/api/v1/admin.py` 提供 `/admin/runs`、`/admin/runs/{id}`、`/admin/runs/{id}/debug-events`（SSE）、`/admin/metrics/summary`、`/admin/summaries/health`，**无鉴权、对所有访客开放**（数据本身不含 PII）。前端 `components/admin/debug/` 渲染 LangGraph 拓扑图和节点耗时时间线。调试事件由 `backend/app/agent/debug_events.py` 的 `emit_debug_event` 写入 **与用户 SSE 共用的同一条 Redis Stream**（`sse:{run_id}`），事件类型加 `debug:` 前缀区分，用户侧 SSE 生成器按前缀过滤掉，Admin SSE 端点则回放全部历史（`XREAD` 从 `0-0` 开始）再续接实时流。`/admin/summaries/health` 是结构化对话摘要（`memory_conversation_summaries`）的落后窗口数只读汇总：按 `parent_kind`（report/intake）统计 `latest_seq - covered_through_seq` 相对各自 `MAX_HISTORY_MESSAGES` 窗口落后了几个整窗（分桶）、以及消息数已达一个窗口但从未生成过摘要的会话数——不新增失败计数器，数据全部从 `covered_through_seq` 反推，具体失败原因仍需查 structlog。
 
 ### 工具层弹性设计
 

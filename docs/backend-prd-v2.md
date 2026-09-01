@@ -278,6 +278,7 @@ sequenceDiagram
 | GET    | `/api/v1/admin/runs/{id}`               | 获取单个 run 的完整调试元数据                                   |
 | GET    | `/api/v1/admin/runs/{id}/debug-events`  | Admin Debug SSE 端点，全量事件流 + 历史回放                     |
 | GET    | `/api/v1/admin/metrics/summary`         | 系统实时指标快照                                                |
+| GET    | `/api/v1/admin/summaries/health`        | 结构化对话摘要落后窗口数只读汇总（无鉴权，不含 PII）             |
 
 **鉴权环境变量**：`RESEND_API_KEY`、`EMAIL_FROM`。仅支持邮箱 + 密码，不支持手机号/短信登录、不支持微信 OAuth（预留 `users.openid` 字段）。
 
@@ -1314,6 +1315,8 @@ Prompt 注入防护（RAG 文档作为数据，不允许覆盖系统规则）；
 `GET /api/v1/admin/runs/{id}/debug-events`：见 §5.8，与用户侧 SSE 完全独立的连接，支持历史回放。
 
 `GET /api/v1/admin/metrics/summary`：从 Redis 计数器聚合返回 `runs_last_5min`、`latency`、`cost`、`degradation` 快照，不引入新存储结构。
+
+`GET /api/v1/admin/summaries/health`：结构化对话摘要（`memory_conversation_summaries`）的落后窗口数只读汇总，按 `parent_kind`（report/intake）分别统计 `latest_seq - covered_through_seq` 相对各自 `MAX_HISTORY_MESSAGES` 窗口大小落后了几个整窗（0/1/2/3+ 分桶），以及消息数已达一个窗口但从未生成过摘要的会话数（`never_summarized_but_due`）。不引入额外的失败/积压计数器——现有摘要失败只落 structlog（`conversation_summary_llm_failed` 等），不落库，这里看到的是从 `covered_through_seq` 反推的"结果性"落后，具体失败原因仍需查应用日志。
 
 ### 13.5 成本追踪
 
