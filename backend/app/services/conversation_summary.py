@@ -17,8 +17,10 @@ open_questions），专门覆盖那些已经滑出窗口的历史消息，这样
 from __future__ import annotations
 
 import json
+import uuid
 
 import httpx
+import redis.asyncio as aioredis
 import structlog
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select
@@ -26,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.conversation import ConversationMessage
-from app.prompts import prompt_registry
+from app.prompts import prompt_registry, wrap_untrusted_context
 from app.prompts.tracing import track_prompt_invocation
 from app.services import conversation_store as store
 
@@ -35,6 +37,11 @@ logger = structlog.get_logger()
 _PROMPT = prompt_registry.get("conversation_summary")
 _SUMMARY_MODEL = _PROMPT.model.alias
 _PROMPT_VERSION = _PROMPT.version
+# 固定指令只进入 system；历史摘要和对话原文都是用户可影响的动态数据，必须作为
+# 转义后的不可信数据块传递（与 conversation_agent.py/intake_agent.py 同一约定），
+# 否则对话里刻意构造的"忽略以上指令""新任务是……"之类文字可能被当成对摘要模型
+# 本身的指令执行，污染写入 DB 的结构化摘要，并在后续每一轮对话里持续被引用。
+_SYSTEM_PROMPT = _PROMPT.render("system")
 _SUMMARY_KEYS = (
     "confirmed_facts",
     "preferences",
@@ -42,6 +49,22 @@ _SUMMARY_KEYS = (
     "previous_decisions",
     "open_questions",
 )
+
+# 同一会话的摘要生成串行化锁——只有一个进程有权限跑"读旧摘要→调 LLM→写新
+# 摘要"这一整套流程，从源头避免两个并发的 BackgroundTasks（例如用户在第一
+# 条消息的 SSE 流结束前就发出第二条消息）用各自读到的旧摘要互相覆盖。TTL
+# 留出比 LLM 调用超时（见 conversation_summary/v1.yaml 的 timeout_seconds）
+# 更宽的余量，防止进程崩溃后锁永久卡死；释放时用 token 做 compare-and-delete，
+# 避免释放掉 TTL 到期后被别的任务重新抢到的锁。
+_LOCK_KEY_TMPL = "summary:lock:{parent_kind}:{parent_id}"
+_LOCK_TTL_MS = (int(_PROMPT.model.timeout_seconds) + 60) * 1000
+_RELEASE_LOCK_LUA = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('del', KEYS[1])
+else
+    return 0
+end
+"""
 
 
 class ConversationSummaryOutput(BaseModel):
@@ -59,7 +82,7 @@ class ConversationSummaryOutput(BaseModel):
         return _normalize_summary_field(value)
 
 
-def _build_summary_prompt(previous_summary: dict | None, segment_messages: list[ConversationMessage]) -> str:
+def _build_summary_user_content(previous_summary: dict | None, segment_messages: list[ConversationMessage]) -> str:
     segment_text = "\n".join(
         f"{'用户' if m.role == 'user' else '助手'}：{m.content}" for m in segment_messages
     )
@@ -68,13 +91,13 @@ def _build_summary_prompt(previous_summary: dict | None, segment_messages: list[
     )
     return _PROMPT.render(
         "user",
-        previous_summary=previous_text,
-        conversation_segment=segment_text,
+        previous_summary=wrap_untrusted_context("previous_summary", previous_text),
+        conversation_segment=wrap_untrusted_context("conversation_segment", segment_text),
     )
 
 
 async def _call_summary_llm(
-    prompt: str, *, parent_kind: str | None = None, parent_id: str | None = None
+    user_content: str, *, parent_kind: str | None = None, parent_id: str | None = None
 ) -> str:
     """
     这里必须走流式请求，不能像 report_agent.py 那样一次性等完整响应：结构化
@@ -102,7 +125,10 @@ async def _call_summary_llm(
                 },
                 json={
                     **invocation.request_options(),
-                    "messages": [{"role": "user", "content": prompt}],
+                    "messages": [
+                        {"role": "system", "content": _SYSTEM_PROMPT},
+                        {"role": "user", "content": user_content},
+                    ],
                 },
             ) as resp:
                 resp.raise_for_status()
@@ -178,7 +204,34 @@ async def maybe_generate_summary(
     `parent_kind` 取值 "report" 或 "intake"；`window_size` 应该与对应 Agent
     的 MAX_HISTORY_MESSAGES 保持一致，这样摘要覆盖范围正好从原始近期消息
     窗口结束的地方接上，不留缝隙也不重叠。
+
+    同一 (parent_kind, parent_id) 的生成流程用 Redis 锁串行化——用户在第一
+    条消息的 SSE 流结束前发出第二条消息时，两次请求各自的 `done` 分支都会
+    挂一个 BackgroundTasks，抢不到锁的一方直接跳过，避免两个任务并发读到
+    同一份旧摘要、之后互相覆盖对方已经提交的新结果。
     """
+    lock_key = _LOCK_KEY_TMPL.format(parent_kind=parent_kind, parent_id=parent_id)
+    lock_token = str(uuid.uuid4())
+    redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
+    try:
+        acquired = await redis_client.set(lock_key, lock_token, nx=True, px=_LOCK_TTL_MS)
+        if not acquired:
+            logger.info(
+                "conversation_summary_lock_busy", parent_kind=parent_kind, parent_id=parent_id
+            )
+            return
+        await _generate_summary(parent_kind, parent_id, window_size=window_size)
+    finally:
+        try:
+            await redis_client.eval(_RELEASE_LOCK_LUA, 1, lock_key, lock_token)
+        except Exception:  # noqa: BLE001 - 锁释放失败不影响本次结果，TTL 会兜底回收
+            logger.warning(
+                "conversation_summary_lock_release_failed", parent_kind=parent_kind, parent_id=parent_id
+            )
+        await redis_client.aclose()
+
+
+async def _generate_summary(parent_kind: str, parent_id: str, *, window_size: int) -> None:
     from app.database import async_session_maker
 
     parent_column = _MESSAGE_PARENT_COLUMNS[parent_kind]
@@ -192,14 +245,19 @@ async def maybe_generate_summary(
                 # 还没攒够一整个窗口的新老化消息，暂不需要重新生成摘要
                 return
 
-            target_covered_seq = latest_seq - window_size
+            # 覆盖点必须从"上次覆盖到哪"往前推一个窗口，不能锚定当前最新消息——
+            # 否则每来一轮新消息，`latest_seq - covered_through_seq` 都会重新
+            # 越过 window_size 触发摘要，但每次只推进一两条，退化成"几乎每轮
+            # 都调用一次摘要 LLM"。如果因为服务中断攒下了不止一个窗口的积压，
+            # 这里只推进一个窗口，剩余积压会在后续几轮里按同样节奏逐步追上。
+            target_covered_seq = covered_through_seq + window_size
             segment_messages = await _load_segment(
                 db, parent_column, parent_id, covered_through_seq, target_covered_seq
             )
             if not segment_messages:
                 return
 
-            prompt = _build_summary_prompt(
+            user_content = _build_summary_user_content(
                 existing.summary_json if existing else None, segment_messages
             )
         except Exception as exc:  # noqa: BLE001 - best-effort，不能让异常抛进 BackgroundTasks
@@ -210,7 +268,7 @@ async def maybe_generate_summary(
 
         try:
             raw_response = await _call_summary_llm(
-                prompt, parent_kind=parent_kind, parent_id=parent_id
+                user_content, parent_kind=parent_kind, parent_id=parent_id
             )
             new_summary = _parse_summary_response(raw_response)
         except Exception as exc:
@@ -237,6 +295,7 @@ async def maybe_generate_summary(
             parent_id=parent_id,
             summary_json=new_summary,
             covered_through_seq=target_covered_seq,
+            expected_covered_through_seq=covered_through_seq,
             source_model=_SUMMARY_MODEL,
             prompt_version=_PROMPT_VERSION,
             tokens_before=None,

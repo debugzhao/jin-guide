@@ -33,7 +33,7 @@ from uuid import uuid4
 import redis.asyncio as aioredis
 import structlog
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.exc import StaleDataError
@@ -560,6 +560,7 @@ async def upsert_summary(
     parent_id: str,
     summary_json: dict,
     covered_through_seq: int,
+    expected_covered_through_seq: int,
     source_model: str,
     prompt_version: str,
     tokens_before: int | None,
@@ -571,21 +572,48 @@ async def upsert_summary(
     摘要生成任务调用（见 conversation_summary.py）——这里持久化失败只记日志、
     不能向上抛，因为调用方早已决定好失败时是保留旧摘要不动、还是把这次尝试
     记为失败。
+
+    `expected_covered_through_seq` 是调用方在开始生成前读到的旧
+    `covered_through_seq`（没有旧摘要时为 0）。更新按它做一次数据库层面的
+    CAS（`WHERE covered_through_seq = :expected`）：如果这期间已经有另一个
+    并发的后台任务先一步写入了更新的摘要，`covered_through_seq` 已经变了，
+    这里检测到 0 行受影响就直接放弃，不会用自己这次算出的、基于旧摘要生成
+    的结果覆盖别人已提交的新结果，也不会让 `covered_through_seq` 倒退。
+    调用方（conversation_summary.py）额外用 Redis 锁把整个生成流程串行化，
+    这里是锁失效（TTL 到期、Redis 重启等）时的最后一道保险，两者共同防止
+    "旧摘要覆盖新摘要"的并发写丢失问题。
     """
     parent_column = _SUMMARY_PARENT_COLUMNS[parent_kind]
     parent_kwarg = parent_column.key
     try:
         existing = await load_summary(db, parent_kind=parent_kind, parent_id=parent_id)
         if existing:
-            existing.summary_json = summary_json
-            existing.covered_through_seq = covered_through_seq
-            existing.summary_version += 1
-            existing.source_model = source_model
-            existing.prompt_version = prompt_version
-            existing.tokens_before = tokens_before
-            existing.tokens_after = tokens_after
-            existing.status = status
-            existing.updated_at = datetime.now(UTC)
+            result = await db.execute(
+                update(ConversationSummary)
+                .where(
+                    ConversationSummary.id == existing.id,
+                    ConversationSummary.covered_through_seq == expected_covered_through_seq,
+                )
+                .values(
+                    summary_json=summary_json,
+                    covered_through_seq=covered_through_seq,
+                    summary_version=ConversationSummary.summary_version + 1,
+                    source_model=source_model,
+                    prompt_version=prompt_version,
+                    tokens_before=tokens_before,
+                    tokens_after=tokens_after,
+                    status=status,
+                    updated_at=datetime.now(UTC),
+                )
+            )
+            if result.rowcount == 0:
+                await db.rollback()
+                logger.info(
+                    "conversation_summary_cas_conflict",
+                    expected_covered_through_seq=expected_covered_through_seq,
+                    **{parent_kwarg: parent_id},
+                )
+                return
         else:
             db.add(
                 ConversationSummary(
@@ -600,6 +628,11 @@ async def upsert_summary(
                 )
             )
         await db.commit()
+    except IntegrityError:
+        # 两个并发任务都判断"还没有摘要行"→都走 INSERT，唯一约束让后提交
+        # 的一方在这里失败——对方已经创建了权威的第一份摘要，这次直接放弃。
+        await db.rollback()
+        logger.info("conversation_summary_cas_conflict_on_insert", **{parent_kwarg: parent_id})
     except Exception as exc:  # noqa: BLE001 - 尽力而为的持久化，不能让异常向上冒泡导致聊天回复失败
         await db.rollback()
         logger.warning(

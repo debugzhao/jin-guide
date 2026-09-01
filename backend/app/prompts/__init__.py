@@ -1,6 +1,7 @@
 """Git-first Prompt Registry：统一加载、校验和追踪线上 Prompt。"""
 
 from app.prompts.registry import PromptRegistry, prompt_registry
+from app.prompts.untrusted import wrap_untrusted_context
 
 """
 __init__.py 这个文件名是 Python 语言层面的保留命名
@@ -9,4 +10,4 @@ Python 解释器在 import 一个目录时，是靠这个固定文件名来识�
 这个特定文件的价值不是"标记包"（这个作用现在弱化了），而是给 app/prompts
 这个包定义了一个干净的对外接口——外部只依赖 prompt_registry，不用关心内部是 registry.py 还是别的文件实现的
 """
-__all__ = ["PromptRegistry", "prompt_registry"]
+__all__ = ["PromptRegistry", "prompt_registry", "wrap_untrusted_context"]

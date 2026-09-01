@@ -3,5 +3,5 @@ report_conversation: v1
 profile_clarification: v1
 report_generation: v1
 reflection_review: v2
-conversation_summary: v1
+conversation_summary: v2
 conversation_title: v1
