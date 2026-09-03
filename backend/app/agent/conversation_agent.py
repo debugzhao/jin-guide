@@ -296,7 +296,7 @@ async def stream_conversation_response(
     manifest_items.append(ContextItem(
         SourceType.CURRENT_REQUEST, TrustLevel.UNTRUSTED_USER, "user_message", user_message, required=True,
     ))
-    log_context_manifest(agent="conversation_agent", items=manifest_items)
+    log_context_manifest(agent="conversation_agent", items=manifest_items, correlation_id=report_id)
 
     # 构建消息数组
     messages = _build_messages(

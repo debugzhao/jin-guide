@@ -216,7 +216,12 @@ def _build_summary_block(summary: dict | None) -> str:
     return render_summary_block(summary)
 
 
-def _build_messages(history: list[dict], user_message: str, summary: dict | None = None) -> list[dict]:
+def _build_messages(
+    history: list[dict],
+    user_message: str,
+    summary: dict | None = None,
+    conversation_id: str | None = None,
+) -> list[dict]:
     """固定指令只进入 system；摘要作为转义后的低权限数据。
 
     组装顺序和信任包装规则委托给 `app.context.assembler.assemble_messages`，
@@ -246,7 +251,7 @@ def _build_messages(history: list[dict], user_message: str, summary: dict | None
         ),
         ContextItem(SourceType.CURRENT_REQUEST, TrustLevel.UNTRUSTED_USER, "user_message", user_message, required=True),
     ]
-    log_context_manifest(agent="intake_agent", items=manifest_items)
+    log_context_manifest(agent="intake_agent", items=manifest_items, correlation_id=conversation_id)
 
     return assemble_messages(
         system_prompt=_SYSTEM_PROMPT,
@@ -549,7 +554,7 @@ async def stream_intake_response(
         inputs={"user_message": user_message},
         metadata=trace_metadata,
     ) as turn_run:
-        messages = _build_messages(history, user_message, summary)
+        messages = _build_messages(history, user_message, summary, conversation_id=conversation_id)
         full_response = ""
         output_guard = StreamingOutputGuard()
         reasoning_guard = StreamingOutputGuard() if reasoning_display_enabled else None
@@ -651,6 +656,7 @@ async def stream_intake_response(
                         log_tool_envelope(
                             agent="intake_agent",
                             envelope=to_context_envelope(c["name"], tool_result),
+                            correlation_id=conversation_id,
                         )
 
                         chunks = (tool_result.get("data") or {}).get("chunks") or []

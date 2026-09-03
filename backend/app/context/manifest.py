@@ -34,12 +34,25 @@ def build_manifest_entries(items: list[ContextItem]) -> list[dict]:
     return entries
 
 
-def log_context_manifest(*, agent: str, items: list[ContextItem], degraded: bool = False) -> list[dict]:
-    """记录本轮上下文清单，返回 entries 供调用方需要时复用（比如测试断言）。"""
+def log_context_manifest(
+    *,
+    agent: str,
+    items: list[ContextItem],
+    degraded: bool = False,
+    correlation_id: str | None = None,
+) -> list[dict]:
+    """记录本轮上下文清单，返回 entries 供调用方需要时复用（比如测试断言）。
+
+    `correlation_id` 传 `report_id`（报告问答）或 `conversation_id`（建档聊天）——
+    没有这个字段时，端到端测试只能靠时间戳/顺序去猜哪条 `context_manifest` 日志
+    对应哪次请求；有了它可以直接 `docker compose logs backend | grep <id>` 定位
+    这一轮请求的完整上下文构成。
+    """
     entries = build_manifest_entries(items)
     _logger.info(
         "context_manifest",
         agent=agent,
+        correlation_id=correlation_id,
         total_tokens=sum(e["tokens"] for e in entries if e["included"]),
         sources=entries,
         degraded=degraded,
@@ -47,7 +60,9 @@ def log_context_manifest(*, agent: str, items: list[ContextItem], degraded: bool
     return entries
 
 
-def log_tool_envelope(*, agent: str, envelope: ToolResultEnvelope) -> None:
+def log_tool_envelope(
+    *, agent: str, envelope: ToolResultEnvelope, correlation_id: str | None = None
+) -> None:
     """记录一次工具调用的统一信封（对应 §8.9/§10.2.6）。
 
     跟 `log_context_manifest` 是两件事：manifest 记录"这轮实际发给模型的
@@ -58,6 +73,7 @@ def log_tool_envelope(*, agent: str, envelope: ToolResultEnvelope) -> None:
     _logger.info(
         "tool_result_envelope",
         agent=agent,
+        correlation_id=correlation_id,
         source=envelope.source,
         status=envelope.status,
         completeness_flag=envelope.completeness_flag,
