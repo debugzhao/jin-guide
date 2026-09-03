@@ -443,7 +443,9 @@ class ToolRegistry:
 
 ### 1.6 函数参数：`*` 关键字-only 分隔符
 
-**是什么**：`*` 单独出现在函数签名里（后面不带名字）时，是一道"分界线"——它后面的所有参数，调用时只能用 `参数名=值` 的方式传，不能按位置顺序传。`*` 管的只是 "**必须用 `参数名=值` 的方式传**" 这件事，**不管写的顺序**。
+**是什么**：`*` 单独出现在函数签名里（后面不带名字）时，是一道"分界线"——它后面的所有参数，调用时只能用 `参数名=值` 的方式传，不能按位置顺序传。
+
+`*` 管的只是 "**必须用 `参数名=值` 的方式传**" 这件事，**不管写的顺序**。
 
 **为什么用**：
 
@@ -476,11 +478,109 @@ assemble_messages("你是助手", items, history_list, "帮我写个方案")
 ```
 
 **和 `*args` / `**kwargs` 区分**：
+
 - `*args`：带名字的 `*`，作用是"收集"多余的位置参数成元组
 - `**kwargs`：收集多余的关键字参数成字典
 - 单独 `*`：不带名字，只当标记，作用是"禁止"位置传参，与收集无关
 
 **典型使用场景**：参数多且类型容易混淆的函数、配置类 / 初始化类、公共 API / 入口函数——凡是"不希望调用方靠猜位置来调"的地方。
+
+### 1.7 *args和 **kwargs区别和使用场景 
+
+**一句话：** `*args` 把"多出来的位置参数"收进一个元组，`**kwargs` 把"多出来的关键字参数"收进一个字典。下面拆开讲，都用你熟悉的场景。
+
+**1. `*args` —— 收集多余的位置参数**
+
+```python
+def log(*args):
+    print(args)
+
+log("hello")            # ('hello',)        元组，注意只有一个元素也要逗号
+log("hello", 1, 2, 3)   # ('hello', 1, 2, 3)
+log()                   # ()                一个都不传也行
+```
+
+看函数签名：`*args` 里的 `*` 会把**所有按位置传的参数**一股脑收进一个叫 `args` 的**元组**。
+
+`args` 这个名字只是**约定**，不是语法要求，你写成 `*things`、`*rest` 效果一样：
+
+```python
+def show(*rest):
+    print(rest)
+
+show(1, 2, 3)   # (1, 2, 3)
+```
+
+**2. `**kwargs` —— 收集多余的关键字参数**
+
+```python
+def log2(**kwargs):
+    print(kwargs)
+
+log2(a=1, b=2)             # {'a': 1, 'b': 2}
+log2(name="tyson", age=30) # {'name': 'tyson', 'age': 30}
+log2()                     # {}
+```
+
+两个 `**` 会把所有**用 `名字=值` 传**的参数收进一个叫 `kwargs` 的**字典**，key 是参数名，value 是值。
+
+**3. 两个一起用（最常见的完整写法）**
+
+```python
+def flex(*args, **kwargs):
+    print("位置参数:", args)
+    print("关键字参数:", kwargs)
+
+flex(1, 2, x=3, y=4)
+# 位置参数: (1, 2)
+# 关键字参数: {'x': 3, 'y': 4}
+```
+
+**4. 它们还有"反方向"的用法：调用时拆包**
+
+上面是**定义函数**时收参数；反过来，**调用函数**时用 `*` / `**` 可以把序列/字典"拆开"传进去：
+
+```python
+def add(a, b, c):
+    return a + b + c
+
+nums = [1, 2, 3]
+add(*nums)          # 等价于 add(1, 2, 3)     → 6
+
+d = {"a": 1, "b": 2, "c": 3}
+add(**d)            # 等价于 add(a=1, b=2, c=3) → 6
+```
+
+**5. 最典型的使用场景：装饰器"透传所有参数"**
+
+你在文档里看过很多 `def wrapper(*args, **kwargs)`，就是这个原因——包装函数**不知道自己会收到什么参数**，用这两个符号"原样接住、原样转交"，一个字都不改：
+
+```python
+def log_call(func):
+    def wrapper(*args, **kwargs):      # 接住任何形式的参数
+        print("调用:", func.__name__)
+        return func(*args, **kwargs)   # 原样转交给真正的函数
+    return wrapper
+
+@log_call
+def greet(name, greeting="Hi"):
+    return f"{greeting}, {name}"
+
+greet("Tom")                       # greet 只收一个，wrapper 转发没问题
+greet("Tom", greeting="Hello")     # 关键字也照样转发
+```
+
+**6. 别和上次讲的单独 `*` 混淆**
+
+| 写法            | 作用                         | 用在哪   |
+| --------------- | ---------------------------- | -------- |
+| `*args`         | **收集**多余位置参数成元组   | 函数定义 |
+| `**kwargs`      | **收集**多余关键字参数成字典 | 函数定义 |
+| 单独 `*`        | **禁止**位置传参，强制关键字 | 函数定义 |
+| 调用时 `*list`  | **拆开**序列按位置传         | 函数调用 |
+| 调用时 `**dict` | **拆开**字典按名字传         | 函数调用 |
+
+**记忆口诀：** 星号 `*` = "打包/拆包"的开关——定义时打包收进来，调用时拆开传出去；一个星号管位置参数，两个星号管带名字的参数。
 
 ---
 
@@ -741,59 +841,50 @@ match result:           # Python 3.10+ match 语句
 
 ### 2.6 dataclass
 
-**是什么**：自动生成 `__init__`、`__repr__`、`__eq__` 等样板代码的类装饰器。
+**一句话：** `@dataclass` 是 Python 内置的**数据类装饰器**，作用是根据你在类里写的类型注解，自动帮你生成一堆样板方法（主要是 `__init__`、`__repr__`、`__eq__`），省得手写。
 
-**Java 对比**：类似 Lombok 的 `@Data`，或 Java 14+ 的 `record`。
+**没有它时你要手写：**
 
 ```python
-from dataclasses import dataclass, field, asdict
-from typing import ClassVar
+class TokenBudgetAllocator:
+    def __init__(self, max_tokens: int, overlap: int, doc_type: str):
+        self.max_tokens = max_tokens
+        self.overlap = overlap
+        self.doc_type = doc_type
 
-@dataclass
-class ToolCall:
-    name: str
-    args: dict
-    id: str = ""
-    result: str | None = None
-    
-    # 不能用可变对象作默认值！必须用 field(default_factory=...)
-    # 原因：所有实例会共享同一个列表对象
-    tags: list[str] = field(default_factory=list)  # 正确
-    # tags: list[str] = []  ← 错误！
-    
-    MAX_ARGS: ClassVar[int] = 10  # ClassVar 不被 dataclass 处理
-
-# 自动获得 __init__、__repr__、__eq__：
-tc = ToolCall(name="search", args={"query": "python"}, id="001")
-print(tc)        # ToolCall(name='search', args={...}, id='001', ...)
-print(asdict(tc))  # 转字典，序列化很方便
-
-# --- frozen=True：不可变，可做字典键 ---
-@dataclass(frozen=True)
-class CheckpointKey:
-    thread_id: str
-    checkpoint_id: str
-
-key = CheckpointKey("t-1", "ckpt-42")
-cache = {key: state}   # 可以作为字典键
-
-# --- __post_init__：初始化后验证/处理 ---
-@dataclass
-class LLMConfig:
-    model: str
-    temperature: float = 0.7
-    
-    def __post_init__(self):
-        if not 0 <= self.temperature <= 2:
-            raise ValueError(f"temperature {self.temperature} out of [0,2]")
-        self.model = self.model.lower()  # 归一化
-
-# --- 继承 ---
-@dataclass
-class ExtendedConfig(LLMConfig):
-    max_tokens: int = 4096
-    # 父类字段自动继承，子类字段必须有默认值（有默认值的字段不能在无默认值字段之前）
+    def __repr__(self):
+        return f"TokenBudgetAllocator(max_tokens={self.max_tokens!r}, ...)"
 ```
+
+**加上 `@dataclass` 后：**
+
+```python
+from dataclasses import dataclass
+
+@dataclass
+class TokenBudgetAllocator:
+    max_tokens: int
+    overlap: int
+    doc_type: str
+```
+
+**自动生成的等价内容：**
+
+| 方法       | 作用                                                         |
+| ---------- | ------------------------------------------------------------ |
+| `__init__` | 按声明顺序把参数赋值给属性（`self.max_tokens = max_tokens` 等） |
+| `__repr__` | 调试时打印 `TokenBudgetAllocator(max_tokens=400, overlap=80, doc_type='charter')`，好看好排查 |
+| `__eq__`   | 两个实例属性全相等就认为相等，可直接 `==` 比较               |
+
+**几个常用参数：**
+
+- `@dataclass(frozen=True)` —— 实例创建后不可变（类似只读），适合当配置对象
+- `@dataclass(order=True)` —— 自动生成 `<` / `>` 排序方法
+- `@dataclass(slots=True)` —— 用 `__slots__` 省内存（Python 3.10+）
+
+**跟类型注解的关系：** `@dataclass` 是靠你写的注解 `max_tokens: int` 才知道要生成哪些字段、什么顺序、什么类型的——所以它和 `from __future__ import annotations` 是配合使用的（注解先"存成字符串"不影响 dataclass，因为 dataclass 用的是 `__annotations__` 里的名字和默认值，不是运行时求值）。
+
+**结合你的项目：** 你 `context/` 里那些 `TokenBudgetAllocator`、`SourceType`、`ContextItem` 这类"纯数据载体"的类用 `@dataclass` 最合适——它们不包含复杂逻辑，就是装字段、传数据、打日志，dataclass 让代码量砍掉一大半，且字段增减都集中在一处声明，改起来不容易漏
 
 ---
 
