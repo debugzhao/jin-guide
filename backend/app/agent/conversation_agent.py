@@ -91,9 +91,11 @@ def _build_context_block(
     return "\n\n".join(parts), breakdown, truncated
 
 
-def _trim_history(messages: list[dict]) -> list[dict]:
-    """只保留最近 N 轮对话，避免 Prompt 过大。"""
-    return trim_history(messages, MAX_HISTORY_MESSAGES)
+def _trim_history(messages: list[dict], covered_through_seq: int | None = None) -> list[dict]:
+    """只保留最近 N 轮对话，避免 Prompt 过大——`covered_through_seq` 见
+    `app.context.trimming.trim_history` 的注释：结构化摘要还没追上时临时放宽
+    窗口，避免摘要生成延迟与固定窗口裁剪叠加导致早期事实被双重丢失。"""
+    return trim_history(messages, MAX_HISTORY_MESSAGES, covered_through_seq)
 
 
 def _build_summary_block(summary: dict | None) -> str:
@@ -250,6 +252,7 @@ async def stream_conversation_response(
     user_message: str,
     extra_context: str = "",
     summary: dict | None = None,
+    summary_covered_through_seq: int | None = None,
     report_id: str | None = None,
 ) -> AsyncGenerator[dict, None]:
     """
@@ -258,6 +261,10 @@ async def stream_conversation_response(
     `summary` 是覆盖已超出原文历史窗口的消息的结构化增量摘要（见 P2）——
     传 None 则退回 P2 之前的行为，即只能看到最近
     MAX_HISTORY_MESSAGES 轮对话。
+
+    `summary_covered_through_seq` 是该摘要实际覆盖到的消息序号（没有摘要或
+    摘要还没持久化时传 0/None）——传给 `_trim_history`，摘要生成滞后时临时
+    放宽窗口而不是按固定条数硬裁，见 `app.context.trimming.trim_history`。
 
     产出的字典：
         {"type": "token", "content": "..."}
@@ -268,7 +275,7 @@ async def stream_conversation_response(
     """
     context_block, context_breakdown, context_truncated = _build_context_block(plan_json, evidence_json)
     summary_block = _build_summary_block(summary)
-    trimmed_history = _trim_history(history)
+    trimmed_history = _trim_history(history, summary_covered_through_seq)
 
     # 调用方没有显式传 extra_context 时，自己发起一次范围受限的补充检索——见模块
     # docstring 和 _retrieve_extra_context 的注释。传了就尊重调用方（目前没有
@@ -291,7 +298,7 @@ async def stream_conversation_response(
     manifest_items.append(ContextItem(
         SourceType.HISTORY, TrustLevel.UNTRUSTED_USER, "history",
         "\n".join(m.get("content", "") for m in trimmed_history),
-        truncated=len(history) > MAX_HISTORY_MESSAGES,
+        truncated=len(history) > len(trimmed_history),
     ))
     manifest_items.append(ContextItem(SourceType.RAG, TrustLevel.UNTRUSTED_EXTERNAL, "extra_context", extra_context))
     manifest_items.append(ContextItem(
@@ -316,7 +323,8 @@ async def stream_conversation_response(
         )
     log_context_manifest(
         agent="conversation_agent", items=manifest_items, correlation_id=report_id,
-        messages=messages, history=history_snapshot(history, MAX_HISTORY_MESSAGES),
+        messages=messages,
+        history=history_snapshot(history, MAX_HISTORY_MESSAGES, summary_covered_through_seq),
         structured_sources=structured_sources,
     )
 

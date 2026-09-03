@@ -52,7 +52,30 @@ def test_history_snapshot_separates_window_drop_from_role_filtering():
     assert manifest.history_snapshot(history, 3) == {
         "loaded_messages": 4, "window_limit": 3, "selected_messages": 3,
         "emitted_messages": 1, "window_dropped_messages": 1, "filtered_messages": 2,
+        "summary_covered_through_seq": None, "extended_for_uncovered_gap": False,
     }
+
+
+def test_history_snapshot_extends_window_when_summary_has_not_caught_up():
+    """回归用例：docs/context/ContextBuilder端到端验收用例.md E03 实测到的真实
+    bug——第 10 轮发出时，摘要后台任务（覆盖 seq 1~16）还没持久化完成，固定
+    16 条窗口会把最早两条（预算、排除专业）连同摘要一起裁掉。`covered_through_seq`
+    传 0（摘要确认覆盖到 0，即还没有任何已确认的覆盖范围）时，裁剪起点必须
+    退让到 0，不能按固定窗口裁掉尚未被摘要覆盖的原文。"""
+    history = [{"role": "user", "content": str(i)} for i in range(18)]
+
+    snapshot = manifest.history_snapshot(history, 16, covered_through_seq=0)
+
+    assert snapshot["selected_messages"] == 18  # 没有任何裁剪，全量原文保留
+    assert snapshot["window_dropped_messages"] == 0
+    assert snapshot["extended_for_uncovered_gap"] is True
+    assert snapshot["summary_covered_through_seq"] == 0
+
+    # 摘要已经追上（覆盖到 16）时，退回正常固定窗口裁剪。
+    caught_up = manifest.history_snapshot(history, 16, covered_through_seq=16)
+    assert caught_up["selected_messages"] == 16
+    assert caught_up["window_dropped_messages"] == 2
+    assert caught_up["extended_for_uncovered_gap"] is False
 
 
 def test_structured_snapshot_distinguishes_object_trimming_and_char_fallback():
@@ -152,6 +175,31 @@ async def test_real_intake_send_points_log_routing_and_synthesis(monkeypatch, ev
     assert payloads[1]["messages"] == followup
     assert "tools" not in payloads[1]
     assert "PRIVATE-TOOL" not in str(events)
+
+
+def test_intake_build_messages_keeps_uncovered_history_when_summary_lags(events):
+    """端到端回归 E03 用例：`stream_intake_response`/`_build_messages` 拿到
+    `summary_covered_through_seq=0`（摘要后台任务还没持久化完成）时，即使原始
+    历史超过 MAX_HISTORY_MESSAGES，也不能把还没被摘要覆盖的最早两条（预算、
+    排除专业所在的那一轮）从发给模型的 messages 里裁掉。"""
+    from app.agent import intake_agent
+
+    history = [
+        {"role": "user", "content": "我的预算是4.8万元，不考虑护理学"},
+        {"role": "assistant", "content": "收到"},
+    ] + [
+        {"role": "user" if i % 2 == 0 else "assistant", "content": f"闲聊{i}"}
+        for i in range(16)
+    ]  # 共 18 条，超过 MAX_HISTORY_MESSAGES=16
+
+    messages = intake_agent._build_messages(
+        history, "复述我的预算和排除专业", conversation_id="conv-test",
+        summary_covered_through_seq=0,
+    )
+
+    assert any("4.8万元" in m["content"] for m in messages)
+    assert events[-1]["history"]["extended_for_uncovered_gap"] is True
+    assert events[-1]["history"]["window_dropped_messages"] == 0
 
 
 @pytest.mark.asyncio

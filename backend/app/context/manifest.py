@@ -63,8 +63,17 @@ def message_snapshot(messages: list[dict]) -> dict:
     }
 
 
-def history_snapshot(history: list[dict], window: int) -> dict:
-    selected = history[-window:]
+def history_snapshot(history: list[dict], window: int, covered_through_seq: int | None = None) -> dict:
+    """`covered_through_seq` 的含义与 `app.context.trimming.trim_history` 一致
+    ——传了就按"摘要实际覆盖到哪"计算裁剪起点，而不是固定窗口，这样当摘要还
+    没追上（`extended_for_uncovered_gap=True`）时，清单如实反映"这轮其实没有
+    按固定窗口裁剪、多发了原文"，而不是一直汇报一个和实际发送不符的固定值。
+    """
+    if covered_through_seq is None:
+        start = max(len(history) - window, 0)
+    else:
+        start = min(max(len(history) - window, 0), max(covered_through_seq, 0))
+    selected = history[start:]
     effective = [m for m in selected if m.get("role", "user") in ("user", "assistant") and m.get("content")]
     return {
         "loaded_messages": len(history),
@@ -73,6 +82,8 @@ def history_snapshot(history: list[dict], window: int) -> dict:
         "emitted_messages": len(effective),
         "window_dropped_messages": len(history) - len(selected),
         "filtered_messages": len(selected) - len(effective),
+        "summary_covered_through_seq": covered_through_seq,
+        "extended_for_uncovered_gap": covered_through_seq is not None and len(selected) > window,
     }
 
 

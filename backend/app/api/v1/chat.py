@@ -279,6 +279,10 @@ async def chat_with_report(
             history=history,
             user_message=message,
             summary=summary_json,
+            # 同 intake_chat.py：summary_meta 只在真正读到摘要行时非 None，其余
+            # 情况（未生成/读取异常）当作"确认覆盖到 0"，避免摘要还没追上时
+            # 固定窗口把还没被摘要覆盖的早期原文裁掉。
+            summary_covered_through_seq=(summary_meta or {}).get("covered_through_seq", 0),
             report_id=report_id,
         ):
             event_type = event.get("type")

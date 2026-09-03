@@ -33,6 +33,58 @@ class TestTrimHistory:
 
         assert trim_history(messages, 10) == messages
 
+    def test_covered_through_seq_none_falls_back_to_fixed_window(self):
+        """不传 covered_through_seq 时行为必须和旧实现完全一致（向后兼容）。"""
+        messages = [{"role": "user", "content": str(i)} for i in range(20)]
+
+        assert trim_history(messages, 5, covered_through_seq=None) == trim_history(messages, 5)
+
+    def test_summary_not_yet_caught_up_keeps_uncovered_messages(self):
+        """回归 E03 用例的 bug：摘要后台任务还没持久化（covered_through_seq=0）
+        时，固定窗口裁剪不能把还没被摘要覆盖的早期原文（这里是"0"这条消息，
+        对应真实场景里的预算/排除专业事实）丢掉。"""
+        messages = [{"role": "user", "content": str(i)} for i in range(18)]
+
+        trimmed = trim_history(messages, 16, covered_through_seq=0)
+
+        assert len(trimmed) == 18  # 全量保留，不按固定 16 条裁剪
+        assert trimmed[0]["content"] == "0"
+
+    def test_summary_caught_up_trims_to_fixed_window_as_usual(self):
+        """摘要已经覆盖到裁剪起点之后（或更远）时，退回正常固定窗口裁剪，
+        不会因为加了这个参数就一直发送全量历史。"""
+        messages = [{"role": "user", "content": str(i)} for i in range(18)]
+
+        trimmed = trim_history(messages, 16, covered_through_seq=16)
+
+        assert len(trimmed) == 16
+        assert trimmed[0]["content"] == "2"
+
+    def test_covered_through_seq_beyond_loaded_history_never_crashes_or_overflows(self):
+        """已知精度边界（见 trim_history 文档字符串）：会话总消息数超过上游
+        50 条加载上限时，`messages[0]` 不再对应全局 seq=1，`covered_through_seq`
+        当下标用会失真。这里只锁定"不崩溃、不越界"这条底线，不断言具体保留
+        条数——精确对齐需要把 seq 一路带进 Redis 缓存，属于后续单独的修复。"""
+        messages = [{"role": "user", "content": str(i)} for i in range(50)]  # 上游封顶后的历史
+
+        # covered_through_seq 是全局序号（可能远大于 len(messages)），不能让
+        # start 越过 messages 末尾变成负切片或空列表之外的诡异结果。
+        trimmed = trim_history(messages, 16, covered_through_seq=500)
+        assert 0 <= len(trimmed) <= len(messages)
+
+        trimmed = trim_history(messages, 16, covered_through_seq=0)
+        assert 0 <= len(trimmed) <= len(messages)
+
+    def test_summary_ahead_of_window_still_caps_at_fixed_window(self):
+        """covered_through_seq 比"固定窗口起点"更靠后时，不应该反而裁掉比
+        固定窗口更多的消息——两者取更宽松（更早）的那个起点。"""
+        messages = [{"role": "user", "content": str(i)} for i in range(18)]
+
+        trimmed = trim_history(messages, 16, covered_through_seq=18)
+
+        assert len(trimmed) == 16
+        assert trimmed[0]["content"] == "2"
+
 
 class TestRenderSummaryBlock:
     def test_empty_summary_renders_empty_string(self):

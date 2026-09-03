@@ -466,6 +466,11 @@ async def intake_chat(
             history=history,
             user_message=message,
             summary=summary_json,
+            # summary_meta 只在 summary_load_status == "loaded" 时非 None——新会话
+            # /未读到摘要行/读取异常都当作"确认覆盖到 0"，让 IntakeAgent 按摘要滞后
+            # 时的规则临时放宽历史窗口，不把还没被摘要确认覆盖的原文裁掉（见
+            # app.context.trimming.trim_history 的注释，对应 E03 用例暴露的 bug）。
+            summary_covered_through_seq=(summary_meta or {}).get("covered_through_seq", 0),
             reasoning_display_enabled=reasoning_display_enabled,
             conversation_id=conversation_id,
         ):

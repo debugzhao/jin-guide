@@ -90,6 +90,7 @@ docker compose logs -f --since=5m backend
 - Manifest 的 `sources` 是来源清单，不是消息排序依据。实际顺序看 `message_roles`；报告 plan 和 evidence 在消息中合为一个报告数据块。
 - `history.loaded_messages` 是本次加载到的热/冷层历史，最多通常为 50，不代表数据库总消息数。
 - `summary_load_status`：`not_requested` 表示新建档会话或 demo-report 不读摘要；`missing` 表示读取路径未找到摘要；`loaded` 表示已读取摘要行；`error` 表示读取异常后降级。不能只看 `summary=null` 判断原因。
+- `history.summary_covered_through_seq`/`history.extended_for_uncovered_gap`（2026-09-03 新增）：前者是本轮实际用于裁剪判断的摘要覆盖序号（`not_requested`/`missing`/`error` 都按 0 处理）；后者为 `true` 表示这一轮因为摘要还没追上而临时放宽了固定窗口、实际发送的原文比 `window_limit` 多。出现 `true` 不是 bug，是防止早期事实被裁剪+摘要滞后双重丢失的兜底分支，但意味着这一轮 token 用量会比理想路径高。
 
 ### 3.2 隐私约束
 
@@ -158,6 +159,8 @@ docker compose logs -f --since=5m backend
 - 仍为 `hard_budget_enabled=false`，窗口裁剪不是硬 Token 预算裁剪。
 
 **重要限制：**当前摘要按覆盖位置整窗口推进，会与近期原文重叠，不能断言摘要只覆盖“已经滑出”的消息。第10轮是第一轮明确把最初两条原文裁掉；若后续助手曾重复预算/专业，不能据正确回答认定只靠摘要召回，应重跑或用受控历史夹具。
+
+**2026-09-03 实测发现并已修复的真实 bug：**按本用例节奏实测（第8轮后未真正等到 `conversation_summary_persisted` 就发了第9、10轮），第10轮 `context_turn_loaded` 显示 `summary_load_status=missing`——摘要 LLM 调用耗时约1分钟，第10轮请求落在摘要持久化完成前几秒。此时固定16条窗口原文裁剪已经把最早两条原文裁掉，摘要又还没来得及覆盖，两者叠加导致预算/排除专业信息**双重丢失**，模型如实回答“尚未提供”。已修复：`trim_history` 新增 `covered_through_seq` 参数，只裁剪摘要已确认覆盖的部分，未覆盖部分即使超过16条也临时保留；上表“第10轮 `selected_messages=16`、`window_dropped_messages=2`”只是摘要已追上时的理想路径断言，摘要滞后时预期变为 `selected_messages=18`（或当时的实际历史条数）、`window_dropped_messages=0`、`history.extended_for_uncovered_gap=true`。重跑本用例时不必再刻意“等待摘要成功提交再发下一轮”——这一步是为了在旧实现下复现 bug，修复后正常节奏发送也不应再丢事实；但仍建议记录 `summary_load_status`，用于区分“摘要已追上的标准路径”与“摘要滞后被窗口延伸兜底”两种日志形态。
 
 ### E04：相同问题被答案缓存短路
 
@@ -294,6 +297,8 @@ docker compose logs -f --since=5m backend
 
 当前摘要首次按10条批量推进，第5轮后覆盖0→10。该断言要求每轮确实保存用户/助手各一条，且没有重试、并发或答案缓存干扰。
 
+ConversationAgent 与 IntakeAgent 共用同一套 `trim_history`/`covered_through_seq` 实现（见 E03 “2026-09-03 实测发现并已修复的真实 bug”），存在同样的摘要滞后窗口——第6、7轮若在摘要持久化完成前发出，预期同样是 `loaded=12` 但不裁剪（`window_dropped_messages=0`），而不是上面写的 `dropped=2`。
+
 ### E12：会话隔离，不应把A的偏好带到B
 
 **会话A输入：**
@@ -408,7 +413,9 @@ docker compose logs -f --since=5m backend
 
 **预期：**不因摘要不可用导致聊天崩溃；当前窗口确实没有预算时应承认不足，不能要求系统必然召回4.8万元。
 
-**日志：**`context_turn_loaded summary_load_status=error, summary=null`；summary来源不包含、历史窗口仍为16、模型请求正常产生。必须与正常无摘要的`missing/not_requested`区分；具体故障原因由受控运行器记录，新增日志不输出可能包含敏感信息的异常原文。
+**日志：**`context_turn_loaded summary_load_status=error, summary=null`；summary来源不包含、模型请求正常产生。必须与正常无摘要的`missing/not_requested`区分；具体故障原因由受控运行器记录，新增日志不输出可能包含敏感信息的异常原文。
+
+**2026-09-03 起行为变化：**摘要读取异常时 `summary_covered_through_seq` 现在按 0 处理（与 `missing` 同等对待，见 E03 的修复说明），历史窗口不再保证是固定16条——如果原始历史超过16条，会临时保留全部原文而不是按16条硬裁，这样"摘要读取失败"不会连累"原文也被裁掉"这一层。`history.extended_for_uncovered_gap=true` 即为该分支触发的标志。
 
 ### F07：硬Token预算未启用——负向验收
 
@@ -442,9 +449,11 @@ docker compose logs -f --since=5m backend
 
 ## 七、本次变更与自动化验证范围
 
-本次只补日志、日志契约测试和本文档；不启用预算分配器、不改10/16条历史窗口、不改8000/3000字符配额、不调整摘要批量和并发策略、不改SQL模板和RAG生成行为。
+本次只补日志、日志契约测试和本文档；不启用预算分配器、不改8000/3000字符配额、不调整摘要批量和并发策略、不改SQL模板和RAG生成行为。
 
-新增自动化测试覆盖：空来源排除、窗口与角色过滤统计、结构化/硬切分支观测、日志不暴露正文、计数失败不阻断观测、工具三态、Intake首轮与二次发送点、报告实际发送点与清单关联。
+2026-09-03 追加变更（E03 实测 bug 修复，见该用例的说明）：10/16 这两个 `MAX_HISTORY_MESSAGES` 常量本身没变，但裁剪判断新增了 `covered_through_seq` 输入——摘要还没确认覆盖到固定窗口起点时，实际发送的原文条数会临时超过 10/16，直到摘要追上来。这是唯一一次修改了裁剪逻辑本身（而不是纯观测）的变更，之前几轮"只补日志不改行为"的说法从这次起不再完全成立。
+
+新增自动化测试覆盖：空来源排除、窗口与角色过滤统计、结构化/硬切分支观测、日志不暴露正文、计数失败不阻断观测、工具三态、Intake首轮与二次发送点、报告实际发送点与清单关联、摘要滞后时窗口按覆盖位置临时放宽（`trim_history`/`history_snapshot` 的 `covered_through_seq` 分支）。
 
 自动化可运行：
 
