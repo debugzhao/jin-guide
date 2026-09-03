@@ -584,6 +584,72 @@ greet("Tom", greeting="Hello")     # 关键字也照样转发
 
 ---
 
+### 1.8 self 参数讲解
+
+**一句话：** `self` 不是语法关键字，它是**实例方法约定的第一个参数**，指向"正在调用这个方法的那个实例对象本身"。调用时 Python 会自动把实例传进来，你只管在方法里用它访问该实例的属性和其他方法。
+
+**结合你的 `TokenBudgetAllocator` 看：**
+
+```python
+@dataclass
+class TokenBudgetAllocator:
+    """在给定的可选来源预算内，按调用方传入的优先级顺序逐项分配。"""
+    optional_budget: int
+    spent: int = 0
+
+    @property
+    def remaining(self) -> int:
+        return max(self.optional_budget - self.spent, 0)
+```
+
+这里的 `self` 指的是某个**具体的分配器实例**。当你有两个实例时，它们互不干扰，全靠 `self` 区分：
+
+```python
+a = TokenBudgetAllocator(optional_budget=400)   # 实例 a
+b = TokenBudgetAllocator(optional_budget=500)   # 实例 b
+
+a.remaining   # self = a → max(400 - 0, 0) = 400
+b.remaining   # self = b → max(500 - 0, 0) = 500
+```
+
+`self.optional_budget`、`self.spent` 就是"读/写我这个实例自己的那两个字段"。
+
+**核心机制：方法调用其实是"类名.方法(实例, 参数)"的语法糖**
+
+```python
+a.remaining()
+# 完全等价于
+TokenBudgetAllocator.remaining(a)
+```
+
+所以你写方法时永远把 `self` 放第一位，Python 才会在调用时自动帮你补上实例。
+
+**使用场景**
+
+| 场景                | 说明                                                 |
+| ------------------- | ---------------------------------------------------- |
+| 读实例属性          | `self.optional_budget`、`self.spent`                 |
+| 改实例属性          | `self.spent += cost`（比如分配完一笔后累加已花预算） |
+| 调实例的其他方法    | `self.allocate(remaining)` 方法内部调用另一个方法    |
+| `__init__` 里初始化 | `self.spent = 0`，dataclass 帮你自动做，原理相同     |
+
+**注意事项**
+
+1. **名字可以不是 `self`**，比如写成 `this` 也行，但**千万别改**——全 Python 社区约定俗成，改了就没人读得懂。
+
+2. **`self` 只在实例方法里出现**，三种方法区分：
+   - 实例方法 → 第一个参数 `self`（绑定实例）
+   - 类方法 `@classmethod` → 第一个参数 `cls`（绑定类本身）
+   - 静态方法 `@staticmethod` → 不传任何绑定参数
+
+3. **实例方法调用必须有一个实例**。如果直接 `TokenBudgetAllocator.remaining`（不带括号）会拿到一个"未绑定方法"，普通调用会报错——因为它缺 `self` 这个实例参数。
+
+4. **在 dataclass 里 `self` 也是自动的**：你写 `optional_budget: int` 时没看到 `self`，但 dataclass 生成的 `__init__` 内部就是 `self.optional_budget = optional_budget`。
+
+5. **`@property` 场景**：`remaining` 是只读计算属性，没有 setter，所以只能读不能写——`a.remaining = 100` 会报错，这正是它设计成"由 `optional_budget - spent` 推导、不允许外部直接改"的原因。
+
+**一句话：** `self` = "我自己"，让同一个类模板能服务无数个互相独立的实例。
+
 ## 2. Python 类型系统
 
 ### 2.1 基础类型标注
