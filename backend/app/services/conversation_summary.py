@@ -241,6 +241,13 @@ async def _generate_summary(parent_kind: str, parent_id: str, *, window_size: in
             existing = await store.load_summary(db, parent_kind=parent_kind, parent_id=parent_id)
             covered_through_seq = existing.covered_through_seq if existing else 0
 
+            logger.info(
+                "conversation_summary_schedule", parent_kind=parent_kind, parent_id=parent_id,
+                latest_seq=latest_seq, covered_through_seq=covered_through_seq,
+                window_size=window_size,
+                action="generate" if latest_seq - covered_through_seq >= window_size else "skip",
+            )
+
             if latest_seq - covered_through_seq < window_size:
                 # 还没攒够一整个窗口的新老化消息，暂不需要重新生成摘要
                 return

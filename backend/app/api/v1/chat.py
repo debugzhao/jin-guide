@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent.conversation_agent import MAX_HISTORY_MESSAGES, stream_conversation_response
 from app.api.dependencies import Identity, get_identity
 from app.config import settings
+from app.context.manifest import log_context_load
 from app.database import async_session_maker, get_db
 from app.models.conversation import ConversationMessage, ReportConversation
 from app.models.report import Report
@@ -129,6 +130,7 @@ async def chat_with_report(
 
     redis_key = store.history_key(_NAMESPACE, report_id, owner_key)
     history = await store.load_history_from_redis(redis_key)
+    history_source = "redis" if history else "empty"
 
     if not history and report_id != "demo-report":
         # Redis 未命中（TTL 过期/重启/故障）时回退到 DB 并回填——统一实现见
@@ -142,6 +144,7 @@ async def chat_with_report(
         )
         existing_conv = conv_result.scalar_one_or_none()
         if existing_conv:
+            history_source = "database_fallback"
             history = await store.hydrate_history_from_db(
                 db, redis_key, parent_kind="report", parent_id=existing_conv.id
             )
@@ -157,7 +160,10 @@ async def chat_with_report(
 
     # ── 加载结构化摘要（best-effort；覆盖已经滑出原始历史窗口的消息——见 P2）──
     summary_json: dict | None = None
+    summary_meta = None
+    summary_load_status = "not_requested"
     if report_id != "demo-report":
+        summary_load_status = "missing"
         try:
             async with async_session_maker() as summary_db:
                 conv_result = await summary_db.execute(
@@ -174,9 +180,17 @@ async def chat_with_report(
                         parent_id=conv_row.id,
                     )
                     if summary_row:
+                        summary_load_status = "loaded"
                         summary_json = summary_row.summary_json
+                        summary_meta = {
+                            "version": summary_row.summary_version,
+                            "covered_through_seq": summary_row.covered_through_seq,
+                            "status": summary_row.status,
+                        }
         except Exception:  # noqa: BLE001 - 摘要读取失败不能阻塞聊天
             summary_json = None
+            summary_meta = None
+            summary_load_status = "error"
 
     # ── 生成开始前先落一条用户消息 + 空内容的助手占位消息 ──────────────────────
     # "生成开始建空记录，逐步填充"（docs/疑问杂项.md「生成过程中刷新页面丢失聊天
@@ -184,6 +198,11 @@ async def chat_with_report(
     # 刷新，GET history 至少能读到已经发出的用户消息和目前为止生成到的部分内容。
     # demo-report 维持原有行为，只写 Redis 不落库（conversation_row_id/
     # assistant_message_id 保持 None，下面的 DB 同步全部自动退化成 no-op）。
+    log_context_load(
+        agent="conversation_agent", correlation_id=report_id, history_source=history_source,
+        history_count=len(history), cached_answer=cached is not None, summary_meta=summary_meta,
+        summary_load_status=summary_load_status,
+    )
     now_iso = datetime.now(UTC).isoformat()
     user_msg_dict = {"role": "user", "content": message, "created_at": now_iso}
     placeholder_msg_dict = {

@@ -35,6 +35,7 @@ from app.agent.nodes.compliance import _FORBIDDEN, check_compliance, sanitize_te
 from app.agent.output_guard import StreamingOutputGuard
 from app.context import ContextItem, SourceType, TrustLevel, log_context_manifest
 from app.context.assembler import assemble_messages
+from app.context.manifest import history_snapshot, log_model_context, structured_snapshot
 from app.context.config import REPORT_CONVERSATION_CONFIG as _CTX_CONFIG
 from app.context.trimming import render_summary_block, trim_history, truncate_structured
 from app.prompts import prompt_registry
@@ -296,8 +297,6 @@ async def stream_conversation_response(
     manifest_items.append(ContextItem(
         SourceType.CURRENT_REQUEST, TrustLevel.UNTRUSTED_USER, "user_message", user_message, required=True,
     ))
-    log_context_manifest(agent="conversation_agent", items=manifest_items, correlation_id=report_id)
-
     # 构建消息数组
     messages = _build_messages(
         context_block=context_block,
@@ -306,6 +305,20 @@ async def stream_conversation_response(
         history=trimmed_history,
         user_message=user_message,
     )
+    structured_sources = {}
+    if plan_json:
+        structured_sources["plan_json"] = structured_snapshot(
+            plan_json, context_breakdown["plan_json"], _MAX_PLAN_JSON_CHARS,
+        )
+    if evidence_json:
+        structured_sources["evidence"] = structured_snapshot(
+            evidence_json, context_breakdown["evidence"], _MAX_EVIDENCE_CHARS, _MAX_EVIDENCE_ITEMS,
+        )
+    log_context_manifest(
+        agent="conversation_agent", items=manifest_items, correlation_id=report_id,
+        messages=messages, history=history_snapshot(history, MAX_HISTORY_MESSAGES),
+        structured_sources=structured_sources,
+    )
 
     full_response = ""
     allowed_source_ids = _collect_source_ids(evidence_json or [])
@@ -313,6 +326,11 @@ async def stream_conversation_response(
     try:
         async with track_prompt_invocation(_PROMPT, report_id=report_id) as invocation:
             request_body = {**invocation.request_options(), "messages": messages}
+            log_model_context(
+                agent="conversation_agent", messages=messages, correlation_id=report_id,
+                invocation_id=invocation.invocation_id, phase="report_answer",
+                tools=[], output_budget=request_body["max_tokens"],
+            )
             async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as client:
                 async for chunk in stream_chat_completion(client, request_body):
                     try:

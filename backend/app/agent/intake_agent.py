@@ -48,6 +48,7 @@ from app.context import (
     to_context_envelope,
 )
 from app.context.assembler import assemble_messages
+from app.context.manifest import history_snapshot, log_model_context
 from app.context.config import INTAKE_CHAT_CONFIG as _CTX_CONFIG
 from app.context.trimming import render_summary_block, trim_history
 from app.prompts import prompt_registry, wrap_untrusted_context
@@ -251,14 +252,17 @@ def _build_messages(
         ),
         ContextItem(SourceType.CURRENT_REQUEST, TrustLevel.UNTRUSTED_USER, "user_message", user_message, required=True),
     ]
-    log_context_manifest(agent="intake_agent", items=manifest_items, correlation_id=conversation_id)
-
-    return assemble_messages(
+    messages = assemble_messages(
         system_prompt=_SYSTEM_PROMPT,
         dynamic_items=dynamic_items,
         history=trimmed_history,
         user_message=user_message,
     )
+    log_context_manifest(
+        agent="intake_agent", items=manifest_items, correlation_id=conversation_id,
+        messages=messages, history=history_snapshot(history, MAX_HISTORY_MESSAGES),
+    )
+    return messages
 
 
 async def _stream_chat(
@@ -285,6 +289,12 @@ async def _stream_chat(
             payload["tools"] = _TOOLS
             payload["tool_choice"] = "auto"
 
+        log_model_context(
+            agent="intake_agent", messages=messages, correlation_id=conversation_id,
+            invocation_id=invocation.invocation_id,
+            phase="tool_routing" if use_tools else "document_synthesis",
+            tools=payload.get("tools", []), output_budget=payload["max_tokens"],
+        )
         async for chunk in stream_chat_completion(client, payload):
             yield chunk
 
@@ -657,6 +667,7 @@ async def stream_intake_response(
                             agent="intake_agent",
                             envelope=to_context_envelope(c["name"], tool_result),
                             correlation_id=conversation_id,
+                            messages=messages,
                         )
 
                         chunks = (tool_result.get("data") or {}).get("chunks") or []

@@ -38,6 +38,7 @@ from app.agent.intake_agent import MAX_HISTORY_MESSAGES, stream_intake_response
 from app.api.cursor import decode_cursor, encode_cursor
 from app.api.dependencies import Identity, get_client_ip, get_identity
 from app.config import settings
+from app.context.manifest import log_context_load
 from app.database import get_db
 from app.models.conversation import IntakeConversation
 from app.prompts import prompt_registry
@@ -335,8 +336,10 @@ async def intake_chat(
 
     redis_key = store.history_key(_NAMESPACE, owner_key, conversation_id)
     history = await store.load_history_from_redis(redis_key)
+    history_source = "redis" if history else "empty"
 
     if not history and not is_new_conversation:
+        history_source = "database_fallback"
         # Redis 未命中（TTL 过期/重启/故障）时回退到 DB 并回填——统一实现见
         # store.hydrate_history_from_db，GET /intake/chat/history（见
         # get_intake_chat_history）用的是同一个函数，不会再各自维护一份。
@@ -357,7 +360,10 @@ async def intake_chat(
     # 已有摘要（best-effort；覆盖已经滑出原文窗口的早期消息，见 P2）。
     # 新会话/尚未攒够摘要窗口时天然是 None，不特殊处理。
     summary_json: dict | None = None
+    summary_meta = None
+    summary_load_status = "not_requested"
     if body.conversation_id:
+        summary_load_status = "missing"
         try:
             async with async_session_maker() as summary_db:
                 summary_row = await store.load_summary(
@@ -366,9 +372,17 @@ async def intake_chat(
                     parent_id=conversation_id,
                 )
                 if summary_row:
+                    summary_load_status = "loaded"
                     summary_json = summary_row.summary_json
+                    summary_meta = {
+                        "version": summary_row.summary_version,
+                        "covered_through_seq": summary_row.covered_through_seq,
+                        "status": summary_row.status,
+                    }
         except Exception:  # noqa: BLE001 - 摘要读取失败不能阻塞聊天
             summary_json = None
+            summary_meta = None
+            summary_load_status = "error"
 
     # ── 生成开始前先落一条用户消息 + 空内容的助手占位消息 ─────────────────────
     # "生成开始建空记录，逐步填充"（docs/疑问杂项.md「生成过程中刷新页面丢失聊天
@@ -376,6 +390,11 @@ async def intake_chat(
     # 刷新，GET history 至少能读到已经发出的用户消息和目前为止生成到的部分内容，
     # 不是完全空白。conversation_row_id/assistant_message_id 为 None 时（DB 持久化
     # 失败）下面的增量/最终同步全部自动退化成 no-op，不影响聊天本身。
+    log_context_load(
+        agent="intake_agent", correlation_id=conversation_id, history_source=history_source,
+        history_count=len(history), cached_answer=cached is not None, summary_meta=summary_meta,
+        summary_load_status=summary_load_status,
+    )
     seed_title = _derive_title(message) if is_new_conversation else None
     now_iso = datetime.now(UTC).isoformat()
     user_msg_dict = {"role": "user", "content": message, "created_at": now_iso}

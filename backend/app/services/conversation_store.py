@@ -650,6 +650,11 @@ async def upsert_summary(
                 )
             )
         await db.commit()
+        logger.info(
+            "conversation_summary_persisted", parent_kind=parent_kind, parent_id=parent_id,
+            covered_through_seq=covered_through_seq,
+            previous_covered_through_seq=expected_covered_through_seq,
+        )
     except IntegrityError:
         # 两个并发任务都判断"还没有摘要行"→都走 INSERT，唯一约束让后提交
         # 的一方在这里失败——对方已经创建了权威的第一份摘要，这次直接放弃。
