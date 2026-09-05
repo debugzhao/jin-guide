@@ -96,10 +96,16 @@ def _build_summary_user_content(previous_summary: dict | None, segment_messages:
     )
 
 
-async def _call_summary_llm(
-    user_content: str, *, parent_kind: str | None = None, parent_id: str | None = None
-) -> str:
+async def _stream_summary_once(
+    user_content: str,
+    *,
+    parent_kind: str | None = None,
+    parent_id: str | None = None,
+    overrides: dict | None = None,
+) -> tuple[str, str | None]:
     """
+    单次流式摘要调用，返回 (正文, finish_reason)。
+
     这里必须走流式请求，不能像 report_agent.py 那样一次性等完整响应：结构化
     摘要这类任务 kimi-k2.6 的 reasoning_content 经常很长，实测非流式请求哪怕
     给 240s 超时也稳定触发 httpx.ReadTimeout（httpx 对一次性大响应体的读取
@@ -107,8 +113,13 @@ async def _call_summary_llm(
     聊天链路都是靠流式请求把"總等待时间"拆成很多次小间隔的 chunk 读取来规避
     这个限制，这里复用同一套做法，只是不逐 token yield，而是攒满后一次性
     返回给调用方解析。
+
+    finish_reason 必须一起返回：正文为空既可能是模型真的没输出，也可能是
+    reasoning 把 max_tokens 吃光后被硬截断，两者的处置方式完全不同（见
+    _call_summary_llm 的降级重试）。`overrides` 用于重试时覆盖模型参数。
     """
     full_content = ""
+    finish_reason: str | None = None
     context = {"parent_kind": parent_kind}
     if parent_kind == "report":
         context["report_id"] = parent_id
@@ -125,6 +136,7 @@ async def _call_summary_llm(
                 },
                 json={
                     **invocation.request_options(),
+                    **(overrides or {}),
                     "messages": [
                         {"role": "system", "content": _SYSTEM_PROMPT},
                         {"role": "user", "content": user_content},
@@ -140,11 +152,70 @@ async def _call_summary_llm(
                         break
                     try:
                         chunk = json.loads(raw)
-                        delta = chunk["choices"][0]["delta"]
-                        full_content += delta.get("content") or ""
+                        choice = chunk["choices"][0]
+                        full_content += choice["delta"].get("content") or ""
+                        # finish_reason 只挂在最后一个内容 chunk 上；开了
+                        # stream_options.include_usage 之后还会多一个 choices 为空的
+                        # usage chunk，它会在下面的 IndexError 分支里被跳过。
+                        if choice.get("finish_reason"):
+                            finish_reason = choice["finish_reason"]
                     except (json.JSONDecodeError, KeyError, IndexError):
                         continue
-    return full_content.strip()
+    return full_content.strip(), finish_reason
+
+
+async def _call_summary_llm(
+    user_content: str, *, parent_kind: str | None = None, parent_id: str | None = None
+) -> str:
+    """
+    生成摘要正文，并在输出预算被 reasoning 吃光时降级重试一次。
+
+    kimi-k2.6 默认开启思考模式，reasoning_content 与正文共享 max_tokens。实测
+    过一次 reasoning_tokens=2999 / max_tokens=3000 / finish_reason=length 的调用：
+    HTTP 层面完全成功，但正文是空字符串，摘要因此解析失败并被静默丢弃，表现为
+    "聊到第 9 轮之后 memory_conversation_summaries 一直没有新行"。
+
+    只要 finish_reason=length 就必须重试，不能只看正文是否为空：正文被截断时
+    留下的是残缺 JSON，一样注定解析失败。重试同时做两件事——关掉思考模式把预算
+    全部留给正文，并把上限翻倍兜住长会话；只重试一次，避免后台任务在模型持续
+    异常时反复烧 token。
+    """
+    content, finish_reason = await _stream_summary_once(
+        user_content, parent_kind=parent_kind, parent_id=parent_id
+    )
+    if finish_reason != "length":
+        return content
+
+    logger.warning(
+        "conversation_summary_output_truncated",
+        parent_kind=parent_kind,
+        parent_id=parent_id,
+        finish_reason=finish_reason,
+        content_empty=not content,
+        max_tokens=_PROMPT.model.max_tokens,
+        retrying=True,
+    )
+    content, finish_reason = await _stream_summary_once(
+        user_content,
+        parent_kind=parent_kind,
+        parent_id=parent_id,
+        overrides={
+            "max_tokens": _PROMPT.model.max_tokens * 2,
+            "thinking": {"type": "disabled"},
+        },
+    )
+    if finish_reason == "length":
+        # 关掉思考后仍被截断，说明是正文本身超出上限，属于需要人工介入的配置问题，
+        # 不是这次能自愈的偶发故障；照常把拿到的内容交给调用方解析（大概率失败），
+        # 由既有的 conversation_summary_parse_failed 分支保留旧摘要。
+        logger.warning(
+            "conversation_summary_output_truncated_after_retry",
+            parent_kind=parent_kind,
+            parent_id=parent_id,
+            content_empty=not content,
+            retry_max_tokens=_PROMPT.model.max_tokens * 2,
+        )
+    return content
 
 
 def _parse_summary_response(content: str) -> dict | None:

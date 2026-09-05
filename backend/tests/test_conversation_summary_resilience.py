@@ -191,3 +191,153 @@ class TestSummaryWindowBatching:
             await summary_mod._generate_summary("intake", "conv-1", window_size=16)
 
         upsert_mock.assert_not_awaited()
+
+
+# ── _call_summary_llm / _stream_summary_once：输出预算被 reasoning 吃满 ──────
+
+class _FakeStreamResponse:
+    """httpx 流式响应的最小替身，按行喂出预置的 SSE 文本。"""
+
+    def __init__(self, lines: list[str]):
+        self._lines = lines
+
+    def raise_for_status(self) -> None:
+        return None
+
+    async def aiter_lines(self):
+        for line in self._lines:
+            yield line
+
+
+class _FakeAsyncClient:
+    """替换 httpx.AsyncClient：记录每次请求的 JSON body，返回预置的 SSE 行。"""
+
+    def __init__(self, responses: list[list[str]], captured: list[dict]):
+        self._responses = responses
+        self._captured = captured
+
+    def __call__(self, *args, **kwargs):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+    def stream(self, _method, _url, *, headers=None, json=None):
+        self._captured.append(json)
+        return _FakeStreamCm(self._responses[len(self._captured) - 1])
+
+
+class _FakeStreamCm:
+    def __init__(self, lines: list[str]):
+        self._lines = lines
+
+    async def __aenter__(self):
+        return _FakeStreamResponse(self._lines)
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+
+def _sse(content: str | None = None, *, finish_reason: str | None = None) -> str:
+    delta = {"content": content} if content is not None else {}
+    choice: dict = {"delta": delta}
+    if finish_reason:
+        choice["finish_reason"] = finish_reason
+    return "data: " + __import__("json").dumps({"choices": [choice]}, ensure_ascii=False)
+
+
+# 开了 stream_options.include_usage 之后真实响应最后会多一个 choices 为空的 chunk，
+# 解析时不能因为它抛 IndexError 而丢掉已经攒好的正文。
+_USAGE_CHUNK = 'data: {"choices": [], "usage": {"completion_tokens": 3000, "reasoning_tokens": 2999}}'
+
+
+class TestSummaryOutputTruncation:
+    @pytest.fixture(autouse=True)
+    def _no_audit_writes(self, monkeypatch):
+        """track_prompt_invocation 会写审计表，这里只测 HTTP 与重试决策。"""
+        monkeypatch.setattr(summary_mod, "_SYSTEM_PROMPT", "sys")
+        monkeypatch.setattr(
+            "app.prompts.tracing._persist_trace", AsyncMock(return_value=None)
+        )
+
+    @pytest.mark.asyncio
+    async def test_extracts_finish_reason_and_survives_usage_chunk(self, monkeypatch):
+        lines = [_sse("{"), _sse('"a": 1}', finish_reason="stop"), _USAGE_CHUNK, "data: [DONE]"]
+        client = _FakeAsyncClient([lines], captured=[])
+        monkeypatch.setattr(summary_mod.httpx, "AsyncClient", client)
+
+        content, finish_reason = await summary_mod._stream_summary_once(
+            "u", parent_kind="intake", parent_id="conv-1"
+        )
+
+        assert content == '{"a": 1}'
+        assert finish_reason == "stop"
+
+    @pytest.mark.asyncio
+    async def test_no_retry_when_finished_normally(self, monkeypatch):
+        captured: list[dict] = []
+        lines = [_sse('{"confirmed_facts": []}', finish_reason="stop"), "data: [DONE]"]
+        monkeypatch.setattr(
+            summary_mod.httpx, "AsyncClient", _FakeAsyncClient([lines], captured)
+        )
+
+        content = await summary_mod._call_summary_llm("u", parent_kind="intake", parent_id="c1")
+
+        assert content == '{"confirmed_facts": []}'
+        assert len(captured) == 1, "正常结束不应该重试"
+
+    @pytest.mark.asyncio
+    async def test_retries_with_thinking_disabled_when_truncated_with_empty_content(
+        self, monkeypatch
+    ):
+        """复现线上根因：reasoning 吃满 max_tokens，正文为空、finish_reason=length。"""
+        captured: list[dict] = []
+        first = [_sse(finish_reason="length"), _USAGE_CHUNK, "data: [DONE]"]
+        second = [_sse('{"confirmed_facts": ["预算4.8万/年"]}', finish_reason="stop"), "data: [DONE]"]
+        monkeypatch.setattr(
+            summary_mod.httpx, "AsyncClient", _FakeAsyncClient([first, second], captured)
+        )
+
+        content = await summary_mod._call_summary_llm("u", parent_kind="intake", parent_id="c1")
+
+        assert content == '{"confirmed_facts": ["预算4.8万/年"]}'
+        assert len(captured) == 2, "被截断必须重试一次"
+        base_max_tokens = summary_mod._PROMPT.model.max_tokens
+        assert captured[0]["max_tokens"] == base_max_tokens
+        assert "thinking" not in captured[0], "首次调用不改思考模式"
+        assert captured[1]["max_tokens"] == base_max_tokens * 2, "重试要翻倍预算"
+        assert captured[1]["thinking"] == {"type": "disabled"}, "重试要关掉思考模式"
+
+    @pytest.mark.asyncio
+    async def test_retries_when_truncated_even_if_partial_content(self, monkeypatch):
+        """正文被截断留下残缺 JSON 时同样注定解析失败，也必须重试。"""
+        captured: list[dict] = []
+        first = [_sse('{"confirmed_facts": ["预'), _sse(finish_reason="length"), "data: [DONE]"]
+        second = [_sse('{"confirmed_facts": []}', finish_reason="stop"), "data: [DONE]"]
+        monkeypatch.setattr(
+            summary_mod.httpx, "AsyncClient", _FakeAsyncClient([first, second], captured)
+        )
+
+        content = await summary_mod._call_summary_llm("u", parent_kind="intake", parent_id="c1")
+
+        assert content == '{"confirmed_facts": []}'
+        assert len(captured) == 2
+
+    @pytest.mark.asyncio
+    async def test_gives_up_after_single_retry(self, monkeypatch):
+        """重试后仍被截断时只记日志、不再重试，避免后台任务反复烧 token。"""
+        captured: list[dict] = []
+        truncated = [_sse(finish_reason="length"), "data: [DONE]"]
+        monkeypatch.setattr(
+            summary_mod.httpx,
+            "AsyncClient",
+            _FakeAsyncClient([truncated, list(truncated)], captured),
+        )
+
+        content = await summary_mod._call_summary_llm("u", parent_kind="intake", parent_id="c1")
+
+        assert content == ""
+        assert len(captured) == 2, "最多只重试一次"

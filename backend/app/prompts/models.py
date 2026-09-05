@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from hashlib import sha256
 from string import Template
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -16,6 +16,12 @@ class PromptModelConfig(BaseModel):
     max_tokens: int = Field(gt=0)
     timeout_seconds: float = Field(gt=0)
     stream: bool = False
+    # kimi-k2.6 默认开启思考模式，且 reasoning_content 与正文共享 max_tokens 预算 ——
+    # 实测 conversation_summary（max_tokens=3000）出现过 reasoning_tokens=2999、
+    # finish_reason=length、正文为空的调用，摘要因此静默生成失败。对于"按给定材料
+    # 做结构化抽取"这类不吃深度推理的任务，可以显式置 disabled 把预算全留给正文。
+    # 留空表示不传该参数、沿用服务端默认行为，因此不影响任何现存版本定义。
+    thinking: Literal["enabled", "disabled"] | None = None
 
 
 # definitions/ 下一份已加载并通过校验的 Prompt 版本定义，prompt_registry.get() 对外返回的唯一类型
@@ -102,6 +108,10 @@ class PromptSpec(BaseModel):
             # OpenAI 兼容协议下流式响应默认不带 usage，必须显式要求才会在最后一个
             # chunk 补发 —— 否则包了 LangSmith 追踪也拿不到真实 token 数。
             options["stream_options"] = {"include_usage": True}
+        if self.model.thinking is not None:
+            # Moonshot 侧参数格式是嵌套对象（thinking.type），不是布尔开关；
+            # enable_thinking 那种写法只适用于第三方中转网关，对官方 API 无效。
+            options["thinking"] = {"type": self.model.thinking}
         return options
 
 
