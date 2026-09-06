@@ -23,10 +23,7 @@ ReportConversation 是每个 report+owner 一行）；只把"不能再次跑偏"
 from __future__ import annotations
 
 import json
-import re
-import unicodedata
 from datetime import UTC, datetime, timedelta
-from difflib import SequenceMatcher
 from typing import Callable
 from uuid import uuid4
 
@@ -253,69 +250,6 @@ async def delete_history_from_redis(key: str) -> None:
         await redis_client.delete(key)
     finally:
         await redis_client.aclose()
-
-
-# ── 重复/相似问题去重 ─────────────────────────────────────────────────────────
-#
-# 对已加载的历史做纯文本匹配——不调 embedding，不引入新的 Redis 结构。低成本
-# 拦住意外的重复提问（重试、复制粘贴重新问一遍）；有意不做语义改写检测，因为
-# 那意味着每条消息都要付一次 embedding 调用成本，只为防住少数重复场景
-# （见 docs/backend-prd-v2.md §11.4）。
-
-_TRAILING_PUNCTUATION = "。.!！?？，,、~～ "
-
-
-def _normalize_question(text: str) -> str:
-    normalized = unicodedata.normalize("NFKC", text)  # 全角/半角、大小写变体统一
-    normalized = re.sub(r"\s+", " ", normalized).strip()
-    normalized = normalized.rstrip(_TRAILING_PUNCTUATION)
-    return normalized.lower()
-
-
-def find_cached_answer(
-    history: list[dict],
-    message: str,
-    *,
-    window_minutes: int,
-    similarity_threshold: float,
-) -> dict | None:
-    """
-    在 `history` 里查找最近（window_minutes 分钟内）一条用户消息，归一化后与
-    `message` 完全相同或高度相似。命中且对应助手回复内容非空时才返回
-    （content + citations，如果有），供调用方直接复用、完全跳过 LLM 调用——
-    还在生成中的占位消息（内容为空）永远不会匹配，所以正在进行中的重复请求
-    总会落到重新调用 LLM 这条路径。从最新往最旧扫描，命中的是最新的那次回答。
-    """
-    normalized_new = _normalize_question(message)
-    if not normalized_new:
-        return None
-    cutoff = datetime.now(UTC) - timedelta(minutes=window_minutes)
-    for i in reversed(range(len(history))):
-        msg = history[i]
-        if msg.get("role") != "user":
-            continue
-        created_at = msg.get("created_at")
-        if not created_at:
-            continue
-        try:
-            ts = datetime.fromisoformat(created_at)
-        except ValueError:
-            continue
-        if ts < cutoff:
-            continue
-        normalized_old = _normalize_question(msg.get("content", ""))
-        if not normalized_old:
-            continue
-        matched = normalized_old == normalized_new
-        if not matched:
-            matched = SequenceMatcher(None, normalized_old, normalized_new).ratio() >= similarity_threshold
-        if not matched:
-            continue
-        if i + 1 < len(history) and history[i + 1].get("role") == "assistant":
-            answer = history[i + 1]
-            if answer.get("content"):
-                return answer
-    return None
 
 
 # ── PostgreSQL（权威冷层，乐观锁）───────────────────────────────────────────

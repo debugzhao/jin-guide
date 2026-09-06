@@ -275,8 +275,6 @@ async def intake_chat(
 
     限流：已登录身份每天 30 条；匿名身份用更低的 `settings.intake_anon_daily_limit`
     （默认 4）外加一层按 IP 的兜底上限——见 docs/backend-prd-v2.md §11.4。
-    `settings.dedup_window_minutes` 时间窗内的重复/近似重复问题会直接复用缓存
-    回答，不再调用 LLM。
     """
     owner_key = store.require_owner_key(identity)
 
@@ -348,15 +346,6 @@ async def intake_chat(
                 fallback_db, redis_key, parent_kind="intake", parent_id=conversation_id
             )
 
-    # 重复/相似问题去重：命中且历史回答已完整（非仍在生成中的占位消息）就复用，
-    # 不重新调用 LLM（docs/backend-prd-v2.md §11.4）。
-    cached = store.find_cached_answer(
-        history,
-        message,
-        window_minutes=settings.dedup_window_minutes,
-        similarity_threshold=settings.dedup_similarity_threshold,
-    )
-
     # 已有摘要（best-effort；覆盖已经滑出原文窗口的早期消息，见 P2）。
     # 新会话/尚未攒够摘要窗口时天然是 None，不特殊处理。
     summary_json: dict | None = None
@@ -392,17 +381,13 @@ async def intake_chat(
     # 失败）下面的增量/最终同步全部自动退化成 no-op，不影响聊天本身。
     log_context_load(
         agent="intake_agent", correlation_id=conversation_id, history_source=history_source,
-        history_count=len(history), cached_answer=cached is not None, summary_meta=summary_meta,
+        history_count=len(history), summary_meta=summary_meta,
         summary_load_status=summary_load_status,
     )
     seed_title = _derive_title(message) if is_new_conversation else None
     now_iso = datetime.now(UTC).isoformat()
     user_msg_dict = {"role": "user", "content": message, "created_at": now_iso}
-    placeholder_msg_dict = {
-        "role": "assistant",
-        "content": cached["content"] if cached else "",
-        "created_at": now_iso,
-    }
+    placeholder_msg_dict = {"role": "assistant", "content": "", "created_at": now_iso}
 
     conversation_row_id: str | None = None
     assistant_message_id: str | None = None
@@ -436,23 +421,6 @@ async def intake_chat(
     await store.append_history_to_redis(redis_key, [user_msg_dict, placeholder_msg_dict])
 
     async def event_generator():
-        if cached is not None:
-            # 复用命中的历史回答，不调用 IntakeAgent——见上面的去重检查。
-            cached_content = cached["content"]
-            payload = json.dumps({"content": cached_content}, ensure_ascii=False)
-            yield f"event: token\ndata: {payload}\n\n"
-
-            if conversation_row_id:
-                background_tasks.add_task(
-                    maybe_generate_summary, "intake", conversation_row_id, window_size=MAX_HISTORY_MESSAGES,
-                )
-            if seed_title:
-                background_tasks.add_task(
-                    _maybe_upgrade_title, owner_key, conversation_id, seed_title, message, cached_content,
-                )
-            yield f"event: done\ndata: {json.dumps({'conversation_id': conversation_id}, ensure_ascii=False)}\n\n"
-            return
-
         full_response = ""
         last_flush = time.monotonic()
         reasoning_display_enabled = settings.enable_reasoning_display

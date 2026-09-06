@@ -31,11 +31,9 @@
 - 摘要是响应结束后的异步任务，`done` 不代表摘要已写入。需要等待 `conversation_summary_persisted`，不能固定等两秒就认定失败。
 - 摘要服务、模型或数据库故障导致等待超时，标记“环境/摘要阻塞”，保留日志，不假装该用例通过。
 
-### 2.2 特别注意答案去重
+### 2.2 关于答案去重（已移除）
 
-默认在 30 分钟内以 0.85 相似度匹配历史问题，命中后直接复用回答，**不会进入 Builder 或本轮问答模型调用**。
-
-除 E04 外，建议在专用测试环境将答案去重窗口设为 0，或严格使用全新会话和不同问题。仅给问题加编号不一定能避开相似匹配。若日志出现 `answer_cache_hit=true`，本次 Builder 用例无效，必须重测；恢复默认去重配置后再执行 E04。
+答案去重功能已下线，聊天入口不再对重复/相似问题短路复用旧答案，每轮都会真正进入 Builder 并调用问答模型。原先针对去重的 E04 用例、以及为其他用例特意关闭去重窗口的准备步骤都已作废。
 
 ### 2.3 在哪里看日志
 
@@ -60,7 +58,7 @@ docker compose logs -f --since=5m backend
 
 | 事件 | 何时产生 | 重点检查 |
 |---|---|---|
-| `context_turn_loaded` | 聊天入口加载历史/摘要并判断去重后 | `history_source`、`loaded_history_messages`、`answer_cache_hit`、`builder_will_run`、`summary_load_status`、摘要版本及覆盖位置 |
+| `context_turn_loaded` | 聊天入口加载历史/摘要后 | `history_source`、`loaded_history_messages`、`summary_load_status`、摘要版本及覆盖位置 |
 | `context_manifest` | Builder 完成消息组装后 | 来源信任等级、空来源是否排除、窗口统计、实际消息角色、结构化裁剪结果 |
 | `context_model_request` | 调用模型前 | `phase`、`invocation_id`、实际消息顺序、工具 Schema 数量、输出上限、是否启用硬预算 |
 | `tool_result_envelope` | 查询工具返回后 | 工具名、三态、片段数量、错误存在性、与首轮消息的关联 |
@@ -110,7 +108,7 @@ docker compose logs -f --since=5m backend
 
 **预期日志：**
 
-- `context_turn_loaded`：`history_source=empty`、历史 0、`summary=null`、`answer_cache_hit=false`。
+- `context_turn_loaded`：`history_source=empty`、历史 0、`summary=null`。
 - `context_manifest`：`history.window_limit=16`；loaded/selected/emitted/window_dropped 全为 0。
 - system 与 current_request 已包含；summary/history 均排除并标为 `empty_content`。
 - `message_roles=[system,user]`、`message_count=2`。
@@ -129,7 +127,7 @@ docker compose logs -f --since=5m backend
 
 **第三条预期日志：**历史 loaded=4、selected=4、emitted=4、dropped=0，摘要仍为空；`message_roles=[system,user,assistant,user,assistant,user]`，message_count=6。新问题最后一条，两个历史轮次完整保留。
 
-**判定：**历史数量正确但答案仍为6，归因为模型对修正的采用失败；不是窗口丢失。若去重命中则本用例无效。
+**判定：**历史数量正确但答案仍为6，归因为模型对修正的采用失败；不是窗口丢失。
 
 ### E03：十轮长对话——16条窗口与早期摘要接力
 
@@ -162,19 +160,9 @@ docker compose logs -f --since=5m backend
 
 **2026-09-03 实测发现并已修复的真实 bug：**按本用例节奏实测（第8轮后未真正等到 `conversation_summary_persisted` 就发了第9、10轮），第10轮 `context_turn_loaded` 显示 `summary_load_status=missing`——摘要 LLM 调用耗时约1分钟，第10轮请求落在摘要持久化完成前几秒。此时固定16条窗口原文裁剪已经把最早两条原文裁掉，摘要又还没来得及覆盖，两者叠加导致预算/排除专业信息**双重丢失**，模型如实回答“尚未提供”。已修复：`trim_history` 新增 `covered_through_seq` 参数，只裁剪摘要已确认覆盖的部分，未覆盖部分即使超过16条也临时保留；上表“第10轮 `selected_messages=16`、`window_dropped_messages=2`”只是摘要已追上时的理想路径断言，摘要滞后时预期变为 `selected_messages=18`（或当时的实际历史条数）、`window_dropped_messages=0`、`history.extended_for_uncovered_gap=true`。重跑本用例时不必再刻意“等待摘要成功提交再发下一轮”——这一步是为了在旧实现下复现 bug，修复后正常节奏发送也不应再丢事实；但仍建议记录 `summary_load_status`，用于区分“摘要已追上的标准路径”与“摘要滞后被窗口延伸兜底”两种日志形态。
 
-### E04：相同问题被答案缓存短路
+### E04：相同问题被答案缓存短路（已移除）
 
-恢复默认去重窗口。新会话输入：
-
-> 招生章程和学校宣传资料有什么区别？
-
-回复完成后，立即再发完全相同的一句。
-
-**预期回答：**复用上一条已保存答案，通常逐字相同。
-
-**第二次日志：**`context_turn_loaded answer_cache_hit=true, builder_will_run=false`；没有本次问答的 manifest/model_request/tool_result_envelope。仍可能出现摘要等后台事件，不要把它们算作问答模型调用。
-
-**意义：**解释“为什么有回答但没有 Context Builder 日志”，避免人工误判。
+**已移除**：答案去重功能已下线，相同问题不再短路复用旧答案，每轮都会正常进入 Context Builder 并调用问答模型。本用例作废，执行套件时跳过。
 
 ### E05：SQL 查询成功——有信封、没有二次合成
 
@@ -295,7 +283,7 @@ docker compose logs -f --since=5m backend
 
 **日志：**loaded=12、window_limit=10、selected/emitted=10、dropped=2；history截断；摘要应已加载；模型消息数为14+R（system1+报告1+摘要1+history10+当前1，其中R=有补充RAG时1，否则0）。
 
-当前摘要首次按10条批量推进，第5轮后覆盖0→10。该断言要求每轮确实保存用户/助手各一条，且没有重试、并发或答案缓存干扰。
+当前摘要首次按10条批量推进，第5轮后覆盖0→10。该断言要求每轮确实保存用户/助手各一条，且没有重试或并发干扰。
 
 ConversationAgent 与 IntakeAgent 共用同一套 `trim_history`/`covered_through_seq` 实现（见 E03 “2026-09-03 实测发现并已修复的真实 bug”），存在同样的摘要滞后窗口——第6、7轮若在摘要持久化完成前发出，预期同样是 `loaded=12` 但不裁剪（`window_dropped_messages=0`），而不是上面写的 `dropped=2`。
 
@@ -435,7 +423,6 @@ ConversationAgent 与 IntakeAgent 共用同一套 `trim_history`/`covered_throug
 
 | 现象 | 优先归因 |
 |---|---|
-| 回答出现但无Builder日志，answer_cache_hit=true | 答案缓存短路，用例没有覆盖Builder |
 | 空历史被打印为included=true | 清单准确性问题 |
 | 加载18条但窗口声称保留18条 | 历史裁剪/观测问题 |
 | 清单正确、首轮消息角色顺序不正确 | 实际组装或观测与发送不一致 |

@@ -637,8 +637,6 @@ data: {"conversation_id": "conv_abc", "message_id": "msg_007", "total_tokens": 1
 
 **限流**：每用户每日对话条数上限 30 条（独立于报告生成限流），超出返回 `429 rate_limited`。
 
-**重复/相似问题去重**：同一会话 30 分钟内，若新消息归一化后与历史某条用户消息完全相同、或 `difflib.SequenceMatcher` 相似度 ≥0.85，且该消息对应的历史回答内容非空（不是还在生成中的占位消息），直接复用那条历史回答（SSE `token`+`done`）而不重新调用 LLM，避免重复问题浪费 token；不使用 embedding 语义去重，零额外 API 成本和延迟。同一套逻辑也应用于 §5.6b IntakeAgent 聊天。详细设计见 §11.4。
-
 ---
 
 ## 6. 数据模型
@@ -1214,8 +1212,6 @@ Prompt 注入防护（RAG 文档作为数据，不允许覆盖系统规则）；
 **匿名用户 4 次上限**：`POST /api/v1/intake/chat` 对匿名请求（`owner_key` 以 `anon:` 开头）单独设一个比登录用户更低的每日阈值，复用现有 `intake:daily:{owner_key}:{date}` 计数 key 形态（`check_and_increment_rate_limit`），只是把匿名分支的判定阈值从 30 改成 4；命中后返回 `429 {"code": "login_required", ...}`（见 §5.2 错误码表），前端展示登录 CTA 而非"明日再来"文案。已登录用户不受影响，仍走原 30 条/天。
 
 **IP 维度兜底**：`anonymous_id` 完全依附于 `session_token` Cookie（`_SESSION_DAYS=30`），清 Cookie/隐身窗口即可拿到全新 `anonymous_id`，绕开上面的 4 次限制——这是已知豁免，无法仅靠 `anonymous_id` 堵住。因此额外新增 `intake:daily_ip:{ip}:{date}` 计数器，仅对匿名请求生效，阈值设得比 4 更宽松（如 20/天），只作批量刷号的兜底防线，不用于正常转化引导。客户端 IP 优先取 `X-Forwarded-For` 首段，回退 `request.client.host`；依赖反向代理正确转发该 header——nginx 配置不在本仓库（部署在 jdy_server，由运维管理），上线前需要额外确认。
-
-**重复/相似问题去重**：`POST /api/v1/intake/chat` 与 `POST /api/v1/reports/{id}/chat` 在调用 LLM 之前，先在同一会话最近 30 分钟的历史消息里做一次文本匹配——新消息归一化（去首尾空白、合并连续空白、统一半角、去末尾标点）后与某条历史 user 消息完全相同，或 `difflib.SequenceMatcher` 相似度 ≥0.85，且该消息对应的历史回答非空（不是仍在生成中的占位内容），则直接复用那条历史回答，不重新调用 LLM。不使用 embedding 语义去重（仓库内虽有 `embed_text`/pgvector 基建，但用于 RAG 检索，不用于聊天去重），保持零额外 API 成本和延迟。
 
 ---
 

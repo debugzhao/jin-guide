@@ -30,16 +30,14 @@ def test_empty_sources_are_not_reported_as_included(events):
 
 
 @pytest.mark.parametrize("status", ["not_requested", "missing", "loaded", "error"])
-def test_load_log_distinguishes_summary_read_outcomes_and_cache_shortcut(events, status):
+def test_load_log_distinguishes_summary_read_outcomes(events, status):
     meta = {"version": 1, "covered_through_seq": 16, "status": "active"} if status == "loaded" else None
     manifest.log_context_load(
         agent="intake_agent", correlation_id="test-conversation", history_source="redis",
-        history_count=18, cached_answer=True, summary_meta=meta, summary_load_status=status,
+        history_count=18, summary_meta=meta, summary_load_status=status,
     )
     assert events[0]["summary_load_status"] == status
     assert events[0]["summary"] == meta
-    assert events[0]["answer_cache_hit"] is True
-    assert events[0]["builder_will_run"] is False
 
 
 def test_history_snapshot_separates_window_drop_from_role_filtering():

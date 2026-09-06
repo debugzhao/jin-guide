@@ -182,12 +182,11 @@ def log_model_context(*, agent: str, messages: list[dict], correlation_id: str |
 
 
 def log_context_load(*, agent: str, correlation_id: str, history_source: str,
-                     history_count: int, cached_answer: bool, summary_meta: dict | None,
+                     history_count: int, summary_meta: dict | None,
                      summary_load_status: str) -> None:
     _logger.info(
         "context_turn_loaded", agent=agent, correlation_id=correlation_id,
         history_source=history_source, loaded_history_messages=history_count,
-        answer_cache_hit=cached_answer, builder_will_run=not cached_answer,
         summary=summary_meta, summary_load_status=summary_load_status,
     )
 

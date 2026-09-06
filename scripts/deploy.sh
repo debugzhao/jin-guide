@@ -75,6 +75,7 @@ EXCLUDES=(
   --exclude=.DS_Store
   --exclude=memory
   --exclude=.claude
+  --exclude=.idea
   --exclude=data/raw
   --exclude=data/reports
   --exclude=eval_reports
