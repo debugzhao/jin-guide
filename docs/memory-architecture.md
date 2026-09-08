@@ -19,11 +19,11 @@
 |---|---|---|
 | 数据持久化 | 较好 | Redis 热层 + PostgreSQL 冷层 |
 | 多会话管理 | 较好 | Intake 支持多会话、重命名、软删除和匿名合并 |
-| 工作状态管理 | 基础可用 | LangGraph State 清晰，但只存在于运行期 |
-| Context 管理 | 偏初级 | 主要依靠最近 N 条和字符截断 |
-| 执行恢复 | 缺失 | PRD 有 Checkpoint 设计，代码没有接入 checkpointer |
-| 长期用户记忆 | 部分实现 | 有 Profile/Preference，但没有来源、置信度和冲突治理 |
-| 记忆可观测性 | 部分实现 | 有运行调试数据，但没有“哪条记忆为何被注入”的记录 |
+| 工作状态管理 | 已持久化 | LangGraph State + PostgreSQL Checkpointer（P1 已落地） |
+| Context 管理 | 已收敛 | `app/context/` 统一组装/裁剪/manifest 观测（P3 已落地，§六 P3 补充说明） |
+| 执行恢复 | 已实现 | `AsyncPostgresSaver` 每 superstep 落盘，崩溃按 thread_id 续跑（P1） |
+| 长期用户记忆 | 部分实现 | Profile/Preference 已带来源/置信度/状态字段（迁移 017），但状态机流转、查看/修改/删除接口未接通 |
+| 记忆可观测性 | 已实现 | `context_manifest` + `context_load` 记录注入/裁剪/来源（P3） |
 
 结论：
 
@@ -54,7 +54,7 @@
 
 ### 2.1 工作记忆 Working Memory
 
-***状态：已实现，但未持久化。***
+***状态：已实现，并已通过 PostgreSQL Checkpointer 持久化（P1，见 §六 P1）。***
 
 载体是 `VolunteerPlanState`，保存：
 
@@ -70,7 +70,11 @@
 
 底层原理：Working Memory 是当前任务的“共享白板”。State 中并行写入字段使用 Reducer 合并，避免 Retrieval Agent 和 Policy Rule Agent 相互覆盖数据。
 
-当前限制：图使用无 Checkpointer 的 `graph.compile()`，Worker 崩溃后 State 丢失，不能从中间节点恢复。
+当前实现（已更新，2026-09）：`worker.py` `on_startup` 建 `AsyncPostgresSaver` 长连接池并
+`setup()`，`create_graph`/`create_refine_graph` 编译时挂上 checkpointer，每个 superstep 后
+落盘——Worker 崩溃后可按 `thread_id` 从中间节点恢复，不再是"无 Checkpointer"。
+（§九 9.1 的"Working Memory"小节已同步此状态；无 checkpointer 的模块级 `graph.compile()`
+仅保留给结构测试用。）
 
 ### 2.2 建档对话记忆 Conversation Memory
 
@@ -128,7 +132,13 @@ PostgreSQL：report_conversations.messages_json
 
 这是当前最正确的记忆设计：高风险事实进入结构化数据库，规则引擎不需要从自然语言或向量相似度中猜测。
 
-当前不足：只保存当前值，没有来源、变化历史、置信度、有效期和最后确认时间，也没有区分“用户明确表达”和“模型推断”。
+当前不足（已更新，2026-09）：存储面已补齐——迁移 `017` 给两张表加了
+`source_type`（user_explicit/model_inferred）、`confidence`、`status`
+（confirmed/proposed/rejected/superseded）、`last_confirmed_at`、
+`source_message_id`、`superseded_by/at`（见 `models/profile.py` 的
+`_ProvenanceMixin`）。但**流程面仍是空白**：唯一写入路径仍是 `POST /profile`
+一次性表单，状态机没有流转，也没有查看/修改/删除接口——字段在、逻辑没接通。
+详见 `memory-refactor-design.md`。
 
 ### 2.5 外部知识记忆 Knowledge Memory
 
@@ -583,7 +593,15 @@ Context 组装目前分散在四条互相独立的代码路径里，各自发明
 | ConversationAgent | `conversation_agent.py` `_build_context_block`/`_trim_history` | `plan_json` 截到 `_MAX_PLAN_JSON_CHARS=8000` 字符，`evidence_json` 截到 `_MAX_EVIDENCE_CHARS=3000` 字符，历史取最近 `MAX_HISTORY_MESSAGES=10` 条 | 字符数 + 消息条数 |
 | Recommendation / Report / Reflection（主链路节点） | `backend/app/agent/nodes/*.py`（如 `report_agent.py::_build_llm_prompt`） | 各节点手写 Prompt 拼接，没有任何统一截断/预算逻辑 | 无 |
 
-第 5.3 节已经写了完整的 Token-aware Context Builder 设计（优先级列表、裁剪单位、输出结构），但目前只是设计稿，代码里一行没落地。
+第 5.3 节已经写了完整的 Token-aware Context Builder 设计（优先级列表、裁剪单位、输出结构）。
+
+> **现状已更新（2026-09）**：本节的表格与"代码里一行没落地"的旧表述已经过时。
+> Context 组装已收敛到 `backend/app/context/`（`types.py`/`assembler.py`/
+> `budget.py`/`config.py`/`trimming.py`/`manifest.py`）：统一的数据结构
+> `ContextItem`（含 SourceType/TrustLevel/是否裁剪）、每个 Agent 的
+> `AgentContextConfig`（`config.py`）、以及组装/裁剪/manifest 记录均已落地运行。
+> 下方"现状/为什么/方案"正文保留作演进历史，最新实现以
+> `backend/docs/context/上下文模块评审.md` 与 `app/context/` 代码为准。
 
 #### **为什么会出现这个问题**
 
@@ -640,19 +658,34 @@ IntakeAgent（Chat-first 建档前聊天）和 ConversationAgent（报告问答�
 
 业务价值：用户跨会话被持续理解，同时避免错误推断污染推荐。
 
-#### 现状
+#### 现状（已更新，2026-09）
 
-`app/models/profile.py` 里 `StudentProfile`/`Preference` 两张表目前是这样的：
+`app/models/profile.py` 里 `StudentProfile`/`Preference` 两张表的**存储面已补齐**：
+迁移 `017_preference_provenance_fields` 已把第 5.4 节设计的治理字段全部加上，混入
+共用的 `_ProvenanceMixin`——`source_type`（user_explicit/model_inferred）、
+`confidence`、`status`（confirmed/proposed/rejected/superseded）、
+`last_confirmed_at`、`source_message_id`、`superseded_by/at`。
 
-| 表 | 字段 | 缺什么 |
+但**流程面仍是空白**，走查现状如下：
+
+| 表 | 存储字段 | 剩余缺口 |
 |---|---|---|
-| `StudentProfile` | `id`/`user_id`/`anonymous_id`/`province`/`score`/`rank`/`subjects`/`batch`/`family_budget`/`risk_style`/`completeness_score`/`created_at`/`updated_at` | 没有来源、置信度、状态 |
-| `Preference` | `id`/`profile_id`/`major_prefs`/`city_prefs`/`rejected_majors`/`career_priority` | 连 `created_at`/`updated_at` 都没有 |
+| `StudentProfile` | 原字段 + 全套治理字段 | 状态机流转、查看/修改/删除接口未接通 |
+| `Preference` | 原字段 + `created_at`/`updated_at` + 全套治理字段 | 同上 |
 
-- **唯一写入路径**是 `POST /profile`（`app/api/v1/profile.py`），一次性表单提交，没有任何从对话中提取/推断偏好并自动写入的逻辑——`IntakeAgent`/`ConversationAgent` 全仓库搜索不到一处往 `Preference` 写数据的代码。
-- **没有更新接口**：没有 `PATCH`/`PUT`，要改偏好只能重新 `POST /profile` 建一行新的 `StudentProfile`/`Preference`，`profile_id` 会变——历史留痕是"多条互相独立的记录"，不是一条可追溯的版本链。
-- **没有查看/修改/删除接口**：只有创建和按 id 查看（`GET /{profile_id}`），用户没有任何入口能看到/管理自己的长期偏好。
-- **不区分来源**：模型层没有字段能标记"这是用户表单里明确填的"还是"AI 从聊天里猜的"——目前倒也没有 AI 推断这条链路，但表结构本身也没预留这个区分。
+- **唯一写入路径**仍是 `POST /profile`（一次性表单），字段默认值让所有历史数据
+  一落地就 `source_type=user_explicit`、`status=confirmed`；没有任何从对话提取/
+  推断并写入的链路，`model_inferred` 仍是未使用取值。
+- **没有更新接口**：无 `PATCH`/`PUT`，改偏好只能重新 `POST /profile` 建新行，
+  `profile_id` 会变——`superseded_by/at` 字段虽已声明，但没有任何代码在维护
+  变更链，历史仍是"多条互相独立的记录"。
+- **没有查看/修改/删除入口**：只有创建和按 id 查看（`GET /{profile_id}`），
+  用户看不到、改不了、删不了自己的长期记忆。
+- **字段与逻辑脱节**：治理字段"已加但未激活"，是当前 P4 的核心待办——
+  设计见 `memory-refactor-design.md`（状态机 + 治理入口 + 验收标准）。
+
+> 补充：本节的旧版字段表（"缺来源/置信度/状态""连 created_at 都没有"）已随上述
+> 核实结果作废，以当前两表模型为准。
 
 #### 为什么会出现这个问题
 
