@@ -17,6 +17,8 @@ import secrets
 import structlog
 
 from app.agent.context_budget import count_tokens
+from app.config import settings
+from app.context.budget import estimate_exceeds_window
 from app.context.tool_envelope import ToolResultEnvelope
 from app.context.types import ContextItem
 
@@ -167,17 +169,59 @@ def log_context_manifest(
 
 def log_model_context(*, agent: str, messages: list[dict], correlation_id: str | None,
                       invocation_id: str, phase: str, tools: list[dict], output_budget: int) -> None:
-    """紧贴真实发送点，包括 RAG 二次调用。估算不含协议开销、并非服务端 usage。"""
+    """紧贴真实发送点，包括 RAG 二次调用。估算不含协议开销、并非服务端 usage。
+
+    自 P0-2 起同时登记 model_window 口径与「估算超窗」判定：估算输入 + 输出预算 +
+    安全余量是否已触犯窗口。这只做观测告警，不据此静默裁剪——真实超窗以服务端
+    usage 为准，这里只是把"可能被静默截断"的信号显式打出来（对应 §5.1「Token
+    估算不准→实际调用超限」）。
+    """
+    snapshot = message_snapshot(messages)
+    input_estimate = snapshot["message_content_tokens_estimate"]
+    tool_schema_estimate = _estimate(json.dumps(tools, ensure_ascii=False)) if tools else 0
+    exceeds = estimate_exceeds_window(
+        input_tokens=(None if input_estimate is None else input_estimate + (tool_schema_estimate or 0)),
+        output_budget=output_budget,
+    )
     _logger.info(
         "context_model_request", agent=agent, correlation_id=correlation_id,
         invocation_id=invocation_id, phase=phase,
         hard_budget_enabled=False, budget_mode="observe_only",
+        model_window=settings.kimi_k2_6_model_window,
+        model_window_safety_margin=settings.context_window_safety_margin,
+        input_tokens_estimate=input_estimate,
+        input_exceeds_window_estimate=exceeds,
         tool_schema_count=len(tools),
-        tool_schema_tokens_estimate=_estimate(json.dumps(tools, ensure_ascii=False)) if tools else 0,
+        tool_schema_tokens_estimate=tool_schema_estimate,
         output_max_tokens=output_budget,
         token_estimator="cl100k_base_approximate",
         parent_messages_key=messages_key(messages[:-2]) if phase == "document_synthesis" else None,
-        **message_snapshot(messages),
+        **snapshot,
+    )
+    if exceeds:
+        # 估算已触犯窗口：这是「可能被静默截断」的强信号，必须显式告警，否则
+        # 线上会表现为"模型莫名失忆"而无法归因（同上一个摘要 finish_reason bug）。
+        _logger.warning(
+            "context_input_exceeds_window_estimate",
+            agent=agent, correlation_id=correlation_id, invocation_id=invocation_id,
+            phase=phase, input_estimate=input_estimate, output_budget=output_budget,
+            model_window=settings.kimi_k2_6_model_window,
+        )
+
+
+def log_finish_reason_length(*, agent: str, correlation_id: str | None,
+                             phase: str, content_empty: bool) -> None:
+    """聊天侧的 `finish_reason=length` 告警。
+
+    上一次摘要事故（reasoning 吃满 max_tokens、finish_reason=length、正文为空）
+    之所以长期无人发现，根因就是调用层从不读 finish_reason。这里把聊天输入侧
+    同样的问题显式打出来：正文为空是"输出预算被 reasoning 耗尽"的强信号，
+    正文非空但被截断是"上一条回答可能不完整"的信号，两者都不能静默。
+    """
+    _logger.warning(
+        "context_output_truncated",
+        agent=agent, correlation_id=correlation_id, phase=phase,
+        finish_reason="length", content_empty=content_empty,
     )
 
 

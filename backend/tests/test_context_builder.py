@@ -12,7 +12,11 @@ from __future__ import annotations
 import json
 
 from app.context.assembler import assemble_messages, wrap_item
-from app.context.budget import TokenBudgetAllocator
+from app.context.budget import (
+    TokenBudgetAllocator,
+    estimate_exceeds_window,
+    input_budget_profile,
+)
 from app.context.tool_envelope import to_context_envelope
 from app.context.trimming import render_summary_block, trim_history, truncate_structured
 from app.context.types import ContextItem, SourceType, TrustLevel
@@ -140,6 +144,66 @@ class TestTruncateStructured:
         assert text.endswith("...(已截断)")
         # 兜底字符硬切时不保证是合法 JSON，这是已知的最后手段，跟原实现行为一致
         assert len(text) < len(json.dumps(value))
+
+
+class TestInputBudgetProfile:
+    """P0-2 输入预算分区：把 model_window 合理切分给固定指令/动态来源/输出/余量。"""
+
+    def test_optional_budget_subtracts_output_margin_and_fixed(self):
+        model_window = 32768
+        output_budget = 2000
+        safety_margin = 1024
+        fixed_spent = 5000
+
+        profile = input_budget_profile(
+            output_budget=output_budget,
+            fixed_spent=fixed_spent,
+            model_window=model_window,
+            safety_margin=safety_margin,
+        )
+
+        assert profile.optional_input_budget == model_window - output_budget - safety_margin - fixed_spent
+        assert profile.optional_input_budget == 32768 - 2000 - 1024 - 5000
+
+    def test_explicit_overrides_win_over_settings_defaults(self):
+        """显式传 model_window/safety_margin 必须覆盖 settings 默认值，便于按
+        真实回放校准后的数值注入，而不用改全局配置。"""
+        profile = input_budget_profile(
+            output_budget=1000, fixed_spent=0, model_window=100000, safety_margin=0,
+        )
+        assert profile.model_window == 100000
+        assert profile.optional_input_budget == 99000
+
+    def test_optional_budget_never_goes_negative(self):
+        """固定指令 + 输出 + 余量已经超过窗口时，可选预算归零而不是负数，
+        避免下游把负数当预算做错误的裁剪判断。"""
+        profile = input_budget_profile(
+            output_budget=40000, fixed_spent=0, model_window=32768, safety_margin=1024,
+        )
+        assert profile.optional_input_budget == 0
+
+
+class TestEstimateExceedsWindow:
+    def test_input_within_window_is_not_flagged(self):
+        assert estimate_exceeds_window(
+            input_tokens=20000, output_budget=2000,
+            model_window=32768, safety_margin=1024,
+        ) is False
+
+    def test_input_near_limit_is_flagged(self):
+        """输入 + 输出 + 余量 触顶即告警，不能等真实超限（真实超限会被静默截断）。
+        也精确覆盖估算本身有误差、真实值可能高估的情况。"""
+        assert estimate_exceeds_window(
+            input_tokens=30000, output_budget=2000,
+            model_window=32768, safety_margin=1024,
+        ) is True  # 30000 + 2000 + 1024 = 33024 > 32768
+
+    def test_none_input_is_never_flagged(self):
+        """估算失败（None）时不得误报——观测不能因为计数失败而打断/误警聊天。"""
+        assert estimate_exceeds_window(
+            input_tokens=None, output_budget=2000,
+            model_window=32768, safety_margin=1024,
+        ) is False
 
 
 class TestTokenBudgetAllocator:

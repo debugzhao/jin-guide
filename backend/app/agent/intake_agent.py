@@ -649,6 +649,16 @@ async def stream_intake_response(
                     yield {"type": "token", "content": remaining_output}
                 compliance_issues.extend(output_guard.compliance_issues)
 
+                # finish_reason=length：输出预算被 reasoning 吃光或正文被硬截断，可能
+                # 导致"用户什么都收不到"或"回答不完整"，必须显式告警而非静默兜底
+                # （见 app/context/manifest.py::log_finish_reason_length 的注释）。
+                if finish_reason == "length":
+                    from app.context.manifest import log_finish_reason_length
+                    log_finish_reason_length(
+                        agent="intake_agent", correlation_id=conversation_id,
+                        phase="tool_routing", content_empty=not full_response,
+                    )
+
                 if finish_reason == "tool_calls" and tool_calls_acc:
                     calls = list(tool_calls_acc.values())
 

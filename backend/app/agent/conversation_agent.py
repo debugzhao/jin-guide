@@ -340,9 +340,12 @@ async def stream_conversation_response(
                 tools=[], output_budget=request_body["max_tokens"],
             )
             async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as client:
+                finish_reason = None
                 async for chunk in stream_chat_completion(client, request_body):
                     try:
-                        delta = chunk["choices"][0]["delta"]
+                        choice = chunk["choices"][0]
+                        finish_reason = choice.get("finish_reason") or finish_reason
+                        delta = choice["delta"]
                         token = delta.get("content") or ""
                     except (KeyError, IndexError):
                         continue
@@ -351,6 +354,13 @@ async def stream_conversation_response(
                         if safe_token:
                             full_response += safe_token
                             yield {"type": "token", "content": safe_token}
+
+                if finish_reason == "length":
+                    from app.context.manifest import log_finish_reason_length
+                    log_finish_reason_length(
+                        agent="conversation_agent", correlation_id=report_id,
+                        phase="report_answer", content_empty=not full_response,
+                    )
 
     except Exception as exc:
         logger.warning("ConversationAgent LLM call failed: %s", exc)
