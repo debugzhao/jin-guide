@@ -187,7 +187,7 @@ PostgreSQL：report_conversations.messages_json
 | 类型 | 解决的问题 | 当前实现 | 状态 |
 |---|---|---|---|
 | Working Memory | 单次任务如何协作 | LangGraph State | 已实现 |
-| Execution Memory | 任务中断后如何继续 | PRD 有设计，代码未接 Checkpointer | 未实现 |
+| Execution Memory | 任务中断后如何继续 | PostgreSQL Checkpointer（`AsyncPostgresSaver`） | 已实现（P1） |
 | Conversation Memory | 当前会话说过什么 | Redis + PostgreSQL | 已实现 |
 | User Memory | 跨会话记住用户什么 | Profile/Preference | 部分实现 |
 | Episodic Memory | 上次为何做出某个决定 | 报告版本与运行摘要 | 部分实现 |
@@ -212,15 +212,22 @@ PostgreSQL：report_conversations.messages_json
 
 ### 3.2 缺点
 
+> **演进状态（2026-09 更新）**：下表是本评审**最初提出时**的缺点快照，其中多项已随
+> P0/P1/P2/P3 落地解决——"没有 PostgreSQL Checkpoint"（P1 ✅）、"没有对话摘要"
+> （P2 ✅）、"`messages_json` 整体覆盖"（P2 已拆为追加式 `conversation_messages` ✅）、
+> "长期偏好没有来源和置信度"（迁移 017 已加字段 ✅，但状态机流转未接通，见 §六 P4）。
+> 未解决的残留项是："长期偏好缺少状态机/查看修改删除"、"没有独立记忆评测"
+> （见 `memory-refactor-design.md`）。下表保留原始全貌作演进脉络，逐行当前状态见行内标注。
+
 | 缺点 | 技术后果 | 用户影响 |
 |---|---|---|
-| 没有 PostgreSQL Checkpoint | Worker 崩溃后只能重跑 | 等待时间和模型成本增加 |
-| 没有对话摘要 | 早期信息被窗口挤出 | 用户需要重复表达预算和偏好 |
+| ~~没有 PostgreSQL Checkpoint~~ ✅ P1 已解决 | Worker 崩溃后只能重跑 | 等待时间和模型成本增加 |
+| ~~没有对话摘要~~ ✅ P2 已解决 | 早期信息被窗口挤出 | 用户需要重复表达预算和偏好 |
 | 使用字符截断 | Token 预算不准确，JSON 可能被半截切断 | 回答遗漏或语义异常 |
 | Memory 逻辑分散在 API | Key、TTL、回源策略容易不一致 | 同一功能在不同入口表现不同 |
-| `messages_json` 整体覆盖 | 并发写入可能丢消息 | 历史不完整 |
+| ~~`messages_json` 整体覆盖~~ ✅ P2 已解决 | 并发写入可能丢消息 | 历史不完整 |
 | DB 持久化 best-effort | Redis 与 PostgreSQL 可能不一致 | 缓存过期后历史消失 |
-| 长期偏好没有来源和置信度 | 模型推断可能污染事实 | 推荐错误地继承旧偏好 |
+| ~~长期偏好没有来源和置信度~~ ⚠️ 字段已加、流转未接通 | 模型推断可能污染事实 | 推荐错误地继承旧偏好 |
 | 没有纠错、冲突和遗忘机制 | 旧值持续影响后续任务 | 用户无法让系统真正“忘记” |
 | 没有 Memory 评测 | 无法量化记忆质量 | 问题只能依赖人工体验发现 |
 
@@ -461,6 +468,10 @@ Chat-first 首屏的核心流量入口是匿名用户（建档前还没有登录
 5. **验证方式**：20 个并发请求写 Redis 无丢失、5 个并发请求写 DB 无丢失（消息总数与预期一致）；另外用两个真实独立的匿名身份跑通完整流程（发消息、读、清空、再发）确认互不可见、清空后不复活。
 
 文档里"Checkpoint 已实现"这条描述性错误当时选择了暂缓修正，原因是 P1 的 PostgreSQL Checkpointer 正在并行推进，文档要描述的"是否已实现"本身是个随进度移动的目标，等 P1 验证通过后再一次性收口更划算。
+
+> **收口已完成（2026-09）**：P1（PostgreSQL Checkpointer）已验证通过并落地（见下方
+> P1 的"如何解决的/验证方式"），本文档第一~八节中"无 Checkpointer / 执行恢复缺失 /
+> 未实现"的旧状态标记已在本轮统一更正为"已实现"。
 
 ### P1：PostgreSQL Checkpoint
 
@@ -718,6 +729,11 @@ IntakeAgent（Chat-first 建档前聊天）和 ConversationAgent（报告问答�
 - **方案 C（完整的 proposed/confirmed/rejected/superseded 全状态机，5.4 节设计方向）**：覆盖面最全，但状态机设计、前端确认交互、Context Builder 怎么消费 `proposed` 态记忆都要设计到位，改动面最大。
 - **权衡结论**：**先做方案 B**。不是方案 C 设计得不好，而是它依赖的两个前置能力——P2 的对话摘要、P3 的统一 Context Builder——都还在早期/未完全落地阶段。在这些基础设施还不稳定时叠加"AI 推断偏好直接影响规则引擎"这种高风险能力，一旦出问题很难定位是提取错了、摘要断层导致上下文缺失、还是 Context Builder 裁剪切掉了关键信息。方案 B 用最小复杂度先验证"用户确认信息"这条链路本身能不能跑通、体验好不好，方案 C 留到 P2/P3 基础设施稳定后再叠加"AI 推断"这层更冒险的能力。
 
+> **现状标注（2026-09）**：本句权衡依据的"P2/P3 未完全落地"前提已变化——P2 对话摘要、
+> P3 Context Builder 现均已落地。第 1 步（加治理字段）的存储面也已完成（迁移 017）。
+> "先做方案 B、方案 C 缓行"的**方向结论仍有效**，但理由应从"基础设施未稳定"更新为
+> "先验证显式确认链路本身，再叠加 AI 推断的高风险能力"。推进见 `memory-refactor-design.md`。
+
 *分阶段落地节奏*：
 1. 先给 `Preference`/`StudentProfile` 加 `source_type`（`user_explicit`/`model_inferred`）、`confidence`、`status`（`confirmed`/`proposed`/`rejected`/`superseded`）、`last_confirmed_at`、`source_message_id` 几个字段（对应 5.4 节设计），配合迁移；这一步先不接任何自动写入逻辑，只是把表结构准备好，单独就能验证迁移和历史数据兼容没问题。
 2. 只接方案 B 这条最小链路：IntakeAgent 识别到"我预算大概 8 万"这类明确陈述句时，生成一条 `proposed` 候选，前端渲染"记录这条偏好吗？"确认卡片，用户点确认才转 `confirmed` 并投影到 `Preference`——不引入任何"AI 自己推断、不经确认就采信"的路径。
@@ -764,7 +780,7 @@ IntakeAgent（Chat-first 建档前聊天）和 ConversationAgent（报告问答�
 | 删除测试 | 删除 Intake 会话后继续访问 | 返回 404，不能复活 |
 | 匿名合并 | 匿名聊天后登录 | 历史归属登录用户，并暴露当前 Report Chat Key 问题 |
 | Context 超限 | 构造超长报告、大量 Evidence 和长对话 | 请求不崩溃，记录截断内容、Token 和答案正确性 |
-| Checkpoint 基线 | 报告生成中杀死 Worker | 当前应无法节点级恢复，证明 Checkpointer 未实现 |
+| Checkpoint 基线 | 报告生成中杀死 Worker | 已支持节点级恢复（P1 已落地）：跳过已完成节点、从最后 checkpoint 续跑，见 §六 P1 验证 |
 
 重点记录：
 
@@ -801,6 +817,12 @@ IntakeAgent（Chat-first 建档前聊天）和 ConversationAgent（报告问答�
 ---
 
 ## 八、面试表达总结
+
+> **现状标注（2026-09）**：下面两段是本文档成文时的"面试话术"，其措辞（"新增
+> Execution Checkpoint / 统一 Context Builder"）反映的是当时尚未落地的规划状态。
+> 当前 Checkpoint（P1）、对话摘要（P2）、Context Builder（P3）**均已落地**，仅
+> "长期偏好的状态机流转 + 查看/修改/删除"仍在推进（见 `memory-refactor-design.md`）。
+> 面试口播时可把"新增"改为"已落地"，其余叙事不变。
 
 可以用下面这段话概括项目：
 
